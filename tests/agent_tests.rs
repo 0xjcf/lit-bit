@@ -1,44 +1,24 @@
-// Basic Agent Tests
-use anyhow::Result;
-// Assuming the agent module is accessible in the tests
-// Use the actual crate name placeholder if needed: use ${project_name}::agent::Agent;
-// For initial scaffold, we might test main directly or need to adjust visibility
+// tests/agent_tests.rs
+// This file was part of the original dev-setup agent bootstrap.
+// It is kept as a placeholder for future integration tests for the lit-bit library.
 
-#[tokio::test]
-async fn test_agent_runs_briefly() -> Result<()> {
-    // Arrange
-    println!("Spawning agent test...");
+#[test]
+fn it_works() {
+    // Basic test to ensure the test suite runs.
+    // Replace with actual library tests later.
+    assert_eq!(2 + 2, 4);
+}
 
-    // Act: Spawn the agent's run function in a background task
-    // We need access to the Agent struct and its run method here.
-    // If testing main directly isn't feasible, this test needs adjustment
-    // based on how the Agent struct is exposed.
-    // For now, let's assume a hypothetical agent::Agent::new().run()
-    
-    // This requires the Agent struct and run method to be public or usable here.
-    // Let's create a placeholder task that just loops briefly for the test setup.
-    let agent_task = tokio::spawn(async {
-        let mut counter = 0;
-        loop {
-            counter += 1;
-            println!("Mock agent loop iteration {}", counter);
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            if counter >= 5 {
-                break;
-            }
-        }
-    });
-
-    // Allow the task to run for a short time
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-
-    // Assert: Check if the task is still running (it shouldn't finish instantly)
-    assert!(!agent_task.is_finished(), "Agent task finished too quickly.");
-
-    // Optionally wait for it to complete or abort it
-    agent_task.abort(); // Stop the task
-    // let _ = agent_task.await; // Optionally wait for abort to complete
-
-    println!("Agent run test completed.");
-    Ok(())
-} 
+// To run tests that require std or async features, you might need to configure them in Cargo.toml
+// or use commands like: cargo test --features std
+//
+// Example of a test that might require the `std` feature if it uses `println!` or std collections:
+/*
+#[test]
+#[cfg(feature = "std")]
+fn test_with_std_feature() {
+    println!("This test runs if 'std' feature is enabled.");
+    let vec = vec![1,2,3];
+    assert!(!vec.is_empty());
+}
+*/

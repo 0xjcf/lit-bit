@@ -1,12 +1,12 @@
 # Rust-Statechart Public API Usage Showcase
 
-This document illustrates how a user would typically interact with a statechart created by the `rust-statechart` crate, assuming the crate and its `statechart!` macro are working according to the `Spec.md`.
+This document illustrates how a user would typically interact with a statechart created by the `lit-bit` crate, assuming the crate and its `statechart!` macro are working according to the `Spec.md`.
 
 ```rust
 // main.rs (or library using the statechart)
 
-// Assume the crate is named `rust_statechart`
-use rust_statechart::{statechart, StateMachine};
+// Assume the crate is named `lit-bit`
+use lit-bit::{statechart, StateMachine};
 
 // 1. Define the Context struct and its methods (for guards/actions)
 #[derive(Debug, Clone, Default)]

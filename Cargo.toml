@@ -1,31 +1,58 @@
 [package]
 name = "lit-bit"
-version = "1.0.0"
+version = "0.0.1-alpha.0"
 edition = "2024"
-authors = [] # Add authors
-description = "A"
+authors = ["0xjcf <jflores717@gmail.com>"]
+description = "A Rust library for building type-safe, Harel statecharts, inspired by XState."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/0xjcf/lit-bit"
+readme = "README.md" # Assuming you'll create a crate-level README.md later
+keywords = ["statechart", "statemachine", "fsm", "no_std", "embedded"]
+categories = ["embedded", "no-std", "algorithms"]
+
+[lib]
+# Optionally, if you need to specify the library target explicitly:
+# name = "lit-bit"
+# path = "src/lib.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
-serde = { version = "1.0", features = ["derive"] }
-anyhow = "1.0"
-thiserror = "1.0"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Core dependencies (keep minimal for no_std focus)
+# We might add `heapless` later if needed for no_std collections.
 
-# Optional dependencies based on features
-# clap = { version = "4", features = ["derive"], optional = true }
-# axum = { version = "0.7", optional = true }
+# Optional dependencies for features
+# These will be enabled when the corresponding feature is active.
+anyhow = { version = "1.0", optional = true } # For examples/tests under `std`
+serde = { version = "1.0", features = ["derive"], optional = true } # For context serialization, diagram features
+thiserror = { version = "1.0", optional = true } # For error types in `std` contexts
+
+# Tracing can be useful for debugging, especially with async/actor model features
+tracing = { version = "0.1", optional = true }
+
+# Async-related dependencies for the 'async' feature
+futures = { version = "0.3", optional = true, default-features = false } # For no_std async
+async-trait = { version = "0.1", optional = true }
+
+# Tokio, only if 'std' and 'async' are enabled for an async runtime
+tokio = { version = "1", features = ["rt", "macros", "time"], optional = true }
 
 [dev-dependencies]
 cargo-nextest = "0.9"
 once_cell = "1.19" # Useful for test setup
-# Add other test-specific dependencies
+
+# Dependencies for examples (if they need specific things not in main deps)
+# Example: `tokio` for running async examples if the main lib doesn't pull it by default.
 
 [features]
-default = []
-# cli = ["dep:clap"]
-# api = ["dep:axum"]
+default = [] # Keep default empty for no_std focus
+
+std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "futures/std"]
+# The `async` feature implies `alloc` (via async-trait/futures)
+# and if `std` is also active, can pull in tokio.
+async = ["dep:async-trait", "dep:futures"]
+diagram = ["dep:serde"] # For serializing statechart structure
+
+# Example of combining features for specific use cases:
+# async-std = ["async", "std", "dep:tokio"]
 
 [profile.release]
 lto = true

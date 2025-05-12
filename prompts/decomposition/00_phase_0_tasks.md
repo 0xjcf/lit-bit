@@ -16,7 +16,7 @@
    - [ ] Task: Add note to `.cursor/rules/statechart.mdc` §3 confirming freeze.
 
 3. **Crate scaffold (`cargo new`) merged to `main`.**
-   - [ ] Task: Run `cargo new rust-statechart --lib` (or similar) at repo root.
+   - [ ] Task: Run `cargo new lit-bit --lib` (or similar) at repo root.
    - [ ] Task: Configure initial `Cargo.toml` (name, version="0.0.0", edition, authors, license).
    - [ ] Task: Set up basic `src/lib.rs` with crate-level docs placeholder.
    - [ ] Task: Add `.gitignore` for Rust projects.
