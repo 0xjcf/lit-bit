@@ -1,0 +1,16 @@
+# .pre-commit-config.yaml
+# See https://pre-commit.com for more information
+
+repos:
+- repo: local
+  hooks:
+    - id: check-progress-log
+      name: Check for PROGRESS.md update
+      entry: scripts/check-progress-log.sh # Correct: pre-commit uses the shebang
+      language: script
+      stages: [pre-commit] # Will be migrated
+      # Define files that potentially trigger the hook (the script filters further).
+      # This helps pre-commit run the hook only when relevant file types change.
+      files: \.(rs|toml|md|mdc)$|^(Spec|ROADMAP)\.md$|^prompts/|^\.cursor/rules/
+      # Exclude the progress file itself from *triggering* the run, though the script checks it.
+      exclude: ^prompts/project/PROGRESS\.md$ 
