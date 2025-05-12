@@ -5,7 +5,7 @@ alwaysApply: true
 ---
 # Rust‑Statechart · Development Rules
 
-> **Purpose** — Serve as a single source‑of‑truth for contributors (human or AI) working in Cursor IDE.
+> **Purpose** — Serve as a single source‑of‑truth for contributors (human or AI) working in Cursor IDE.
 > Compliant code **must** satisfy every rule or provide an issue reference that justifies a deviation.
 
 ---
@@ -24,16 +24,16 @@ alwaysApply: true
 
 | Phase                  | Key Deliverables                                                              | Done |
 | ---------------------- | ----------------------------------------------------------------------------- | ---- |
-| 0 Spec & Foundations   | ▢ Spec.md committed  ▢ CI skeleton ✅                                          |  ▢   |
-| 1 Core Runtime         | ▢ `traffic_light` demo on riscv32  ▢ ≤1 KB flash report  ▢ 100 % unit‑tests  | ▢    |
-| 2 Hierarchy & Guards   | ▢ Parent/child exit order tests  ▢ Unknown‑state compile error unit‑test      | ▢    |
-| 3 Parallel States      | ▢ `agent_parallel` golden trace  ▢ Memory diff ≤+200 B                        | ▢    |
-| 4 Minimal Actor Layer  | ▢ `Actor` generic no_std  ▢ Tokio adapter  ▢ Stress‑test passes 100 k events | ▢    |
-| 5 Async & Side‑Effects | ▢ `async` feature flag compile check  ▢ HTTP demo passes                      | ▢    |
-| 6 Timers & Delays      | ▢ `after` syntax macro  ▢ Embedded drift test <1 %                            | ▢    |
-| 7 Invoke/Child Actors  | ▢ Restart policy test  ▢ Parent‐child demo                                    | ▢    |
-| 8 Diagram Generation   | ▢ `to_dot()` output round‑trips via Graphviz  ▢ Docs include Mermaid          | ▢    |
-| 9 Tooling & Docs       | ▢ mdBook CI publish  ▢ 95 % rustdoc coverage                                  | ▢    |
+| 0 Spec & Foundations   | ▢ Spec.md committed  ▢ CI skeleton ✅                                          |   ▢  |
+| 1 Core Runtime         | ▢ `traffic_light` demo on riscv32  ▢ ≤1 KB flash report  ▢ 100 % unit‑tests  | ▢    |
+| 2 Hierarchy & Guards   | ▢ Parent/child exit order tests  ▢ Unknown‑state compile error unit‑test      | ▢    |
+| 3 Parallel States      | ▢ `agent_parallel` golden trace  ▢ Memory diff ≤+200 B                        | ▢    |
+| 4 Minimal Actor Layer  | ▢ `Actor` generic no_std  ▢ Tokio adapter  ▢ Stress‑test passes 100 k events | ▢    |
+| 5 Async & Side‑Effects | ▢ `async` feature flag compile check  ▢ HTTP demo passes                      | ▢    |
+| 6 Timers & Delays      | ▢ `after` syntax macro  ▢ Embedded drift test <1 %                            | ▢    |
+| 7 Invoke/Child Actors  | ▢ Restart policy test  ▢ Parent‐child demo                                    | ▢    |
+| 8 Diagram Generation   | ▢ `to_dot()` output round‑trips via Graphviz  ▢ Docs include Mermaid          | ▢    |
+| 9 Tooling & Docs       | ▢ mdBook CI publish  ▢ 95 % rustdoc coverage                                  | ▢    |
 | 10 Public Release      | ▢ CHANGELOG  ▢ SemVer tag  ▢ Blog post  ▢ CI matrix green                     | ▢    |
 
 Add a checked box (`[x]`) via PR when finished.
@@ -87,6 +87,8 @@ Add a checked box (`[x]`) via PR when finished.
 ---
 
 ## 3 · Macro Grammar (Frozen after Phase 0)
+
+_(Note: The grammar defined in `Spec.md` Section 2 is now considered stable for v0.1 and frozen as of the end of Phase 0. Any breaking changes require a major version bump.)_
 
 ```ebnf
 // Note: This EBNF is a simplified reference.

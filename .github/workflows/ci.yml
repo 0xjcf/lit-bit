@@ -1,0 +1,42 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-and-lint:
+    name: Check & Lint
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain: [stable, beta, nightly]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install ${{ matrix.toolchain }} toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ matrix.toolchain }}
+        components: rustfmt, clippy
+
+    - name: Check formatting
+      if: matrix.toolchain == 'stable' # Only check fmt on stable
+      run: cargo fmt --check
+
+    - name: Run Clippy
+      run: cargo clippy -- -D warnings
+
+    - name: Run cargo check
+      run: cargo check --all-targets # Check lib, tests, examples if any
+
+  # Future jobs could include:
+  # - cargo test
+  # - cargo build --release --target <target>
+  # - cargo publish --dry-run
+  # - cargo audit
+  # - cargo deny check 
