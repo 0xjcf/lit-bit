@@ -1,0 +1,165 @@
+#![cfg_attr(target_arch = "riscv32", no_std)]
+#![cfg_attr(target_arch = "riscv32", no_main)]
+
+// panic_halt is only used and needed for the riscv32 no_std target
+#[cfg(target_arch = "riscv32")]
+use panic_halt as _;
+
+#[cfg(target_arch = "riscv32")]
+mod riscv_logic {
+    use riscv::asm;
+    use riscv_rt::entry;
+    use semihosting::println;
+
+    use lit_bit::StateMachine;
+    use lit_bit::core::{ActionFn, MachineDefinition, Runtime, Transition};
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[repr(u8)]
+    enum TrafficLightState {
+        Red = 0,
+        Green = 1,
+        Yellow = 2,
+    }
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[repr(u8)]
+    enum TrafficLightEvent {
+        TimerElapsed = 0,
+    }
+
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    struct TrafficLightContext {
+        cycle_count: u32,
+    }
+
+    unsafe fn uart_putc(c: u8) {
+        const UART_BASE: *mut u8 = 0x1000_0000 as *mut u8;
+        unsafe {
+            core::ptr::write_volatile(UART_BASE, c);
+        }
+    }
+
+    unsafe fn uart_print_str(s: &str) {
+        for byte in s.bytes() {
+            unsafe {
+                uart_putc(byte);
+            }
+        }
+    }
+
+    fn log_red(_context: &mut TrafficLightContext) {
+        unsafe {
+            uart_print_str("U: Light is now RED.\n");
+        }
+    }
+
+    fn log_green(_context: &mut TrafficLightContext) {
+        unsafe {
+            uart_print_str("U: Light is now GREEN.\n");
+        }
+    }
+
+    fn log_yellow(_context: &mut TrafficLightContext) {
+        unsafe {
+            uart_print_str("U: Light is now YELLOW.\n");
+        }
+    }
+
+    fn increment_cycle(context: &mut TrafficLightContext) {
+        context.cycle_count += 1;
+    }
+
+    fn transition_to_red_action(context: &mut TrafficLightContext) {
+        log_red(context);
+        increment_cycle(context);
+        unsafe {
+            uart_print_str("U: Cycle to RED action done.\n");
+        }
+    }
+
+    const TRAFFIC_LIGHT_TRANSITIONS: &[Transition<
+        TrafficLightState,
+        TrafficLightEvent,
+        TrafficLightContext,
+    >] = &[
+        Transition {
+            from_state: TrafficLightState::Red,
+            event: TrafficLightEvent::TimerElapsed,
+            to_state: TrafficLightState::Green,
+            action: Some(log_green as ActionFn<TrafficLightContext>),
+            guard: None,
+        },
+        Transition {
+            from_state: TrafficLightState::Green,
+            event: TrafficLightEvent::TimerElapsed,
+            to_state: TrafficLightState::Yellow,
+            action: Some(log_yellow as ActionFn<TrafficLightContext>),
+            guard: None,
+        },
+        Transition {
+            from_state: TrafficLightState::Yellow,
+            event: TrafficLightEvent::TimerElapsed,
+            to_state: TrafficLightState::Red,
+            action: Some(transition_to_red_action as ActionFn<TrafficLightContext>),
+            guard: None,
+        },
+    ];
+
+    const TRAFFIC_LIGHT_MACHINE_DEF: MachineDefinition<
+        TrafficLightState,
+        TrafficLightEvent,
+        TrafficLightContext,
+    > = MachineDefinition::new(TrafficLightState::Red, TRAFFIC_LIGHT_TRANSITIONS);
+
+    #[entry]
+    fn main_riscv_entry() -> ! {
+        unsafe {
+            uart_print_str("UART: Entered main_riscv!\n");
+        }
+        println!("SEMI: Entered main_riscv! Semihosting test.");
+        println!("SEMI: Starting traffic light simulation...");
+        unsafe {
+            uart_print_str("UART: Starting simulation...\n");
+        }
+
+        let initial_context = TrafficLightContext { cycle_count: 0 };
+        let mut runtime = Runtime::new(TRAFFIC_LIGHT_MACHINE_DEF.clone(), initial_context);
+
+        unsafe {
+            uart_print_str("UART: SM created.\n");
+        }
+
+        for _i in 0..7 {
+            unsafe {
+                uart_print_str("\nUART: Event -> ");
+            }
+            let transitioned = runtime.send(TrafficLightEvent::TimerElapsed);
+            if transitioned {
+                unsafe {
+                    uart_print_str("UART: Transitioned.\n");
+                }
+            } else {
+                unsafe {
+                    uart_print_str("UART: No Transition.\n");
+                }
+            }
+        }
+
+        println!("\nSEMI: Simulation finished.");
+        unsafe {
+            uart_print_str("\nUART: Simulation finished.\n");
+        }
+
+        loop {
+            asm::nop();
+        }
+    }
+}
+
+// Dummy main for non-riscv32 targets.
+// This will be a std-linking program when checked by clippy for host.
+#[cfg(not(target_arch = "riscv32"))]
+fn main() {
+    println!("This traffic_light example is intended for target_arch = \"riscv32\".");
+}

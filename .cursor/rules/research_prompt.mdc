@@ -1,0 +1,69 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Rule: Research Prompt Generation for Unresolved Issues
+
+## 1. Purpose
+
+To establish a standardized process for creating actionable research prompts when encountering complex technical issues, uncertainties in implementation, or when external information is required to proceed effectively. This ensures focused research and efficient problem-solving.
+
+## 2. Trigger
+
+This rule is invoked when:
+*   We (the user and the AI assistant) reach a point where the next step for resolving a technical problem is unclear.
+*   An implementation detail requires external documentation, best practices, or examples that are not immediately available.
+*   Troubleshooting efforts have not yielded a clear solution, and further investigation is needed.
+
+## 3. Procedure: Creating the Research Prompt
+
+When triggered, a research prompt should be collaboratively created. This prompt will be used by the user to search external resources (e.g., web search, documentation, forums). The AI assistant will help formulate this prompt.
+
+The research prompt **must** adhere to the following structure and include sufficient detail:
+
+### 3.1. Prompt Structure
+
+1.  **Clear Title:**
+    *   Format: `Research Prompt: [Specific Issue or Question]`
+    *   Example: `Research Prompt: QEMU Not Intercepting RISC-V Semihosting ebreak`
+
+2.  **Project Context:**
+    *   Briefly describe the overall project goals, target platform/architecture, and relevant technologies being used.
+    *   Example: "Developing a `#![no_std]` Rust application for `riscv32imac-unknown-none-elf` using `riscv-rt` and the `taiki-e/semihosting` crate for console output in QEMU."
+
+3.  **Core Problem Statement:**
+    *   Clearly and concisely describe the specific problem, error message, or unknown that needs to be resolved.
+    *   Example: "QEMU launches the ELF but no semihosting output appears, even from initial `println!` calls. Debug flags do not show semihosting traps being processed."
+
+4.  **Current Setup / Environment:**
+    *   List key versions, configurations, and relevant code snippets.
+    *   **Target:** e.g., `riscv32imac-unknown-none-elf`
+    *   **Key Crates & Versions:** e.g., `riscv-rt = "0.14.0"`, `semihosting = "0.1.20"`
+    *   **Configuration Files:** Snippets from `memory.x`, `.cargo/config.toml` (runner args, rustflags), `build.rs` if relevant.
+    *   **Relevant Code Snippets:** Minimal, reproducible examples if possible, or key parts of the code related to the issue (e.g., `main` function, problematic calls).
+
+5.  **Build & Run Commands:**
+    *   Exact commands used to build and run the code leading to the issue.
+    *   Include target flags and any special options.
+
+6.  **Troubleshooting Steps Already Taken & Observations:**
+    *   List what has already been tried to solve the problem.
+    *   Describe the outcome of each step (e.g., "Changed QEMU runner flags to X, resulted in error Y", "Added debug prints, Z was observed").
+    *   This avoids redundant suggestions and focuses the research.
+
+7.  **Specific Questions for Research:**
+    *   Formulate 3-5 targeted questions that, if answered, would help solve the problem.
+    *   These should guide the research effectively.
+    *   Example: "What is the exact `ebreak` sequence QEMU expects for RISC-V semihosting with `target=native` and `-bios none`?"
+
+## 4. Usage
+
+*   The AI assistant will propose generating such a prompt when appropriate.
+*   The user can also request the creation of such a prompt.
+*   The generated prompt should be reviewed by the user before they undertake external research.
+*   The prompt can be logged or saved for future reference.
+
+## 5. Example Location
+
+For examples of well-structured research prompts, refer to recent prompts generated during our sessions (e.g., those related to QEMU semihosting issues).

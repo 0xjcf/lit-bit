@@ -1,0 +1,24 @@
+# .cargo/config.toml
+
+[build]
+# Default target for `cargo build` (optional, but convenient for embedded projects)
+# target = "riscv32imac-unknown-none-elf"
+
+# Specific flags for the RISC-V target
+[target.riscv32imac-unknown-none-elf]
+rustflags = [
+  "-C", "link-arg=-Tmemory_riscv_for_link.x", # build.rs copies to this name in OUT_DIR
+  "-C", "link-arg=-Tlink.x",                  # From riscv-rt, found via search path
+]
+runner = "qemu-system-riscv32 -nographic -M virt -cpu rv32 -bios none -m 128M -chardev stdio,mux=on,id=char0 -serial chardev:char0 -mon chardev=char0,mode=readline -semihosting-config enable=on,target=native,chardev=char0 -D /tmp/qemu_litbit_debug.log -d unimp -kernel"
+
+# Specific flags for the ARM Cortex-M target
+[target.thumbv7m-none-eabi]
+rustflags = [
+  # build.rs copies memory_cortex_m_source.x to $OUT_DIR/memory.x
+  # This -Tlink.x will find $OUT_DIR/memory.x via its INCLUDE directive.
+  "-C", "link-arg=-Tlink.x", 
+  "-C", "linker=rust-lld",
+]
+
+# (Removed top-level runner as it's now target-specific) 

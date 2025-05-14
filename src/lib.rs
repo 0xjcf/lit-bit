@@ -17,7 +17,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 //! # Rust-Statechart
-//! A Rust library for building type-safe, Harel statecharts, inspired by XState.
+//! A Rust library for building type-safe, Harel statecharts, inspired by `XState`.
 //! Aims to be ergonomic, `no_std` compatible, and suitable for embedded to backend applications.
 
 // No `use core::fmt` or `use ::core::fmt` needed here if we qualify directly in trait bounds.

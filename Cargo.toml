@@ -19,25 +19,41 @@ categories = ["embedded", "no-std", "algorithms"]
 # Core dependencies (keep minimal for no_std focus)
 # We might add `heapless` later if needed for no_std collections.
 
-# Optional dependencies for features
-# These will be enabled when the corresponding feature is active.
-anyhow = { version = "1.0", optional = true } # For examples/tests under `std`
-serde = { version = "1.0", features = ["derive"], optional = true } # For context serialization, diagram features
-thiserror = { version = "1.0", optional = true } # For error types in `std` contexts
-
-# Tracing can be useful for debugging, especially with async/actor model features
+# Optional dependencies for features (generally std-related or host tools)
+anyhow = { version = "1.0", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+thiserror = { version = "1.0", optional = true }
 tracing = { version = "0.1", optional = true }
-
-# Async-related dependencies for the 'async' feature
-futures = { version = "0.3", optional = true, default-features = false } # For no_std async
+futures = { version = "0.3", optional = true, default-features = false }
 async-trait = { version = "0.1", optional = true }
-
-# Tokio, only if 'std' and 'async' are enabled for an async runtime
 tokio = { version = "1", features = ["rt", "macros", "time"], optional = true }
 
+# Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
+# MOVED TO TARGET-SPECIFIC BELOW
+# cortex-m = "0.7.7"
+# cortex-m-rt = "0.7.5"
+
+# Target-specific dependencies for RISC-V
+[target.'cfg(target_arch = "riscv32")'.dependencies]
+riscv-rt = "0.14.0"
+riscv = "0.13.0"
+semihosting = { version = "0.1.20", features = ["stdio"] }
+
+# Target-specific dependencies for ARM Cortex-M
+[target.'cfg(target_arch = "arm")'.dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+
+# panic-halt is a dev-dependency, examples will pick it up if cfg-ed for arm
+# cortex-m-semihosting could be added here if needed for Cortex-M examples
+
 [dev-dependencies]
+panic-halt = "1.0.0" # For no_std examples (both ARM and RISC-V if cfg-ed in example)
+
+# Host-specific dev dependencies (for macOS aarch64 host)
+[target.aarch64-apple-darwin.dev-dependencies]
 cargo-nextest = "0.9"
-once_cell = "1.19" # Useful for test setup
+once_cell = { version = "1.19.0", default-features = false, features = ["critical-section"] }
 
 # Dependencies for examples (if they need specific things not in main deps)
 # Example: `tokio` for running async examples if the main lib doesn't pull it by default.
@@ -54,7 +70,15 @@ diagram = ["dep:serde"] # For serializing statechart structure
 # Example of combining features for specific use cases:
 # async-std = ["async", "std", "dep:tokio"]
 
+[profile.dev]
+panic = "abort"
+
 [profile.release]
 lto = true
 codegen-units = 1
-strip = true 
+strip = true
+panic = "abort" # Ensure release builds also abort on panic for no_std
+
+#[profile.test]
+# The panic strategy cannot currently be overridden for the test profile on stable Rust.
+# Keeping an explicit section leads to a cargo warning, so it is removed.

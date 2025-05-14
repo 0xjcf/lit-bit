@@ -1,0 +1,282 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Cursor Rule: Prefer Explicit Names Over Abbreviations and Acronyms
+
+## Purpose
+To enhance code readability and maintainability by using clear, descriptive, and unambiguous names for variables, functions, classes, types, and other identifiers. Avoid excessive use of abbreviations, acronyms, or overly short names that might obscure meaning, especially for readers unfamiliar with the specific context.
+
+## Rationale
+- **Readability:** Explicit names make code easier to understand at a glance, reducing cognitive load.
+- **Maintainability:** Clear names make it easier for developers (including future self) to modify or debug code without having to decipher cryptic identifiers.
+- **Reduced Ambiguity:** Avoids potential confusion that can arise from abbreviations or acronyms having multiple meanings.
+- **Searchability:** Full words are generally easier to search for within a codebase than abbreviations.
+
+*Note on Rust Naming Conventions: Rust has strong conventions for naming: `snake_case` for functions, variables, and modules; `PascalCase` (or `UpperCamelCase`) for types (structs, enums, traits); and `UPPER_SNAKE_CASE` for constants and statics. The examples below will follow these conventions.* 
+
+## Guidelines
+
+### Avoid:
+
+1.  **Single-letter variables (except in very localized contexts like loop counters):**
+    ```typescript
+    // Bad (TypeScript): What do 'd', 't', 'i' mean outside the loop?
+    function process(d, t) {
+      for (let i = 0; i < d.length; i++) {
+        // ... use d[i] and t ...
+      }
+    }
+    ```
+    ```rust
+    // Bad (Rust): What do 'd', 't', 'idx' mean outside the loop?
+    fn process(d: &[i32], t: i32) {
+      for idx in 0..d.len() {
+        // ... use d[idx] and t ...
+      }
+    }
+    ```
+
+    ```typescript
+    // Better (TypeScript):
+    function processData(data: SomeType[], threshold: number) {
+      for (let index = 0; index < data.length; index++) {
+        const item = data[index];
+        // ... use item and threshold ...
+      }
+    }
+    ```
+    ```rust
+    // Better (Rust):
+    struct SomeType { value: i32 }
+    fn process_data(data: &[SomeType], threshold: i32) {
+      for index in 0..data.len() {
+        let item = &data[index]; // Or data[index] if SomeType is Copy
+        // ... use item and threshold ...
+      }
+    }
+    // Idiomatic Rust often prefers iterators:
+    fn process_data_idiomatic(data: &[SomeType], threshold: i32) {
+      for item in data.iter() {
+        // ... use item and threshold ...
+      }
+    }
+    ```
+
+2.  **Uncommon or ambiguous abbreviations/acronyms:**
+    ```typescript
+    // Bad (TypeScript): Is 'svc' service? Is 'cfg' config? Not universally clear.
+    const usrSvc = getUserService();
+    const appCfg = loadConfig();
+    let res = await usrSvc.get(id); // Response? Result? Resource?
+    ```
+    ```rust
+    // Bad (Rust): 
+    // struct UserSvc; impl UserSvc { fn get(&self, _id: u32) -> Option<String> { None } }
+    // fn get_user_svc() -> UserSvc { UserSvc }
+    // struct AppCfg;
+    // fn load_cfg() -> AppCfg { AppCfg }
+
+    let usr_svc = get_user_svc();
+    let app_cfg = load_cfg();
+    let res = usr_svc.get(id); // Option<String>? Result<String, Error>? UserData?
+    ```
+
+    ```typescript
+    // Better (TypeScript):
+    const userService = getUserService();
+    const appConfig = loadConfig();
+    let userResponse = await userService.getUserById(id);
+    ```
+    ```rust
+    // Better (Rust):
+    // struct UserService; impl UserService { fn get_user_by_id(&self, _id: u32) -> Option<String> { None } }
+    // fn get_user_service() -> UserService { UserService }
+    // struct AppConfig;
+    // fn load_config() -> AppConfig { AppConfig }
+    // let id: u32 = 1;
+
+    let user_service = get_user_service();
+    let application_config = load_config();
+    let user_option = user_service.get_user_by_id(id); // Clearly an Option<String>
+    ```
+
+3.  **Overly generic names without context:**
+    ```typescript
+    // Bad (TypeScript): What kind of item? What kind of data?
+    let item = getItem();
+    let data = process();
+    ```
+    ```rust
+    // Bad (Rust):
+    // fn get_item() -> i32 { 0 }
+    // fn process() -> Vec<String> { vec![] }
+    let item = get_item();
+    let data = process();
+    ```
+
+    ```typescript
+    // Better (TypeScript):
+    let selectedProduct = getProductById(productId);
+    let validationResults = validateFormData(formData);
+    ```
+    ```rust
+    // Better (Rust):
+    // struct Product; struct FormValidationResult;
+    // fn get_product_by_id(_id: u32) -> Option<Product> { None }
+    // fn validate_form_data(_data: &str) -> FormValidationResult { FormValidationResult }
+    // let product_id: u32 = 1;
+    // let form_data: &str = "...";
+
+    let selected_product_option = get_product_by_id(product_id);
+    let validation_results = validate_form_data(form_data);
+    ```
+
+4.  **Complex conditions directly within control flow statements:** Placing multi-part boolean expressions directly inside `if`, `while`, or (in languages that have them) ternary operators can obscure the *intent* of the condition.
+    ```typescript
+    // Bad (TypeScript): Less clear intent in the 'if' statement:
+    if (user && user.isActive && user.permissions.includes('admin') && !user.isLocked) {
+      // ... perform admin action ...
+    }
+    // Bad (TypeScript): Harder to grasp the condition quickly
+    return (state.matches('loading') || state.matches('submitting'))
+        ? <Spinner />
+        : (state.matches('idle') && state.context.data !== null)
+            ? <DisplayData data={state.context.data} />
+            : <EmptyState />;
+    ```
+    ```rust
+    // Bad (Rust):
+    // struct User { is_active: bool, permissions: Vec<String>, is_locked: bool }
+    // let user: User = /* ... */;
+    if user.is_active && user.permissions.iter().any(|p| p == "admin") && !user.is_locked {
+        // ... perform admin action ...
+    }
+
+    // Bad (Rust): Rust uses if/else expressions, not ternaries.
+    // Assume render_spinner(), render_data(), render_empty_state() are functions.
+    // struct State { context: Context, /* ... */ }
+    // impl State { fn matches(&self, _s: &str) -> bool { false } }
+    // struct Context { data: Option<String> }
+    // let state: State = /* ... */;
+    if state.matches("loading") || state.matches("submitting") {
+        render_spinner();
+    } else if state.matches("idle") && state.context.data.is_some() {
+        render_data(state.context.data.as_ref().unwrap());
+    } else {
+        render_empty_state();
+    }
+    ```
+
+### Prefer:
+
+1.  **Full words that accurately describe the entity:**
+    ```typescript
+    // Good (TypeScript): Clear and descriptive
+    const maximumLoginAttempts = 3;
+    const authenticatedUser = getAuthenticatedUser();
+    function calculateTotalPrice(items: CartItem[]): number { /* ... */ }
+    interface UserProfileSettings { /* ... */ }
+    ```
+    ```rust
+    // Good (Rust): Clear and descriptive
+    const MAXIMUM_LOGIN_ATTEMPTS: u32 = 3;
+    struct AuthenticatedUser { /* ... */ }
+    fn get_authenticated_user() -> AuthenticatedUser { /* ... */ AuthenticatedUser{}}
+    struct CartItem; /* ... */
+    fn calculate_total_price(items: &[CartItem]) -> f64 { /* ... */ 0.0 }
+    struct UserProfileSettings { /* ... */ }
+    ```
+
+2.  **Contextual clarity:** Names should make sense within their scope.
+    ```typescript
+    // Good (TypeScript): `user` is clear within the function scope
+    function displayUserGreeting(user: User) {
+      console.log(`Hello, ${user.name}!`);
+    }
+    ```
+    ```rust
+    // Good (Rust): `user` is clear within the function scope
+    struct User { name: String }
+    fn display_user_greeting(user: &User) {
+      println!("Hello, {}!", user.name);
+    }
+    ```
+
+3.  **Established domain-specific acronyms (use judiciously):** If an acronym is extremely common and universally understood within the project's domain (e.g., `URL`, `API`, `HTML`, `DB` in specific contexts), it *might* be acceptable, but prefer the full term if there's any doubt. Rust's standard library uses `Url`, `OsStr`, `ErrorKind`, etc., which are well-established.
+    ```typescript
+    // Acceptable (TypeScript, if DB is well-understood contextually):
+    const dbConnection = connectToDatabase();
+    ```
+    ```rust
+    // Acceptable (Rust, if DB is well-understood contextually):
+    // struct DbConnection;
+    // fn connect_to_database() -> DbConnection { DbConnection }
+    let db_connection = connect_to_database();
+    ```
+
+    ```typescript
+    // Often Better (TypeScript):
+    const databaseConnection = connectToDatabase();
+    ```
+    ```rust
+    // Often Better (Rust):
+    // struct DatabaseConnection;
+    // fn connect_to_database_explicit() -> DatabaseConnection { DatabaseConnection }
+    let database_connection = connect_to_database_explicit();
+    ```
+
+4.  **Named boolean variables for complex conditions:** Assign complex boolean logic (involving multiple variables or comparisons) to a well-named constant *before* using it in an `if`, `while`, or other control flow statement. This clarifies the *intent* of the condition.
+    ```typescript
+    // Better (TypeScript): Intent is clear immediately
+    const isEligibleAdmin = user &&
+                             user.isActive &&
+                             user.permissions.includes('admin') &&
+                             !user.isLocked;
+    if (isEligibleAdmin) {
+      // ... perform admin action ...
+    }
+    // Better (TypeScript):
+    const showLoadingIndicator = state.matches('loading') || state.matches('submitting');
+    const showData = state.matches('idle') && state.context.data !== null;
+    if (showLoadingIndicator) { return <Spinner />; }
+    else if (showData) { return <DisplayData data={state.context.data} />; }
+    else { return <EmptyState />; }
+    ```
+    ```rust
+    // Better (Rust): Intent is clear immediately
+    // struct User { is_active: bool, permissions: Vec<String>, is_locked: bool }
+    // let user: User = /* ... */;
+    let is_eligible_admin = user.is_active &&
+                             user.permissions.iter().any(|p| p == "admin") &&
+                             !user.is_locked;
+    if is_eligible_admin {
+      // ... perform admin action ...
+    }
+
+    // Better (Rust):
+    // Assume render_spinner(), render_data(), render_empty_state() are functions.
+    // struct State { context: Context, /* ... */ }
+    // impl State { fn matches(&self, _s: &str) -> bool { false } }
+    // struct Context { data: Option<String> }
+    // let state: State = /* ... */;
+    let is_loading = state.matches("loading") || state.matches("submitting");
+    let can_show_data = state.matches("idle") && state.context.data.is_some();
+
+    if is_loading {
+        render_spinner();
+    } else if can_show_data {
+        render_data(state.context.data.as_ref().unwrap());
+    } else {
+        render_empty_state();
+    }
+    ```
+
+## Exceptions
+- **Loop counters:** `i`, `j`, `k` are conventional and acceptable for simple loops where the scope is very small. In Rust, iterators often make these unnecessary, but if an index is needed, `idx` or `index` is preferred over `i` for non-trivial loops.
+- **Mathematical formulas:** Single letters are standard in mathematical notation (e.g., `x`, `y`, `z` for coordinates).
+- **Generated code:** Sometimes generated code might use shorter names; focus on clarity in handwritten code.
+- **Trivially simple conditions:** For conditions involving only a single variable or a very simple comparison (e.g., `if count > 0`, `if user.is_active()`) directly using the condition in the `if` statement is acceptable if a named variable adds little clarity. Use judgment based on context.
+
+Prioritize clarity and reduce ambiguity. If an abbreviation saves only a few characters but requires a moment of thought to understand, it's usually not worth it.

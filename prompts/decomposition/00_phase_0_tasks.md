@@ -13,7 +13,7 @@
 
 2. **Macro grammar frozen.**
    - [x] Task: Confirm grammar definition in `Spec.md` is final for v0.1.
-   - [ ] Task: Add note to `.cursor/rules/statechart.mdc` §3 confirming freeze.
+   - [x] Task: Add note to `.cursor/rules/statechart.mdc` §3 confirming freeze.
 
 3. **Crate scaffold (`cargo new`) merged to `main`.**
    - [x] Task: Run `cargo new lit-bit --lib` (or similar) at repo root.
@@ -23,17 +23,17 @@
    - [x] Task: Commit initial scaffold.
 
 4. **CI skeleton passes (`lint`, `fmt`, `clippy`).**
-   - [ ] Task: Create `.github/workflows/ci.yml`.
-   - [ ] Task: Add jobs for `rustfmt --check`, `cargo clippy -- -D warnings`, `cargo check` on stable/beta/nightly.
-   - [ ] Task: Ensure CI workflow passes on the initial scaffold.
+   - [x] Task: Create `.github/workflows/ci.yml`.
+   - [x] Task: Add jobs for `rustfmt --check`, `cargo clippy -- -D warnings`, `cargo check` on stable/beta/nightly.
+   - [x] Task: Ensure CI workflow passes on the initial scaffold.
 
 5. **Licensing headers (MIT / Apache 2.0) applied.**
-   - [ ] Task: Add `LICENSE-MIT` and `LICENSE-APACHE` files.
-   - [ ] Task: Add license boilerplate comment header to `src/lib.rs`.
+   - [x] Task: Add `LICENSE-MIT` and `LICENSE-APACHE` files.
+   - [x] Task: Add license boilerplate comment header to `src/lib.rs`.
    - [ ] Task: Add tool/script suggestion for automating header checks (e.g., `reuse`, `licensure`).
 
 6. **All items compile & run under `cargo check` on stable, beta, nightly.**
-   - [ ] Task: Verify the CI matrix covers these checks (part of CI skeleton task).
+   - [x] Task: Verify the CI matrix covers these checks (part of CI skeleton task).
 
 ---
 
