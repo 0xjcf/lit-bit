@@ -1,0 +1,96 @@
+---
+description: Reference guide listing core CLI tools (rg, just, pnpm, biome, etc.), their purpose, and standard usage conventions in this development environment.
+globs: 
+alwaysApply: true
+---
+### 📘 Purpose:
+This file is a guide for AI agents (and developers) working within a Cursor environment. It documents the tools available in this system, how they're used, and when to invoke them.
+
+---
+
+### 🔧 Core CLI Tools
+
+| Tool           | Purpose                                                    | Example Usage                       |
+|----------------|------------------------------------------------------------|-------------------------------------|
+| `bat`          | Enhanced `cat` with syntax highlighting                    | `bat README.md`                     |
+| `ripgrep (rg)` | Fast recursive code search                                 | `rg "onboarding-agent"`             |
+| `fzf`          | Fuzzy finder for files, history, or project items          | `ls | fzf`                          |
+| `act`          | Run GitHub Actions locally via Docker                      | `act pull_request`, `act -j test` |
+| `gh`           | GitHub CLI: PRs, issues, cloning                           | `gh pr create`                      |
+| `direnv`       | Auto-load `.envrc` project-specific environment variables  | `direnv allow`                      |
+| `just`         | Task runner (like Makefile, but simpler)                   | `just setup`, `just bootstrap`      |
+| `eza`          | Improved `ls` with tree view and color                     | `eza -T`                            |
+| `tokei`        | Count lines of code by language                            | `tokei`                             |
+| `jq`           | Query and format JSON                                      | `cat data.json | jq .summary`       |
+| `glow`         | Preview Markdown in terminal                               | `glow project-brief.md`             |
+| `hyperfine`    | Benchmark CLI commands                                     | `hyperfine 'cargo build'`           |
+| `zoxide`       | Smarter `cd` alternative with tracking                     | `z oxide add ~/project && z project`|
+| `envsubst`     | Substitute environment variables in shell format strings   | `export NAME=World; echo 'Hello $NAME' | envsubst` |
+
+---
+
+### 🐳 Docker & Security
+
+| Tool              | Purpose                                            | Example Usage                 |
+|-------------------|----------------------------------------------------|-------------------------------|
+| `docker`          | Container runtime                                  | `docker build -t app .`       |
+| `docker-compose`  | Define multi-container environments                | `docker-compose up`           |
+| `dive`            | Inspect Docker image layers                        | `dive app-image`              |
+| `trivy`           | Security scan for Docker images & codebases        | `trivy image node:18`         |
+| `lazydocker`      | Terminal UI for Docker container management        | `lazydocker`                  |
+
+> ℹ️ `Docker Desktop` or `Colima` is recommended for runtime support. This setup checks for Desktop presence and suggests `colima` if not detected.
+
+---
+
+### 🦀 Rust Tooling
+
+| Tool             | Purpose                                           | Example Usage                     |
+|------------------|---------------------------------------------------|-----------------------------------|
+| `rustup`         | Install/manage Rust versions                      | `rustup update`                   |
+| `cargo-edit`     | Add, remove, upgrade dependencies in `Cargo.toml` | `cargo add tokio`                 |
+| `cargo-nextest`  | Fast and isolated test runner                     | `cargo nextest run`               |
+| `clippy`         | Rust linter for idiomatic suggestions             | `cargo clippy`                    |
+| `rustfmt`        | Code formatter for Rust                           | `cargo fmt`                       |
+
+> 🧠 Note: Project dependencies like `burn`, `candle`, `llama.cpp`, `Axum`, and `rusqlite` are managed in `Cargo.toml`, not installed globally.
+
+---
+
+### 🤖 AI/ML Tooling
+
+| Tool           | Purpose                                           | Example Usage                         |
+|----------------|---------------------------------------------------|---------------------------------------|
+| `ollama`       | Local LLM server for model inference              | `ollama serve &`, `ollama run llama2` |
+
+> 🧠 Note: Ollama runs as a local service on port 11434. Use `ollama serve` to start the server and `curl http://localhost:11434/api/tags` to check its status.
+
+---
+
+### 🟨 Node + PWA Stack
+
+| Tool               | Purpose                                         | Example Usage                   |
+|--------------------|-------------------------------------------------|---------------------------------|
+| `volta`            | Node toolchain manager                          | `volta install node`            |
+| `pnpm`             | Fast and efficient package manager              | `pnpm install`                  |
+| `npm-check-updates`| Upgrade deps based on semver rules              | `ncu -u && pnpm install`        |
+| `biome`            | Linter/formatter for JS/TS                      | `biome check .`                 |
+| `vitest`           | Unit testing framework                          | `pnpm test`                     |
+| `playwright`       | E2E testing + browser automation (per project)  | `npx playwright install`        |
+| `workbox-cli`      | Generate service workers for PWAs               | `workbox generateSW`            |
+| `@lhci/cli`        | Performance auditing (Lighthouse CI)            | `lhci autorun`                  |
+
+---
+
+### 🧪 Security & Code Quality
+
+| Tool           | Purpose                                      | Example Usage                  |
+|----------------|----------------------------------------------|--------------------------------|
+| `semgrep`      | Static analysis & vulnerability scanner      | `semgrep --config=auto .`      |
+
+---
+
+> 💡 Agents and developers should use these tools consistently across all automation, linting, scaffolding, and CI pipelines. Prefer the `just` task runner to wrap multi-step commands and reduce cognitive load.
+> 🔧 Some tools like `playwright`, `biome`, and `@lhci/cli` are installed per-project via `bootstrap.sh`, not globally.
+
+

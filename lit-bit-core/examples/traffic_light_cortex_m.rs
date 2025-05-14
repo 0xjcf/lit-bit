@@ -10,18 +10,18 @@ mod cortex_m_logic {
     // If we want to see output during size check (optional, adds size)
     // use cortex_m_semihosting::{debug, hprintln};
 
-    use lit_bit::StateMachine;
-    use lit_bit::core::{DefaultContext, MachineDefinition, Runtime, Transition};
+    use lit_bit_core::StateMachine;
+    use lit_bit_core::core::{DefaultContext, MachineDefinition, Runtime, Transition};
 
     // --- State Definitions (can be very simple for size check) ---
-    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     enum LightState {
         Off,
         On,
     }
 
     // --- Event Definitions ---
-    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     enum LightEvent {
         Toggle,
     }

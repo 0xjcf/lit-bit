@@ -4,6 +4,35 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ---
 
+## 2025-05-15 · _Session Start_
+*   _Author_: @Gemini (via @0xjcf)
+*   _Phase_: 02-hierarchy-guards (Semantic Analysis Stage)
+*   _Work_: Discussed and agreed on design for `TmpState` struct and semantic analysis phase. Confirmed error strategy (syn::Error for parsing, compile_error! for semantics), deferred full event enum validation, and backlogged `.foo` shorthand.
+*   _Next_: Define `TmpState` struct and skeleton for the recursive builder function that traverses `StateChartInputAst` to populate the `TmpState` tree (Task 3.1 & 3.2 from Huddle).
+
+---
+
+## 2025-05-15 · _Session End (Parser Complete)_
+*   _Author_: @Gemini (via @0xjcf)
+*   _Phase_: 02-hierarchy-guards (Parser Stage)
+*   _Work_: Completed and stabilized the procedural macro parser (`lit-bit-macro`):
+    *   All 31 parser unit tests for DSL AST nodes (header, states, entry/exit, initial, transitions, guards, actions) are passing.
+    *   Refined AST naming conventions and keyword token handling.
+    *   Addressed all clippy lints in the macro crate.
+    *   Corrected Cargo workspace setup, profile warnings, and `justfile` for workspace operations.
+    *   (Commit: `[PLACEHOLDER_FOR_PARSER_COMPLETE_COMMIT]`)
+*   _Next_: Design `TmpState` structure for semantic analysis and tree building.
+
+---
+
+## 2025-05-14 · _Session Start_
+*   _Author_: @Gemini (via @0xjcf)
+*   _Phase_: 02-hierarchy-guards
+*   _Work_: Started Phase 2. Created the Phase 2 checklist (`prompts/phases/02-hierarchy-guards/02_hierarchy_guards_checklist.md`) and the detailed task decomposition file (`prompts/decomposition/02_hierarchy_guards_tasks.md`).
+*   _Next_: Begin implementation of Parent/Child state concepts: Design data structures for state hierarchy (Task 1.1 from `02_hierarchy_guards_tasks.md`).
+
+---
+
 ## 2025-05-14 · _Session End (Phase 1 Complete)_
 *   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 01-core-runtime

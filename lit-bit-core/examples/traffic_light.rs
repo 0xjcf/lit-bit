@@ -11,8 +11,8 @@ mod riscv_logic {
     use riscv_rt::entry;
     use semihosting::println;
 
-    use lit_bit::StateMachine;
-    use lit_bit::core::{ActionFn, MachineDefinition, Runtime, Transition};
+    use lit_bit_core::StateMachine;
+    use lit_bit_core::core::{ActionFn, MachineDefinition, Runtime, Transition};
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     #[repr(u8)]
