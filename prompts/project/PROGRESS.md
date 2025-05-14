@@ -4,6 +4,22 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ---
 
+## 2025-05-14 · _Session End (Phase 1 Complete)_
+*   _Author_: @Gemini (via @0xjcf)
+*   _Phase_: 01-core-runtime
+*   _Work_: Completed Phase 1:
+    *   Implemented core state machine runtime (`StateMachine`, `Runtime`, `Transition`).
+    *   Added `traffic_light` example for RISC-V (`riscv32imac-unknown-none-elf`) with semihosting and UART output via QEMU.
+    *   Added `traffic_light_cortex_m` example for `thumbv7m-none-eabi` with basic size check.
+    *   Established dual-target `#![no_std]` build system (`Cargo.toml` target-specific deps/dev-deps, `build.rs` for memory maps, `.cargo/config.toml` for runners/linker flags).
+    *   Refined `justfile` for new build/run/test tasks.
+    *   Resolved compiler warnings (module attributes, test profile panic).
+    *   Updated `commit_convention.mdc` rule with explicit line length limits.
+    *   (Commit: `6808002e`)
+*   _Next_: Begin Phase 2 (Hierarchy & Guards).
+
+---
+
 ## 2025-05-12 · _Session End (Phase 0 Complete)_
 *   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 00-planning (Spec & Foundations)
