@@ -60,7 +60,10 @@ impl Parse for StateChartInputAst {
         // Try parsing as Ident and verify
         let initial_ident: Ident = input.parse()?;
         if initial_ident != "initial" {
-            return Err(syn::Error::new(initial_ident.span(), format!("Expected 'initial' keyword, got '{initial_ident}'")));
+            return Err(syn::Error::new(
+                initial_ident.span(),
+                format!("Expected 'initial' keyword, got '{initial_ident}'"),
+            ));
         }
         let initial_keyword_token_span = initial_ident.span();
 
@@ -92,7 +95,9 @@ impl Parse for StateChartInputAst {
             event_keyword_token,
             event_type,
             comma3,
-            initial_keyword_token: keywords::initial { span: initial_keyword_token_span },
+            initial_keyword_token: keywords::initial {
+                span: initial_keyword_token_span,
+            },
             initial_target_expression,
             comma4,
             top_level_states,
@@ -357,10 +362,10 @@ impl Parse for TransitionActionAst {
 // Using a new module scope for these temporary structures and builder logic.
 pub(crate) mod intermediate_tree {
     use proc_macro2::Span;
-    use std::collections::{HashSet, HashMap};
-    use syn::{Error as SynError, Expr, Ident, Path, Result as SynResult}; // Ensure Expr is imported
+    use quote::ToTokens;
+    use std::collections::{HashMap, HashSet};
     use syn::spanned::Spanned;
-    use quote::ToTokens; // Keep for target_path_ast.to_token_stream()
+    use syn::{Error as SynError, Expr, Ident, Path, Result as SynResult}; // Ensure Expr is imported // Keep for target_path_ast.to_token_stream()
 
     #[derive(Debug, Clone)]
     #[allow(dead_code)]
@@ -406,12 +411,18 @@ pub(crate) mod intermediate_tree {
             }
         }
 
-        pub fn build_from_ast(&mut self, input_ast: &'ast crate::StateChartInputAst) -> SynResult<()> {
+        pub fn build_from_ast(
+            &mut self,
+            input_ast: &'ast crate::StateChartInputAst,
+        ) -> SynResult<()> {
             let mut top_level_names = HashSet::new();
             for state_decl_ast in &input_ast.top_level_states {
                 let name_str = state_decl_ast.name.to_string();
                 if !top_level_names.insert(name_str.clone()) {
-                    return Err(SynError::new(state_decl_ast.name.span(), format!("Duplicate top-level state name defined: {name_str}")));
+                    return Err(SynError::new(
+                        state_decl_ast.name.span(),
+                        format!("Duplicate top-level state name defined: {name_str}"),
+                    ));
                 }
             }
 
@@ -421,19 +432,20 @@ pub(crate) mod intermediate_tree {
 
             // Populate the full_path_to_idx_map after all states are discovered
             for (idx, state_node) in self.all_states.iter().enumerate() {
-                self.state_full_path_to_idx_map.insert(state_node.full_path_name.clone(), idx);
+                self.state_full_path_to_idx_map
+                    .insert(state_node.full_path_name.clone(), idx);
             }
 
             // Second pass: Resolve initial children
             self.resolve_and_validate_initial_children()?;
-            
+
             // Third pass: Resolve transition targets
             self.resolve_and_validate_transition_targets()?;
-            
+
             // TODO: Further validations (max depth, etc.)
             Ok(())
         }
-        
+
         fn extract_ident_from_path(path: &'ast Path) -> Option<&'ast Ident> {
             if path.leading_colon.is_none() && path.segments.len() == 1 {
                 return Some(&path.segments[0].ident);
@@ -442,36 +454,39 @@ pub(crate) mod intermediate_tree {
         }
 
         fn resolve_and_validate_initial_children(&mut self) -> SynResult<()> {
-            for i in 0..self.all_states.len() { 
-                let parent_state_full_path = self.all_states[i].full_path_name.clone(); 
+            for i in 0..self.all_states.len() {
+                let parent_state_full_path = self.all_states[i].full_path_name.clone();
                 let parent_has_children = !self.all_states[i].children_indices.is_empty();
-                let declared_initial_expr_opt = self.all_states[i].declared_initial_child_expression;
-                
-                let initial_decl_span = declared_initial_expr_opt.map_or_else(
-                    || self.all_states[i].name_span, 
-                    Spanned::span
-                );
+                let declared_initial_expr_opt =
+                    self.all_states[i].declared_initial_child_expression;
+
+                let initial_decl_span = declared_initial_expr_opt
+                    .map_or_else(|| self.all_states[i].name_span, Spanned::span);
 
                 if parent_has_children && declared_initial_expr_opt.is_none() {
-                    return Err(SynError::new(self.all_states[i].name_span, 
+                    return Err(SynError::new(self.all_states[i].name_span,
                         format!("Composite state '{parent_state_full_path}' must declare an 'initial' child state.")));
                 } else if !parent_has_children && declared_initial_expr_opt.is_some() {
-                     return Err(SynError::new(initial_decl_span, 
+                    return Err(SynError::new(initial_decl_span,
                         format!("State '{parent_state_full_path}' declares an 'initial' child but has no nested states defined.")));
                 }
 
                 if let Some(initial_path) = declared_initial_expr_opt {
                     let initial_child_local_ident = Self::extract_ident_from_path(initial_path)
-                        .ok_or_else(|| SynError::new(initial_path.span(), 
+                        .ok_or_else(|| SynError::new(initial_path.span(),
                             "'initial' state target must be a simple identifier (name of a direct child state)."))?;
-                    
+
                     let initial_child_local_name = initial_child_local_ident.to_string();
-                    let expected_child_full_path = format!("{parent_state_full_path}_{initial_child_local_name}");
-                    
+                    let expected_child_full_path =
+                        format!("{parent_state_full_path}_{initial_child_local_name}");
+
                     let mut found_child_idx: Option<usize> = None;
                     for &child_idx_in_all_states in &self.all_states[i].children_indices {
-                        if self.all_states[child_idx_in_all_states].full_path_name == expected_child_full_path &&
-                           self.all_states[child_idx_in_all_states].local_name == initial_child_local_ident {
+                        if self.all_states[child_idx_in_all_states].full_path_name
+                            == expected_child_full_path
+                            && self.all_states[child_idx_in_all_states].local_name
+                                == initial_child_local_ident
+                        {
                             found_child_idx = Some(child_idx_in_all_states);
                             break;
                         }
@@ -483,7 +498,7 @@ pub(crate) mod intermediate_tree {
                         }
                         None => {
                             // Corrected: Use initial_path.span() and ensure only one return Err.
-                            return Err(SynError::new(initial_path.span(), 
+                            return Err(SynError::new(initial_path.span(),
                                 format!("Initial state target '{initial_child_local_name}' for state '{parent_state_full_path}' is not a defined direct child state.")));
                         }
                     }
@@ -494,30 +509,36 @@ pub(crate) mod intermediate_tree {
 
         // Made this pub(crate) so code_generator can use it via TmpStateTreeBuilder::path_to_string_for_lookup
         pub(crate) fn path_to_string_for_lookup(path: &Path) -> String {
-            path.segments.iter()
+            path.segments
+                .iter()
                 .map(|segment| segment.ident.to_string())
                 .collect::<Vec<String>>()
                 .join("_")
         }
 
         fn resolve_path_to_state_index(
-            &self, 
-            current_state_idx_for_context: usize, 
-            target_path_ast: &'ast Path
+            &self,
+            current_state_idx_for_context: usize,
+            target_path_ast: &'ast Path,
         ) -> SynResult<usize> {
             let target_path_span = target_path_ast.span();
             let current_tmp_state = &self.all_states[current_state_idx_for_context];
 
             if target_path_ast.leading_colon.is_some() {
-                return Err(SynError::new(target_path_span, "Absolute paths starting with `::` are not supported for transition targets."));
+                return Err(SynError::new(
+                    target_path_span,
+                    "Absolute paths starting with `::` are not supported for transition targets.",
+                ));
             }
 
-            let normalized_target_full_path_candidate = Self::path_to_string_for_lookup(target_path_ast);
+            let normalized_target_full_path_candidate =
+                Self::path_to_string_for_lookup(target_path_ast);
 
             if target_path_ast.segments.len() == 1 {
                 let target_local_name = target_path_ast.segments[0].ident.to_string();
 
-                let direct_child_full_name = format!("{}_{}", current_tmp_state.full_path_name, target_local_name);
+                let direct_child_full_name =
+                    format!("{}_{}", current_tmp_state.full_path_name, target_local_name);
                 if let Some(idx) = self.state_full_path_to_idx_map.get(&direct_child_full_name) {
                     if current_tmp_state.children_indices.contains(idx) {
                         return Ok(*idx);
@@ -535,13 +556,16 @@ pub(crate) mod intermediate_tree {
                         return Ok(*idx);
                     }
                 }
-                 
-                 if let Some(idx) = self.state_full_path_to_idx_map.get(&target_local_name) {
+
+                if let Some(idx) = self.state_full_path_to_idx_map.get(&target_local_name) {
                     return Ok(*idx);
                 }
             }
-            
-            if let Some(idx) = self.state_full_path_to_idx_map.get(&normalized_target_full_path_candidate) {
+
+            if let Some(idx) = self
+                .state_full_path_to_idx_map
+                .get(&normalized_target_full_path_candidate)
+            {
                 return Ok(*idx);
             }
 
@@ -551,8 +575,12 @@ pub(crate) mod intermediate_tree {
 
         fn resolve_and_validate_transition_targets(&mut self) -> SynResult<()> {
             for i in 0..self.all_states.len() {
-                let transitions_info: Vec<(&'ast Path, Span)> = self.all_states[i].transitions.iter().map(|t| (t.target_state_path_ast, t.on_keyword_span)).collect();
-                
+                let transitions_info: Vec<(&'ast Path, Span)> = self.all_states[i]
+                    .transitions
+                    .iter()
+                    .map(|t| (t.target_state_path_ast, t.on_keyword_span))
+                    .collect();
+
                 let mut resolved_indices = Vec::new();
                 for (target_path_ast, on_span) in transitions_info {
                     match self.resolve_path_to_state_index(i, target_path_ast) {
@@ -563,7 +591,7 @@ pub(crate) mod intermediate_tree {
                         }
                     }
                 }
-                
+
                 let state_transitions = &mut self.all_states[i].transitions;
                 for (j, transition) in state_transitions.iter_mut().enumerate() {
                     transition.target_state_idx = resolved_indices[j];
@@ -622,7 +650,7 @@ pub(crate) mod intermediate_tree {
             let mut children_indices_for_this_state = Vec::new();
             // Correct types for local handler options
             let mut entry_handler_opt: Option<&'ast Expr> = None; // Changed from Path
-            let mut exit_handler_opt: Option<&'ast Expr> = None;  // Changed from Path
+            let mut exit_handler_opt: Option<&'ast Expr> = None; // Changed from Path
             let mut transitions_for_this_state: Vec<TmpTransition<'ast>> = Vec::new();
 
             for item in &state_decl_ast.body_items {
@@ -678,19 +706,19 @@ pub(crate) mod intermediate_tree {
 }
 
 pub(crate) mod code_generator {
-    use syn::{Ident, Path, Result as SynResult, Error as SynError}; // Added Path
-    use proc_macro2::{TokenStream, Span};
-    use quote::{quote, format_ident};
-    use std::collections::HashMap;
     use crate::intermediate_tree::TmpStateTreeBuilder;
-    // Removed: use crate::StateChartInputAst; 
+    use proc_macro2::{Span, TokenStream};
+    use quote::{format_ident, quote};
+    use std::collections::HashMap;
+    use syn::{Error as SynError, Ident, Path, Result as SynResult}; // Added Path
+                                                                    // Removed: use crate::StateChartInputAst;
     use syn::spanned::Spanned;
 
     fn to_pascal_case(s: &str) -> Ident {
         let mut pascal = String::new();
         let mut capitalize_next = true;
         for c in s.chars() {
-            if c == '_' { 
+            if c == '_' {
                 capitalize_next = true;
             } else if capitalize_next {
                 pascal.push(c.to_ascii_uppercase());
@@ -706,30 +734,34 @@ pub(crate) mod code_generator {
         }
     }
 
-    #[derive(Debug)] 
+    #[derive(Debug)]
     pub(crate) struct GeneratedStateIds {
-        pub enum_definition_tokens: TokenStream, 
+        pub enum_definition_tokens: TokenStream,
         #[allow(dead_code)]
-        pub state_id_enum_name: Ident,         
+        pub state_id_enum_name: Ident,
         #[allow(dead_code)]
         pub full_path_to_variant_ident: HashMap<String, Ident>,
     }
 
     pub(crate) fn generate_state_id_logic(
-        builder: &TmpStateTreeBuilder, 
-        machine_name: &Ident 
+        builder: &TmpStateTreeBuilder,
+        machine_name: &Ident,
     ) -> GeneratedStateIds {
         let enum_name_str = format!("{machine_name}StateId");
         let state_id_enum_name = format_ident!("{}", enum_name_str);
-        
+
         let mut full_path_to_variant_map = HashMap::new();
-        
-        let variants_code: Vec<Ident> = builder.all_states.iter()
-            .map(|tmp_state| { 
+
+        let variants_code: Vec<Ident> = builder
+            .all_states
+            .iter()
+            .map(|tmp_state| {
                 let variant_ident = to_pascal_case(&tmp_state.full_path_name);
-                full_path_to_variant_map.insert(tmp_state.full_path_name.clone(), variant_ident.clone());
-                variant_ident 
-            }).collect();
+                full_path_to_variant_map
+                    .insert(tmp_state.full_path_name.clone(), variant_ident.clone());
+                variant_ident
+            })
+            .collect();
 
         let enum_definition_tokens = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -737,7 +769,7 @@ pub(crate) mod code_generator {
                 #(#variants_code),*
             }
         };
-        
+
         GeneratedStateIds {
             enum_definition_tokens,
             state_id_enum_name,
@@ -747,28 +779,55 @@ pub(crate) mod code_generator {
 
     #[allow(dead_code)]
     pub(crate) fn generate_states_array<'ast>(
-        builder: &'ast TmpStateTreeBuilder<'ast>, 
+        builder: &'ast TmpStateTreeBuilder<'ast>,
         generated_ids: &GeneratedStateIds,
         context_type_path: &'ast syn::Path, // Changed from context_type_ast: &'ast syn::Type
     ) -> SynResult<TokenStream> {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         let mut state_node_initializers = Vec::new();
         for tmp_state in &builder.all_states {
-            let current_state_id_variant = generated_ids.full_path_to_variant_ident.get(&tmp_state.full_path_name)
-                .ok_or_else(|| SynError::new(tmp_state.name_span, "Internal error: TmpState full_path_name not found in generated IDs map"))?;
-            let parent_id_expr = tmp_state.parent_full_path_name.as_ref().and_then(|parent_fpn| {
-                generated_ids.full_path_to_variant_ident.get(parent_fpn)
-                    .map(|pi| quote! { Some(#state_id_enum_name::#pi) })
-            }).unwrap_or_else(|| quote! { None });
-            let initial_child_id_expr = tmp_state.initial_child_idx.and_then(|child_idx| {
-                builder.all_states.get(child_idx).and_then(|child_tmp_state| {
-                    generated_ids.full_path_to_variant_ident.get(&child_tmp_state.full_path_name)
-                        .map(|ci| quote! { Some(#state_id_enum_name::#ci) })
+            let current_state_id_variant = generated_ids
+                .full_path_to_variant_ident
+                .get(&tmp_state.full_path_name)
+                .ok_or_else(|| {
+                    SynError::new(
+                        tmp_state.name_span,
+                        "Internal error: TmpState full_path_name not found in generated IDs map",
+                    )
+                })?;
+            let parent_id_expr = tmp_state
+                .parent_full_path_name
+                .as_ref()
+                .and_then(|parent_fpn| {
+                    generated_ids
+                        .full_path_to_variant_ident
+                        .get(parent_fpn)
+                        .map(|pi| quote! { Some(#state_id_enum_name::#pi) })
                 })
-            }).unwrap_or_else(|| quote! { None });
+                .unwrap_or_else(|| quote! { None });
+            let initial_child_id_expr = tmp_state
+                .initial_child_idx
+                .and_then(|child_idx| {
+                    builder
+                        .all_states
+                        .get(child_idx)
+                        .and_then(|child_tmp_state| {
+                            generated_ids
+                                .full_path_to_variant_ident
+                                .get(&child_tmp_state.full_path_name)
+                                .map(|ci| quote! { Some(#state_id_enum_name::#ci) })
+                        })
+                })
+                .unwrap_or_else(|| quote! { None });
 
-            let entry_action_expr = tmp_state.entry_handler.map_or_else(|| quote!{ None }, |p_expr| quote!{ Some(#p_expr as ActionFn<#context_type_path>) }); // p_expr is &Expr
-            let exit_action_expr = tmp_state.exit_handler.map_or_else(|| quote!{ None }, |p_expr| quote!{ Some(#p_expr as ActionFn<#context_type_path>) });   // p_expr is &Expr
+            let entry_action_expr = tmp_state.entry_handler.map_or_else(
+                || quote! { None },
+                |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path>) },
+            ); // p_expr is &Expr
+            let exit_action_expr = tmp_state.exit_handler.map_or_else(
+                || quote! { None },
+                |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path>) },
+            ); // p_expr is &Expr
 
             state_node_initializers.push(quote! {
                 StateNode {
@@ -792,7 +851,7 @@ pub(crate) mod code_generator {
     pub(crate) fn generate_transitions_array<'ast>(
         builder: &'ast TmpStateTreeBuilder<'ast>,
         generated_ids: &GeneratedStateIds,
-        event_type_path: &'ast syn::Path, // Changed
+        event_type_path: &'ast syn::Path,   // Changed
         context_type_path: &'ast syn::Path, // Changed
     ) -> SynResult<TokenStream> {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
@@ -801,17 +860,28 @@ pub(crate) mod code_generator {
             let from_state_id_variant = generated_ids.full_path_to_variant_ident.get(&tmp_state.full_path_name)
                 .ok_or_else(|| SynError::new(tmp_state.name_span, "Internal error: 'from_state' full_path_name not found in generated IDs map"))?;
             for tmp_trans in &tmp_state.transitions {
-                let target_state_idx = tmp_trans.target_state_idx
-                    .ok_or_else(|| SynError::new(tmp_trans.on_keyword_span, "Internal error: Transition target index not resolved."))?;
-                let target_tmp_state = builder.all_states.get(target_state_idx)
-                    .ok_or_else(|| SynError::new(tmp_trans.on_keyword_span, "Internal error: Invalid target_state_idx."))?;
+                let target_state_idx = tmp_trans.target_state_idx.ok_or_else(|| {
+                    SynError::new(
+                        tmp_trans.on_keyword_span,
+                        "Internal error: Transition target index not resolved.",
+                    )
+                })?;
+                let target_tmp_state =
+                    builder.all_states.get(target_state_idx).ok_or_else(|| {
+                        SynError::new(
+                            tmp_trans.on_keyword_span,
+                            "Internal error: Invalid target_state_idx.",
+                        )
+                    })?;
                 let to_state_id_variant = generated_ids.full_path_to_variant_ident.get(&target_tmp_state.full_path_name)
                     .ok_or_else(|| SynError::new(tmp_trans.on_keyword_span, "Internal error: 'to_state' full_path_name not found in map for resolved index."))?;
                 let event_name_ident = tmp_trans.event_name;
                 let event_expr = quote! { #event_type_path::#event_name_ident };
-                let action_expr = tmp_trans.action_handler.map_or_else(|| quote!{ None }, 
-                    |p_expr| quote!{ Some(#p_expr as ActionFn<#context_type_path>) }); // p_expr is &Expr
-                let guard_expr = tmp_trans.guard_handler.map_or_else(|| quote!{ None }, 
+                let action_expr = tmp_trans.action_handler.map_or_else(
+                    || quote! { None },
+                    |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path>) },
+                ); // p_expr is &Expr
+                let guard_expr = tmp_trans.guard_handler.map_or_else(|| quote!{ None },
                     |p_expr| quote!{ Some(#p_expr as GuardFn<#context_type_path, #event_type_path>) }); // p_expr is &Expr
                 transition_initializers.push(quote! {
                     Transition {
@@ -836,17 +906,26 @@ pub(crate) mod code_generator {
     // For V1, initial target must be a simple Ident or a Path like foo::bar.
     // It cannot be something like MyMachine.State1 if MyMachine is the machine name.
     // It refers to a top-level state name, or a qualified path to one.
-    fn expr_to_state_path_string(path_expr: &Path, _base_span: Span) -> SynResult<String> { // Changed expr: &Expr to path_expr: &Path
+    fn expr_to_state_path_string(path_expr: &Path, _base_span: Span) -> SynResult<String> {
+        // Changed expr: &Expr to path_expr: &Path
         // Input is already a Path, directly use path_to_string_for_lookup from intermediate_tree
-        if path_expr.leading_colon.is_some() { 
-             return Err(SynError::new(path_expr.span(), "Absolute paths (`::foo`) are not supported for initial state targets."));
+        if path_expr.leading_colon.is_some() {
+            return Err(SynError::new(
+                path_expr.span(),
+                "Absolute paths (`::foo`) are not supported for initial state targets.",
+            ));
         }
         // qself check removed as it's not directly on syn::Path and less relevant for this simplified path usage.
         // The main goal is to join segments.
-        Ok(path_expr.segments.iter().map(|s| s.ident.to_string()).collect::<Vec<String>>().join("_"))
+        Ok(path_expr
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect::<Vec<String>>()
+            .join("_"))
     }
 
-    #[allow(dead_code)] 
+    #[allow(dead_code)]
     pub(crate) fn determine_initial_leaf_state_id<'ast>(
         builder: &'ast TmpStateTreeBuilder<'ast>,
         generated_ids: &GeneratedStateIds,
@@ -856,13 +935,26 @@ pub(crate) mod code_generator {
         let initial_target_span = initial_target_path.span();
 
         // Pass initial_target_path directly to expr_to_state_path_string
-        let top_level_target_name_str = expr_to_state_path_string(initial_target_path, initial_target_span)?;
+        let top_level_target_name_str =
+            expr_to_state_path_string(initial_target_path, initial_target_span)?;
 
-        let mut current_state_idx = builder.state_full_path_to_idx_map.get(&top_level_target_name_str)
+        let mut current_state_idx = builder
+            .state_full_path_to_idx_map
+            .get(&top_level_target_name_str)
             .copied()
-            .ok_or_else(|| SynError::new(initial_target_span, format!("Declared top-level initial state '{top_level_target_name_str}' not found.")))?;
+            .ok_or_else(|| {
+                SynError::new(
+                    initial_target_span,
+                    format!(
+                        "Declared top-level initial state '{top_level_target_name_str}' not found."
+                    ),
+                )
+            })?;
 
-        if builder.all_states[current_state_idx].parent_full_path_name.is_some() {
+        if builder.all_states[current_state_idx]
+            .parent_full_path_name
+            .is_some()
+        {
             return Err(SynError::new(initial_target_span, format!("Declared top-level initial state '{top_level_target_name_str}' is not a top-level state.")));
         }
 
@@ -871,9 +963,16 @@ pub(crate) mod code_generator {
         }
 
         let leaf_state_full_path_name = &builder.all_states[current_state_idx].full_path_name;
-        let leaf_state_variant_ident = generated_ids.full_path_to_variant_ident.get(leaf_state_full_path_name)
-            .ok_or_else(|| SynError::new(initial_target_span, "Internal error: Resolved initial leaf state not found in ID map."))?;
-        
+        let leaf_state_variant_ident = generated_ids
+            .full_path_to_variant_ident
+            .get(leaf_state_full_path_name)
+            .ok_or_else(|| {
+                SynError::new(
+                    initial_target_span,
+                    "Internal error: Resolved initial leaf state not found in ID map.",
+                )
+            })?;
+
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         Ok(quote! { #state_id_enum_name::#leaf_state_variant_ident })
     }
@@ -882,12 +981,15 @@ pub(crate) mod code_generator {
     pub(crate) fn generate_machine_definition_const(
         machine_name: &Ident,
         generated_ids: &GeneratedStateIds,
-        event_type_path: &syn::Path, // Changed
+        event_type_path: &syn::Path,   // Changed
         context_type_path: &syn::Path, // Changed
-        initial_leaf_state_id_ts: &TokenStream, 
+        initial_leaf_state_id_ts: &TokenStream,
     ) -> TokenStream {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
-        let machine_def_const_name_str = format!("{}_MACHINE_DEFINITION", machine_name.to_string().to_uppercase());
+        let machine_def_const_name_str = format!(
+            "{}_MACHINE_DEFINITION",
+            machine_name.to_string().to_uppercase()
+        );
         let machine_def_const_ident = format_ident!("{}", machine_def_const_name_str);
         let machine_def_ts = quote! {
             pub const #machine_def_const_ident: lit_bit_core::core::MachineDefinition<
@@ -895,8 +997,8 @@ pub(crate) mod code_generator {
                 #event_type_path,
                 #context_type_path
             > = lit_bit_core::core::MachineDefinition::new(
-                STATES,      
-                TRANSITIONS, 
+                STATES,
+                TRANSITIONS,
                 #initial_leaf_state_id_ts
             );
         };
@@ -907,7 +1009,7 @@ pub(crate) mod code_generator {
     pub(crate) fn generate_machine_struct_and_impl(
         machine_name: &Ident,
         state_id_enum_name: &Ident,
-        event_type_path: &syn::Path, // Changed
+        event_type_path: &syn::Path,   // Changed
         context_type_path: &syn::Path, // Changed
         machine_definition_const_ident: &Ident,
     ) -> TokenStream {
@@ -950,48 +1052,80 @@ pub(crate) mod code_generator {
 // In the main proc_macro function, after parsing:
 #[proc_macro]
 pub fn statechart(input: TokenStream) -> TokenStream {
-    let parsed_ast = match syn::parse::<crate::StateChartInputAst>(input) { Ok(ast) => ast, Err(err) => return err.to_compile_error().into() };
+    let parsed_ast = match syn::parse::<crate::StateChartInputAst>(input) {
+        Ok(ast) => ast,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let mut builder = crate::intermediate_tree::TmpStateTreeBuilder::new();
-    if let Err(err) = builder.build_from_ast(&parsed_ast) { return err.to_compile_error().into(); }
+    if let Err(err) = builder.build_from_ast(&parsed_ast) {
+        return err.to_compile_error().into();
+    }
     let machine_name_ident = &parsed_ast.name;
     // These are now Paths from the AST
     let context_type_path = &parsed_ast.context_type;
     let event_type_path = &parsed_ast.event_type;
 
-    let generated_ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
-    
+    let generated_ids_info =
+        crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
+
     // Pass Paths to generator functions
-    let states_array_ts = match crate::code_generator::generate_states_array(&builder, &generated_ids_info, context_type_path) { Ok(ts) => ts, Err(err) => return err.to_compile_error().into() };
-    let transitions_array_ts = match crate::code_generator::generate_transitions_array(&builder, &generated_ids_info, event_type_path, context_type_path) { Ok(ts) => ts, Err(err) => return err.to_compile_error().into() };
-    let initial_leaf_state_id_ts = match crate::code_generator::determine_initial_leaf_state_id(&builder, &generated_ids_info, &parsed_ast) { Ok(ts) => ts, Err(err) => return err.to_compile_error().into() };
-    
-    let machine_definition_const_ident_str = format!("{}_MACHINE_DEFINITION", machine_name_ident.to_string().to_uppercase());
-    let machine_definition_const_ident = quote::format_ident!("{}", machine_definition_const_ident_str);
-    
+    let states_array_ts = match crate::code_generator::generate_states_array(
+        &builder,
+        &generated_ids_info,
+        context_type_path,
+    ) {
+        Ok(ts) => ts,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let transitions_array_ts = match crate::code_generator::generate_transitions_array(
+        &builder,
+        &generated_ids_info,
+        event_type_path,
+        context_type_path,
+    ) {
+        Ok(ts) => ts,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let initial_leaf_state_id_ts = match crate::code_generator::determine_initial_leaf_state_id(
+        &builder,
+        &generated_ids_info,
+        &parsed_ast,
+    ) {
+        Ok(ts) => ts,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let machine_definition_const_ident_str = format!(
+        "{}_MACHINE_DEFINITION",
+        machine_name_ident.to_string().to_uppercase()
+    );
+    let machine_definition_const_ident =
+        quote::format_ident!("{}", machine_definition_const_ident_str);
+
     let machine_def_const_ts = crate::code_generator::generate_machine_definition_const(
         machine_name_ident,
-        &generated_ids_info, 
-        event_type_path,     // Pass Path
-        context_type_path,   // Pass Path
+        &generated_ids_info,
+        event_type_path,   // Pass Path
+        context_type_path, // Pass Path
         &initial_leaf_state_id_ts,
-    ); 
-    
+    );
+
     let machine_struct_impl_ts = crate::code_generator::generate_machine_struct_and_impl(
         machine_name_ident,
         &generated_ids_info.state_id_enum_name,
-        event_type_path,     // Pass Path
-        context_type_path,   // Pass Path
+        event_type_path,   // Pass Path
+        context_type_path, // Pass Path
         &machine_definition_const_ident,
     );
-    
+
     let state_id_enum_ts = generated_ids_info.enum_definition_tokens;
-    
+
     let core_types_definitions = quote! {
         use lit_bit_core::core::{StateMachine, Runtime, StateNode, Transition, ActionFn, GuardFn};
     };
 
     let final_code = quote! {
-        mod generated_state_machine { 
+        mod generated_state_machine {
             #core_types_definitions
             #[allow(unused_imports)]
             use super::*;
@@ -1007,7 +1141,7 @@ pub fn statechart(input: TokenStream) -> TokenStream {
             #machine_def_const_ts
             #machine_struct_impl_ts
         }
-        pub use generated_state_machine::*; 
+        pub use generated_state_machine::*;
     };
     final_code.into()
 }
@@ -1024,9 +1158,9 @@ pub fn statechart(input: TokenStream) -> TokenStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use syn::parse_str;
-    use crate::intermediate_tree::{TmpStateTreeBuilder};
-    use crate::code_generator::generate_state_id_logic; // Import the new function
+    use crate::code_generator::generate_state_id_logic;
+    use crate::intermediate_tree::TmpStateTreeBuilder;
+    use syn::parse_str; // Import the new function
 
     #[allow(dead_code)]
     fn ident(s: &str) -> Ident {
@@ -1049,24 +1183,39 @@ mod tests {
         assert!(result.is_ok(), "Failed to parse header: {:?}", result.err());
         let ast = result.unwrap();
         assert_eq!(ast.name.to_string(), "MyMachine");
-        let ct = &ast.context_type; assert_eq!(quote!(#ct).to_string(), "Ctx");
-        let et = &ast.event_type; assert_eq!(quote!(#et).to_string(), "Ev");
+        let ct = &ast.context_type;
+        assert_eq!(quote!(#ct).to_string(), "Ctx");
+        let et = &ast.event_type;
+        assert_eq!(quote!(#et).to_string(), "Ev");
         let ite = &ast.initial_target_expression;
         assert_eq!(quote!(#ite).to_string(), "StartState");
-        assert!(ast.comma4.is_some(), "Expected trailing comma (comma4) after initial state path");
-        assert!(ast.top_level_states.is_empty(), "Expected no states for header-only input");
+        assert!(
+            ast.comma4.is_some(),
+            "Expected trailing comma (comma4) after initial state path"
+        );
+        assert!(
+            ast.top_level_states.is_empty(),
+            "Expected no states for header-only input"
+        );
     }
 
     #[test]
     fn parse_state_chart_input_header_no_trailing_comma() {
         let input_str = "name: MyMachine, context: Ctx, event: Ev, initial: StartState";
         let result = parse_str::<StateChartInputAst>(input_str);
-        assert!(result.is_ok(), "Failed to parse header without trailing comma: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse header without trailing comma: {:?}",
+            result.err()
+        );
         let ast = result.unwrap();
         assert_eq!(ast.name.to_string(), "MyMachine");
         let et = &ast.event_type;
         assert_eq!(quote!(#et).to_string(), "Ev");
-        assert!(ast.comma4.is_none(), "Expected no trailing comma (comma4) after initial state path");
+        assert!(
+            ast.comma4.is_none(),
+            "Expected no trailing comma (comma4) after initial state path"
+        );
         assert!(ast.top_level_states.is_empty());
     }
 
@@ -1074,9 +1223,14 @@ mod tests {
     fn parse_state_chart_input_with_one_state() {
         let input_str = "name: Test, context: Ctx, event: Ev, initial: S1, state S1 {}";
         let result = parse_str::<StateChartInputAst>(input_str);
-        assert!(result.is_ok(), "Parse failed with one state: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Parse failed with one state: {:?}",
+            result.err()
+        );
         let ast = result.unwrap();
-        let et = &ast.event_type; assert_eq!(quote!(#et).to_string(), "Ev");
+        let et = &ast.event_type;
+        assert_eq!(quote!(#et).to_string(), "Ev");
         assert_eq!(ast.top_level_states.len(), 1);
         assert_eq!(ast.top_level_states[0].name.to_string(), "S1");
     }
@@ -1101,7 +1255,8 @@ mod tests {
 
     #[test]
     fn parse_state_chart_input_extra_tokens_after_states() {
-        let input_str = "name: Test, context: Ctx, event: Ev, initial: S1, state S1 {} unexpected_token";
+        let input_str =
+            "name: Test, context: Ctx, event: Ev, initial: S1, state S1 {} unexpected_token";
         let result = parse_str::<StateChartInputAst>(input_str);
         assert!(
             result.is_err(),
@@ -1536,9 +1691,9 @@ mod tests {
         assert!(result.is_err(), "Expected error for malformed action");
     }
 
-    // --- Tests for TmpStateTreeBuilder - Semantic Analysis --- 
+    // --- Tests for TmpStateTreeBuilder - Semantic Analysis ---
 
-    // --- Tests for Initial Child Resolution --- 
+    // --- Tests for Initial Child Resolution ---
     #[test]
     fn initial_child_valid_direct_child() {
         let dsl = r"
@@ -1555,14 +1710,22 @@ mod tests {
         let ast = parse_dsl(dsl).expect("DSL parsing failed");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
-        assert!(build_result.is_ok(), "Builder failed: {:?}", build_result.err());
-        
+        assert!(
+            build_result.is_ok(),
+            "Builder failed: {:?}",
+            build_result.err()
+        );
+
         assert_eq!(builder.all_states.len(), 3); // S1, S1_A, S1_B
         let s1_idx = builder.state_full_path_to_idx_map.get("S1").unwrap();
         let s1_a_idx = builder.state_full_path_to_idx_map.get("S1_S1_A").unwrap();
-        
+
         let s1_node = &builder.all_states[*s1_idx];
-        assert_eq!(s1_node.initial_child_idx, Some(*s1_a_idx), "S1 initial child should be S1_A");
+        assert_eq!(
+            s1_node.initial_child_idx,
+            Some(*s1_a_idx),
+            "S1 initial child should be S1_A"
+        );
         assert!(s1_node.declared_initial_child_expression.is_some());
     }
 
@@ -1580,9 +1743,14 @@ mod tests {
         let ast = parse_dsl(dsl).expect("DSL parsing failed");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
-        assert!(build_result.is_err(), "Expected error for missing initial declaration");
+        assert!(
+            build_result.is_err(),
+            "Expected error for missing initial declaration"
+        );
         if let Err(e) = build_result {
-            assert!(e.to_string().contains("Composite state 'S1' must declare an 'initial' child state."));
+            assert!(e
+                .to_string()
+                .contains("Composite state 'S1' must declare an 'initial' child state."));
         }
     }
 
@@ -1600,9 +1768,14 @@ mod tests {
         let ast = parse_dsl(dsl).expect("DSL parsing failed");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
-        assert!(build_result.is_err(), "Expected error for initial on leaf state");
+        assert!(
+            build_result.is_err(),
+            "Expected error for initial on leaf state"
+        );
         if let Err(e) = build_result {
-            assert!(e.to_string().contains("State 'S1' declares an 'initial' child but has no nested states defined."));
+            assert!(e.to_string().contains(
+                "State 'S1' declares an 'initial' child but has no nested states defined."
+            ));
         }
     }
 
@@ -1624,9 +1797,14 @@ mod tests {
         let ast = parse_dsl(dsl).expect("DSL parsing failed");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
-        assert!(build_result.is_err(), "Expected error for initial target not being a direct child");
+        assert!(
+            build_result.is_err(),
+            "Expected error for initial target not being a direct child"
+        );
         if let Err(e) = build_result {
-            assert!(e.to_string().contains("Initial state target 'S2_A' for state 'S1' is not a defined direct child state."));
+            assert!(e.to_string().contains(
+                "Initial state target 'S2_A' for state 'S1' is not a defined direct child state."
+            ));
         }
     }
 
@@ -1653,11 +1831,11 @@ mod tests {
         }
     }
 
-    // --- Tests for Code Generation (Stage 3) --- 
+    // --- Tests for Code Generation (Stage 3) ---
 
     // Tests for StateId Enum Generation (re-adding with updated DSL)
     #[test]
-    fn generate_simple_state_id_enum_updated() { 
+    fn generate_simple_state_id_enum_updated() {
         let dsl = concat!(
             "name: TestSimple, ",
             "context: Ctx, ",
@@ -1671,22 +1849,40 @@ mod tests {
         builder.build_from_ast(&ast).expect("Builder failed");
         let machine_name_ident = &ast.name;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
-        
+
         let expected_enum_str = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
             pub enum TestSimpleStateId {
                 S1,
                 S2
             }
-        }.to_string();
-        assert_eq!(ids_info.enum_definition_tokens.to_string(), expected_enum_str);
+        }
+        .to_string();
+        assert_eq!(
+            ids_info.enum_definition_tokens.to_string(),
+            expected_enum_str
+        );
         assert_eq!(ids_info.state_id_enum_name.to_string(), "TestSimpleStateId");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("S1").unwrap().to_string(), "S1");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("S2").unwrap().to_string(), "S2");
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("S1")
+                .unwrap()
+                .to_string(),
+            "S1"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("S2")
+                .unwrap()
+                .to_string(),
+            "S2"
+        );
     }
 
     #[test]
-    fn generate_nested_state_id_enum_updated() { 
+    fn generate_nested_state_id_enum_updated() {
         let dsl = concat!(
             "name: TestNested, \n",
             "context: Ctx, \n",
@@ -1705,28 +1901,76 @@ mod tests {
         );
         let ast = parse_dsl(dsl).expect("DSL parsing failed for nested state_id_enum test "); // Added space
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed for nested state_id_enum test "); // Added space
+        builder
+            .build_from_ast(&ast)
+            .expect("Builder failed for nested state_id_enum test "); // Added space
         let machine_name_ident = &ast.name;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
         let expected_enum_str = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
             pub enum TestNestedStateId {
                 P1,
-                P1C1, 
+                P1C1,
                 P1C1GC1,
                 P1C1GC2,
-                P1C2, 
+                P1C2,
                 P2
             }
-        }.to_string();
-        assert_eq!(ids_info.enum_definition_tokens.to_string(), expected_enum_str);
+        }
+        .to_string();
+        assert_eq!(
+            ids_info.enum_definition_tokens.to_string(),
+            expected_enum_str
+        );
         assert_eq!(ids_info.state_id_enum_name.to_string(), "TestNestedStateId");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("P1").unwrap().to_string(), "P1");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("P1_C1").unwrap().to_string(), "P1C1");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("P1_C2").unwrap().to_string(), "P1C2");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("P1_C1_GC1").unwrap().to_string(), "P1C1GC1");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("P1_C1_GC2").unwrap().to_string(), "P1C1GC2");
-        assert_eq!(ids_info.full_path_to_variant_ident.get("P2").unwrap().to_string(), "P2");
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("P1")
+                .unwrap()
+                .to_string(),
+            "P1"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("P1_C1")
+                .unwrap()
+                .to_string(),
+            "P1C1"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("P1_C2")
+                .unwrap()
+                .to_string(),
+            "P1C2"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("P1_C1_GC1")
+                .unwrap()
+                .to_string(),
+            "P1C1GC1"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("P1_C1_GC2")
+                .unwrap()
+                .to_string(),
+            "P1C1GC2"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("P2")
+                .unwrap()
+                .to_string(),
+            "P2"
+        );
     }
 
     // Tests for STATES Array Generation (re-adding with updated DSL)
@@ -1747,8 +1991,9 @@ mod tests {
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
-        let states_array_tokens = crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
-            .expect("generate_states_array failed "); // Added space
+        let states_array_tokens =
+            crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
+                .expect("generate_states_array failed "); // Added space
         let expected_states_array_str = quote! {
             const STATES: &[StateNode<TestMachineStateId, Ctx>] = &[
                 StateNode {
@@ -1766,9 +2011,13 @@ mod tests {
                     exit_action: None,
                 }
             ];
-        }.to_string();
+        }
+        .to_string();
         let normalize = |s: String| s.split_whitespace().collect::<Vec<&str>>().join(" ");
-        assert_eq!(normalize(states_array_tokens.to_string()), normalize(expected_states_array_str));
+        assert_eq!(
+            normalize(states_array_tokens.to_string()),
+            normalize(expected_states_array_str)
+        );
     }
 
     #[test]
@@ -1778,7 +2027,7 @@ mod tests {
             "name: HierarchicalMachine, ",
             "context: AppContext, ",
             "event: AppEvent, ",
-            "initial: Parent, ", 
+            "initial: Parent, ",
             "state Parent {",
             "    initial: ChildA;",
             "    entry: self.on_enter_parent;",
@@ -1792,25 +2041,26 @@ mod tests {
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
-        let states_array_tokens = crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
-            .expect("generate_states_array failed "); // Added space
+        let states_array_tokens =
+            crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
+                .expect("generate_states_array failed "); // Added space
         let expected_states_array_str = quote! {
             const STATES: &[StateNode<HierarchicalMachineStateId, AppContext>] = &[
-                StateNode { 
+                StateNode {
                     id: HierarchicalMachineStateId::Parent,
                     parent: None,
                     initial_child: Some(HierarchicalMachineStateId::ParentChildA),
                     entry_action: Some(self.on_enter_parent as ActionFn<AppContext>),
                     exit_action: None,
                 },
-                StateNode { 
+                StateNode {
                     id: HierarchicalMachineStateId::ParentChildA,
                     parent: Some(HierarchicalMachineStateId::Parent),
                     initial_child: None,
                     entry_action: Some(self.on_enter_child_a as ActionFn<AppContext>),
                     exit_action: None,
                 },
-                StateNode { 
+                StateNode {
                     id: HierarchicalMachineStateId::ParentChildB,
                     parent: Some(HierarchicalMachineStateId::Parent),
                     initial_child: None,
@@ -1818,9 +2068,13 @@ mod tests {
                     exit_action: None,
                 }
             ];
-        }.to_string();
+        }
+        .to_string();
         let normalize = |s: String| s.split_whitespace().collect::<Vec<&str>>().join(" ");
-        assert_eq!(normalize(states_array_tokens.to_string()), normalize(expected_states_array_str));
+        assert_eq!(
+            normalize(states_array_tokens.to_string()),
+            normalize(expected_states_array_str)
+        );
     }
 
     // Test for TRANSITIONS Array Generation (re-adding with updated DSL)
@@ -1837,7 +2091,7 @@ mod tests {
             "    on E2 [guard g1] => S1; ",
             "} ",
             "state S2 { ",
-            "    on E3 => S1 [action a1]; ", 
+            "    on E3 => S1 [action a1]; ",
             "}"
         );
         let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
@@ -1848,8 +2102,12 @@ mod tests {
         let event_type_ast = &ast.event_type;
         let ids_info = generate_state_id_logic(&builder, machine_name_ident);
         let transitions_array_tokens = crate::code_generator::generate_transitions_array(
-            &builder, &ids_info, event_type_ast, context_type_ast
-        ).expect("generate_transitions_array failed "); // Added space
+            &builder,
+            &ids_info,
+            event_type_ast,
+            context_type_ast,
+        )
+        .expect("generate_transitions_array failed "); // Added space
         let expected_str = quote! {
             const TRANSITIONS: &[Transition<TestMachineStateId, Ev, Ctx>] = &[
                 Transition {
@@ -1874,9 +2132,13 @@ mod tests {
                     guard: None,
                 }
             ];
-        }.to_string();
+        }
+        .to_string();
         let normalize = |s: String| s.split_whitespace().collect::<Vec<&str>>().join(" ");
-        assert_eq!(normalize(transitions_array_tokens.to_string()), normalize(expected_str));
+        assert_eq!(
+            normalize(transitions_array_tokens.to_string()),
+            normalize(expected_str)
+        );
     }
 
     #[test]
@@ -1886,20 +2148,20 @@ mod tests {
             "name: TestHierarchicalMachine, ",
             "context: RootCtx, ",
             "event: RootEv, ",
-            "initial: P1, ", 
+            "initial: P1, ",
             "state P1 { ",
             "    initial: C1; ",
-            "    on E_P1_TO_C2 => C2; ", 
+            "    on E_P1_TO_C2 => C2; ",
             "    state C1 { ",
             "        initial: GC1; ",
-            "        on E_C1_TO_GC2 => GC2; ", 
+            "        on E_C1_TO_GC2 => GC2; ",
             "        state GC1 { ",
-            "            on E_GC1_TO_P2 => P2; ", 
+            "            on E_GC1_TO_P2 => P2; ",
             "        } ",
             "        state GC2 {} ",
             "    } ",
             "    state C2 { ",
-            "        on E_C2_TO_GC1 => P1::C1::GC1; ", 
+            "        on E_C2_TO_GC1 => P1::C1::GC1; ",
             "    } ",
             "} ",
             "state P2 {}"
@@ -1913,15 +2175,19 @@ mod tests {
         let ids_info = generate_state_id_logic(&builder, machine_name_ident);
 
         let transitions_array_tokens = crate::code_generator::generate_transitions_array(
-            &builder, &ids_info, event_type_ast, context_type_ast
-        ).expect("generate_transitions_array failed "); // Added space
+            &builder,
+            &ids_info,
+            event_type_ast,
+            context_type_ast,
+        )
+        .expect("generate_transitions_array failed "); // Added space
 
         let expected_str = quote! {
             const TRANSITIONS: &[Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
                 Transition {
                     from_state: TestHierarchicalMachineStateId::P1,
                     event: RootEv::E_P1_TO_C2,
-                    to_state: TestHierarchicalMachineStateId::P1C2, 
+                    to_state: TestHierarchicalMachineStateId::P1C2,
                     action: None,
                     guard: None,
                 },
@@ -1942,15 +2208,19 @@ mod tests {
                 Transition {
                     from_state: TestHierarchicalMachineStateId::P1C2,
                     event: RootEv::E_C2_TO_GC1,
-                    to_state: TestHierarchicalMachineStateId::P1C1GC1, 
+                    to_state: TestHierarchicalMachineStateId::P1C1GC1,
                     action: None,
                     guard: None,
                 }
             ];
-        }.to_string();
+        }
+        .to_string();
 
         let normalize = |s: String| s.split_whitespace().collect::<Vec<&str>>().join(" ");
-        assert_eq!(normalize(transitions_array_tokens.to_string()), normalize(expected_str));
+        assert_eq!(
+            normalize(transitions_array_tokens.to_string()),
+            normalize(expected_str)
+        );
     }
 
     #[test]
@@ -1960,7 +2230,7 @@ mod tests {
             "name: TestMachine, ",
             "context: Ctx, ",
             "event: Ev, ",
-            "initial: S1, ", 
+            "initial: S1, ",
             "state S1 {}",
             "state S2 {}"
         );
@@ -1969,9 +2239,10 @@ mod tests {
         builder.build_from_ast(&ast).expect("Builder failed "); // Added space
         let ids_info = generate_state_id_logic(&builder, &ast.name);
 
-        let initial_leaf_id_ts = crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast)
-            .expect("determine_initial_leaf_state_id failed "); // Added space
-        
+        let initial_leaf_id_ts =
+            crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast)
+                .expect("determine_initial_leaf_state_id failed "); // Added space
+
         let expected_ts_str = quote! { TestMachineStateId::S1 }.to_string();
         assert_eq!(initial_leaf_id_ts.to_string(), expected_ts_str);
     }
@@ -1983,11 +2254,11 @@ mod tests {
             "name: TestNested, ",
             "context: Ctx, ",
             "event: Ev, ",
-            "initial: P1, ", 
+            "initial: P1, ",
             "state P1 { ",
-            "    initial: C1; ",      
+            "    initial: C1; ",
             "    state C1 { ",
-            "        initial: GC1; ", 
+            "        initial: GC1; ",
             "        state GC1 {} ",
             "        state GC2 {} ",
             "    } ",
@@ -2000,9 +2271,10 @@ mod tests {
         builder.build_from_ast(&ast).expect("Builder failed "); // Added space
         let ids_info = generate_state_id_logic(&builder, &ast.name);
 
-        let initial_leaf_id_ts = crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast)
-            .expect("determine_initial_leaf_state_id failed "); // Added space
-        
+        let initial_leaf_id_ts =
+            crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast)
+                .expect("determine_initial_leaf_state_id failed "); // Added space
+
         // Expected leaf: P1 -> C1 -> GC1. StateId: TestNestedStateId::P1C1GC1
         let expected_ts_str = quote! { TestNestedStateId::P1C1GC1 }.to_string();
         assert_eq!(initial_leaf_id_ts.to_string(), expected_ts_str);
@@ -2016,17 +2288,28 @@ mod tests {
             "context: Ctx, ",
             "event: Ev, ",
             "initial: S1_S1_Child, ", // Target a nested state
-            "state S1 { initial: S1_Child; state S1_Child {} }" // S1 is valid, S1_S1_Child exists
+            "state S1 { initial: S1_Child; state S1_Child {} }"  // S1 is valid, S1_S1_Child exists
         );
         let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder should succeed with this valid AST "); // Builder should pass
+        builder
+            .build_from_ast(&ast)
+            .expect("Builder should succeed with this valid AST "); // Builder should pass
         let ids_info = generate_state_id_logic(&builder, &ast.name);
 
-        let result = crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast);
-        assert!(result.is_err(), "Expected error for initial target not being top-level "); // Added space
+        let result =
+            crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast);
+        assert!(
+            result.is_err(),
+            "Expected error for initial target not being top-level "
+        ); // Added space
         if let Err(e) = result {
-            assert!(e.to_string().contains("Declared top-level initial state 'S1_S1_Child' is not a top-level state."), "Unexpected error message: {e}"); // Ensured double quotes
+            assert!(
+                e.to_string().contains(
+                    "Declared top-level initial state 'S1_S1_Child' is not a top-level state."
+                ),
+                "Unexpected error message: {e}"
+            ); // Ensured double quotes
         }
     }
 
@@ -2042,19 +2325,267 @@ mod tests {
         );
         let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder should succeed initially "); // Added space
+        builder
+            .build_from_ast(&ast)
+            .expect("Builder should succeed initially "); // Added space
         let ids_info = generate_state_id_logic(&builder, &ast.name);
 
-        let result = crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast);
-        assert!(result.is_err(), "Expected error for non-existent initial target "); // Added space
+        let result =
+            crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast);
+        assert!(
+            result.is_err(),
+            "Expected error for non-existent initial target "
+        ); // Added space
         if let Err(e) = result {
-            assert!(e.to_string().contains("Declared top-level initial state 'NonExistentState' not found.")); // Ensured double quotes and closing quote
+            assert!(e
+                .to_string()
+                .contains("Declared top-level initial state 'NonExistentState' not found."));
+            // Ensured double quotes and closing quote
         }
     }
     // Note: The test case `parse_state_chart_input_extra_tokens_after_states` also uses an `expect` that needs a space.
     // And `parse_transition_with_action_only_implicit_keyword`
     // And `parse_transition_action_ast_leading_dot_error`
     // And `transition_target_unknown_path_errors`
-}
 
- 
+    #[test]
+    #[allow(clippy::too_many_lines)] // Allow long test for comprehensive showcase validation
+    fn parse_and_build_hierarchical_showcase_example() {
+        let dsl = r"
+            name: Agent,
+            context: AgentCtx,
+            event: AgentEvent, // Assuming AgentEvent is a parsable Path
+            initial: Operational,
+
+            state Operational {
+                initial: Idle;
+                on ReportError => Errored [action self.log_error]; // Simplified action for testing
+
+                state Idle {
+                    on Activate [guard self.can_start] => Active [action self.start_up];
+                    // after 5s => Active [action self.start_up]; // `after` not yet parsed/handled
+                }
+
+                state Active {
+                    on Deactivate => Idle [action self.shut_down];
+                    on Activate [guard self.can_start] => Active [action self.start_up];
+                }
+            }
+
+            state Errored {
+                on Deactivate => Operational;
+            }
+        ";
+
+        let ast = parse_dsl(dsl).expect("DSL parsing for showcase example failed");
+        let mut builder = TmpStateTreeBuilder::new();
+        let build_result = builder.build_from_ast(&ast);
+        assert!(
+            build_result.is_ok(),
+            "Builder failed for showcase example: {:?}",
+            build_result.err()
+        );
+
+        // Basic checks on the builder's state
+        assert_eq!(
+            builder.all_states.len(),
+            4,
+            "Expected 4 states: Operational, Idle, Active, Errored"
+        );
+        assert_eq!(builder.state_full_path_to_idx_map.len(), 4);
+
+        // Check Operational state
+        let operational_idx = *builder
+            .state_full_path_to_idx_map
+            .get("Operational")
+            .expect("Operational state not found in map");
+        let operational_state = &builder.all_states[operational_idx];
+        assert_eq!(operational_state.local_name.to_string(), "Operational");
+        assert_eq!(operational_state.full_path_name, "Operational");
+        assert!(operational_state.parent_full_path_name.is_none());
+        assert_eq!(operational_state.depth, 0);
+        assert_eq!(
+            operational_state.children_indices.len(),
+            2,
+            "Operational should have Idle and Active as children"
+        );
+
+        let idle_idx_direct = *builder
+            .state_full_path_to_idx_map
+            .get("Operational_Idle")
+            .expect("Operational_Idle not found");
+        assert_eq!(
+            operational_state.initial_child_idx,
+            Some(idle_idx_direct),
+            "Operational initial child should be Idle"
+        );
+        assert_eq!(operational_state.transitions.len(), 1); // on ReportError
+        assert_eq!(
+            operational_state.transitions[0].event_name.to_string(),
+            "ReportError"
+        );
+        let target_errored_idx = *builder.state_full_path_to_idx_map.get("Errored").unwrap();
+        assert_eq!(
+            operational_state.transitions[0].target_state_idx,
+            Some(target_errored_idx)
+        );
+
+        // Check Idle state (child of Operational)
+        let idle_idx = *builder
+            .state_full_path_to_idx_map
+            .get("Operational_Idle")
+            .expect("Idle state not found in map");
+        let idle_state = &builder.all_states[idle_idx];
+        assert_eq!(idle_state.local_name.to_string(), "Idle");
+        assert_eq!(idle_state.full_path_name, "Operational_Idle");
+        assert_eq!(
+            idle_state.parent_full_path_name,
+            Some("Operational".to_string())
+        );
+        assert_eq!(idle_state.depth, 1);
+        assert!(idle_state.children_indices.is_empty());
+        assert!(idle_state.initial_child_idx.is_none());
+        assert_eq!(idle_state.transitions.len(), 1); // on Activate
+        assert_eq!(idle_state.transitions[0].event_name.to_string(), "Activate");
+        let active_idx_direct = *builder
+            .state_full_path_to_idx_map
+            .get("Operational_Active")
+            .unwrap();
+        assert_eq!(
+            idle_state.transitions[0].target_state_idx,
+            Some(active_idx_direct)
+        );
+
+        // Check Active state (child of Operational)
+        let active_idx = *builder
+            .state_full_path_to_idx_map
+            .get("Operational_Active")
+            .expect("Active state not found in map");
+        let active_state = &builder.all_states[active_idx];
+        assert_eq!(active_state.local_name.to_string(), "Active");
+        assert_eq!(active_state.full_path_name, "Operational_Active");
+        assert_eq!(
+            active_state.parent_full_path_name,
+            Some("Operational".to_string())
+        );
+        assert_eq!(active_state.depth, 1);
+        assert!(active_state.children_indices.is_empty());
+        assert!(active_state.initial_child_idx.is_none());
+        assert_eq!(active_state.transitions.len(), 2); // on Deactivate, on Activate (self)
+        assert_eq!(
+            active_state.transitions[0].event_name.to_string(),
+            "Deactivate"
+        );
+        assert_eq!(
+            active_state.transitions[0].target_state_idx,
+            Some(idle_idx_direct)
+        );
+        assert_eq!(
+            active_state.transitions[1].event_name.to_string(),
+            "Activate"
+        );
+        assert_eq!(
+            active_state.transitions[1].target_state_idx,
+            Some(active_idx_direct)
+        ); // Self-transition
+
+        // Check Errored state
+        let errored_idx = *builder
+            .state_full_path_to_idx_map
+            .get("Errored")
+            .expect("Errored state not found in map");
+        let errored_state = &builder.all_states[errored_idx];
+        assert_eq!(errored_state.local_name.to_string(), "Errored");
+        assert_eq!(errored_state.full_path_name, "Errored");
+        assert!(errored_state.parent_full_path_name.is_none());
+        assert_eq!(errored_state.depth, 0);
+        assert!(errored_state.children_indices.is_empty());
+        assert!(errored_state.initial_child_idx.is_none());
+        assert_eq!(errored_state.transitions.len(), 1); // on Deactivate
+        assert_eq!(
+            errored_state.transitions[0].event_name.to_string(),
+            "Deactivate"
+        );
+        assert_eq!(
+            errored_state.transitions[0].target_state_idx,
+            Some(operational_idx)
+        );
+
+        // Check code generation parts (simple checks, not full output validation)
+        let ids_info = generate_state_id_logic(&builder, &ast.name);
+        assert_eq!(ids_info.state_id_enum_name.to_string(), "AgentStateId");
+        assert_eq!(ids_info.full_path_to_variant_ident.len(), 4);
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("Operational")
+                .unwrap()
+                .to_string(),
+            "Operational"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("Operational_Idle")
+                .unwrap()
+                .to_string(),
+            "OperationalIdle"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("Operational_Active")
+                .unwrap()
+                .to_string(),
+            "OperationalActive"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("Errored")
+                .unwrap()
+                .to_string(),
+            "Errored"
+        );
+
+        let initial_leaf_token_stream =
+            crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast)
+                .expect("Determine initial leaf state failed for showcase");
+        // Operational -> initial: Idle. So leaf is OperationalIdle
+        assert_eq!(
+            initial_leaf_token_stream.to_string(),
+            "AgentStateId :: OperationalIdle"
+        );
+
+        // Test generation of STATES array (basic check)
+        let states_array_result =
+            crate::code_generator::generate_states_array(&builder, &ids_info, &ast.context_type);
+        assert!(
+            states_array_result.is_ok(),
+            "generate_states_array failed: {:?}",
+            states_array_result.err()
+        );
+        let states_array_str = states_array_result.unwrap().to_string();
+        assert!(states_array_str.contains("id : AgentStateId :: OperationalIdle"));
+        assert!(states_array_str.contains("parent : Some (AgentStateId :: Operational)")); // For Idle
+        assert!(states_array_str.contains("initial_child : Some (AgentStateId :: OperationalIdle)")); // For Operational
+
+        // Test generation of TRANSITIONS array (basic check)
+        let transitions_array_result = crate::code_generator::generate_transitions_array(
+            &builder,
+            &ids_info,
+            &ast.event_type,
+            &ast.context_type,
+        );
+        assert!(
+            transitions_array_result.is_ok(),
+            "generate_transitions_array failed: {:?}",
+            transitions_array_result.err()
+        );
+        let transitions_array_str = transitions_array_result.unwrap().to_string();
+        assert!(transitions_array_str.contains("from_state : AgentStateId :: OperationalIdle"));
+        assert!(transitions_array_str.contains("to_state : AgentStateId :: OperationalActive"));
+        assert!(transitions_array_str.contains("from_state : AgentStateId :: Operational"));
+        assert!(transitions_array_str.contains("to_state : AgentStateId :: Errored"));
+    }
+}

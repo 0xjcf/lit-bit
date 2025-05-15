@@ -13,16 +13,10 @@ REGION_ALIAS("REGION_BSS", RAM);
 REGION_ALIAS("REGION_HEAP", RAM);
 REGION_ALIAS("REGION_STACK", RAM);
 
-/* Define symbols needed by riscv-rt's linker script. 
-   These values are suitable for a single-core system with no pre-allocated heap. */
-_heap_size = 0K;
-_hart_stack_size = 8K; /* Stack per hart. Increased from 2K for safety. */
-_max_hart_id = 0;      /* Max hart ID, 0 for single-core. */
-
-/* _stack_start is typically calculated by the main linker script as:
-   _stack_start = ORIGIN(REGION_STACK) + LENGTH(REGION_STACK);
-   If REGION_STACK is RAM, it will be the top of RAM. Let's define it explicitly. */
-_stack_start = ORIGIN(RAM) + LENGTH(RAM);
-
-/* _stext (start of text) is also typically handled by the main linker script,
-   placing it at ORIGIN(REGION_TEXT). */
+/* Let riscv-rt's link.x provide defaults for:
+   _heap_size (defaults to 0 if not set, or based on REGION_HEAP)
+   _hart_stack_size (defaults to 2K)
+   _max_hart_id (defaults to 0 for single-core)
+   _stack_start (defaults to top of REGION_STACK)
+   based on the MEMORY regions defined above.
+*/

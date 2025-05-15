@@ -7,9 +7,11 @@
 # Specific flags for the RISC-V target
 [target.riscv32imac-unknown-none-elf]
 rustflags = [
-  "-C", "link-arg=-Tlink.x" # Use riscv-rt's link.x. It should INCLUDE memory.x from OUT_DIR (via build.rs link-search path).
+  "-C", "link-arg=-Tmemory_riscv_for_link.x",  # Our memory layout from OUT_DIR (via build.rs), processed first.
+  "-C", "link-arg=-Tlink.x",    # riscv-rt's main linker script, processed second, using definitions from memory.x.
+  "-C", "link-arg=-Map=riscv_traffic_light.map" # Generate a linker map file (alternative syntax)
 ]
-runner = "qemu-system-riscv32 -nographic -M virt -cpu rv32 -bios none -m 128M -chardev stdio,mux=on,id=char0 -serial chardev:char0 -mon chardev=char0,mode=readline -semihosting-config enable=on,target=native,chardev=char0 -D /tmp/qemu_litbit_debug.log -d unimp -kernel"
+runner = "qemu-system-riscv32 -nographic -M virt -cpu rv32 -bios none -m 128M -chardev stdio,mux=on,id=char0 -serial chardev:char0 -mon chardev:char0,mode=readline -semihosting-config enable=on,target=native,chardev=char0 -D /tmp/qemu_litbit_debug.log -d unimp -kernel"
 
 # Specific flags for the ARM Cortex-M target
 [target.thumbv7m-none-eabi]

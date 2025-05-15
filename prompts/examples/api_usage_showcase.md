@@ -55,24 +55,26 @@ pub enum AgentEvent {
 statechart! {
     name: Agent,
     context: AgentCtx,
-    initial: Idle,
+    initial: Operational,
 
-    state Idle {
-        on Activate [guard .can_start] => Active [action .start_up];
-        on ReportError => Errored [action .log_error("System fault from Idle")];
-        after 5s => Active [action .start_up]; // Example: auto-activate if idle for too long
-    }
+    state Operational {
+        initial: Idle,
 
-    state Active {
-        on Deactivate => Idle [action .shut_down];
-        on ReportError => Errored [action .log_error("Critical issue while Active")];
-        // Self-transition example
-        on Activate [guard .can_start] => Active [action .start_up]; // Re-activate, maybe refresh something
+        on ReportError => Errored [action .log_error("System fault during normal operation")];
+
+        state Idle {
+            on Activate [guard .can_start] => Active [action .start_up];
+            after 5s => Active [action .start_up];
+        }
+
+        state Active {
+            on Deactivate => Idle [action .shut_down];
+            on Activate [guard .can_start] => Active [action .start_up];
+        }
     }
 
     state Errored {
-        // Terminal-like state for this example; could have transitions out
-        on Deactivate => Idle; // Allow deactivation from error state
+        on Deactivate => Operational;
     }
 }
 
@@ -109,7 +111,7 @@ fn run_agent_lifecycle() {
 
     // Scenario 3: Event ignored in current state
     println!("\nSending Deactivate event again (while already Idle)...");
-    if agent_fsm.send(AgentEvent::Deactivate) { // Should be false if no transition for Deactivate in Idle
+    if agent_fsm.send(AgentEvent::Deactivate) {
         println!("Event processed. New state: {:?}", agent_fsm.state());
     } else {
         println!("Event correctly ignored. State remains: {:?}", agent_fsm.state());
@@ -118,7 +120,7 @@ fn run_agent_lifecycle() {
 
     // Scenario 4: Transition to Errored state
     println!("\nSending ReportError event...");
-    agent_fsm.send(AgentEvent::Activate); // Get back to Active for this test
+    agent_fsm.send(AgentEvent::Activate);
     println!("Current state before error: {:?}", agent_fsm.state());
 
     if agent_fsm.send(AgentEvent::ReportError) {
@@ -132,15 +134,14 @@ fn run_agent_lifecycle() {
 
     // Scenario 5: Guard prevents transition (try to activate 5 more times)
     println!("\nAttempting to exceed max activations...");
-    agent_fsm.send(AgentEvent::Deactivate); // Back to Idle
-    for i in 0..5 { // Already activated once or twice, so a few more should hit the guard
+    agent_fsm.send(AgentEvent::Deactivate);
+    for i in 0..5 {
         println!("Sending Activate event (attempt {})...", i + 2);
         let processed = agent_fsm.send(AgentEvent::Activate);
         if !processed && agent_fsm.matches(AgentState::Idle) {
             println!("Activation guard .can_start likely prevented transition (count: {}).", agent_fsm.context().activation_count);
             break;
         }
-        // Go back to Idle to try activating again
         if agent_fsm.matches(AgentState::Active) {
             agent_fsm.send(AgentEvent::Deactivate);
         }

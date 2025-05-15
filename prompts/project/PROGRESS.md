@@ -5,7 +5,43 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-15 · _Session End_
-*   _Author_: @Gemini (via @your_username)
+*   _Author_: @Gemini (via @0xjcf)
+*   _Phase_: 02-hierarchy-guards (Core Implementation & Testing)
+*   _Work_:
+    *   Added three new complex hierarchical transition tests to `lit-bit-core`:
+        *   `test_grandchild_to_grandparent_reentry`
+        *   `test_cousin_child_transition`
+        *   `test_cross_top_level_parent_transition`
+    *   All core tests (14) are passing, validating LCA and entry/exit logic for these new scenarios.
+    *   Reviewed open issues from `statig` project for proactive pitfall avoidance.
+    *   Generated a research prompt for deeper investigation into other state machine libraries.
+    *   Test coverage report generated: `lit-bit-core` at 92.64% lines, `lit-bit-macro` at 91.70% lines. Overall: 91.91% lines.
+*   _Next_: Continue with research prompt for other state machine libraries. Address any findings or proceed with Phase 02 checklist items.
+
+---
+
+## 2025-05-15 · _Session Start_
+*   _Author_: @Gemini (via @0xjcf)
+*   _Phase_: 02-hierarchy-guards (Core Implementation)
+*   _Work_:
+    *   Reviewed re-entry prompt and identified next steps for Phase 02.
+    *   Implemented initial hierarchical state handling in `lit-bit-core/src/core/mod.rs` (helpers, basic entry/dispatch).
+    *   Added `heapless` dependency and resolved clippy lints in `lit-bit-core`.
+    *   Designed and agreed on macro syntax for nested states: single `state` keyword, nested freely, `initial:` attribute for composite states.
+    *   Updated `prompts/examples/api_usage_showcase.md` to reflect the new macro syntax for hierarchical states.
+    *   Added a comprehensive test case (`parse_and_build_hierarchical_showcase_example`) to `lit-bit-macro`.
+    *   Confirmed via testing (`cargo test -p lit-bit-macro`) that the existing macro parser and intermediate tree builder in `lit-bit-macro` correctly handle the new hierarchical syntax.
+    *   Refactored `Runtime::send` in `lit-bit-core` with LCA-based entry/exit logic: 
+        *   Added helpers: `get_path_to_root`, `find_lca` (corrected ancestor logic), `execute_exit_actions_up_to_lca`, `execute_entry_actions_from_lca`, `enter_submachine_to_initial_leaf`.
+        *   Updated `Runtime::new` for correct deep initial state entry and `current_state_id` setting.
+    *   Added initial tests for hierarchical transitions (`hierarchical_machine_starts_in_correct_initial_leaf_with_entry_actions`, `test_sibling_transition_with_lca`, `test_child_to_parent_transition`, `test_parent_to_child_transition`) in `lit-bit-core`, all passing.
+    *   Set up `scripts/lint_app.sh` and updated `Justfile` for improved linting workflow.
+*   _Next_: Continue adding targeted tests for more complex hierarchical transition scenarios in `lit-bit-core` (e.g., grandparent transitions, cousin transitions, transitions to other top-level parents). Continue RISC-V linker research in parallel.
+
+---
+
+## 2025-05-15 · _Session End_
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 02-hierarchy-guards (Initial Runtime & Macro Refinement)
 *   _Work_:
     *   Resolved all linting issues in `lit-bit-macro` and `lit-bit-core`.

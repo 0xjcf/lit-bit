@@ -18,6 +18,7 @@ categories = ["embedded", "no-std", "algorithms"]
 [dependencies]
 # Core dependencies (keep minimal for no_std focus)
 # We might add `heapless` later if needed for no_std collections.
+heapless = "0.8" # Added for hierarchical path tracking in Runtime
 
 # Optional dependencies for features (generally std-related or host tools)
 anyhow = { version = "1.0", optional = true }
@@ -36,7 +37,7 @@ lit-bit-macro = { path = "../lit-bit-macro", version = "0.1.0" }
 
 # Target-specific dependencies for RISC-V
 [target.'cfg(target_arch = "riscv32")'.dependencies]
-riscv-rt = "0.14.0"
+riscv-rt = { version = "0.14.0", features = ["single-hart"] }
 riscv = "0.13.0"
 semihosting = { version = "0.1.20", features = ["stdio"] }
 

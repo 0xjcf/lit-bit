@@ -19,14 +19,13 @@ test-core:
 # Test the procedural macro crate
 test-macro:
   @echo "🔬 Testing procedural macro crate (lit-bit-macro)..."
-  # Ensure you are in the workspace root or cd to lit-bit-macro if needed
-  # cargo test -p lit-bit-macro should work from workspace root.
   @cargo test -p lit-bit-macro
 
-# Lint all workspace members
-lint:
-  @echo "Linting workspace..."
-  @cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -D warnings
+# --- Lint Tasks ---
+# Lint the entire workspace or a specific part (app parameter currently informational for workspace-wide script)
+# Usage: just lint [fix] OR just lint <app_name> [fix]
+lint app='workspace' fix='':
+  ./scripts/lint_app.sh {{app}} {{fix}}
 
 # Build all workspace members for release
 build:
