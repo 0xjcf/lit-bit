@@ -16,7 +16,7 @@ panic = "abort"
 [profile.release]
 lto = true
 codegen-units = 1
-strip = true
+strip = true 
 panic = "abort"
 
 #[profile.test]

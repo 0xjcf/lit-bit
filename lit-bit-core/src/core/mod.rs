@@ -119,15 +119,22 @@ where
     C: Clone + 'static,
 {
     /// Creates a new runtime instance for the given machine definition and initial context.
-    pub fn new(machine_def: MachineDefinition<S, E, C>, initial_context: C) -> Self {
-        // When a machine is created, we might want to fire entry actions
-        // for the initial state and its parents.
-        // This logic will be added in a later step (Task E.3 from design huddle).
-        // For now, just set the current state.
-        let initial_state = machine_def.initial_leaf_state; // Read initial_leaf_state before machine_def is moved
+    pub fn new(machine_def: MachineDefinition<S, E, C>, mut initial_context: C) -> Self {
+        let initial_state_id = machine_def.initial_leaf_state;
+
+        // Execute entry action for the initial state
+        if let Some(initial_state_node) =
+            machine_def.states.iter().find(|s| s.id == initial_state_id)
+        {
+            if let Some(entry_fn) = initial_state_node.entry_action {
+                entry_fn(&mut initial_context); // Call entry action
+            }
+        }
+        // TODO: Phase 2 - Hierarchy: Execute entry actions for parents of the initial state.
+
         Runtime {
-            machine_def,                     // machine_def is moved here
-            current_state_id: initial_state, // Use the value read before the move
+            machine_def,
+            current_state_id: initial_state_id,
             context: initial_context,
         }
     }
@@ -150,31 +157,55 @@ where
                 // Guard check
                 if let Some(guard_fn) = transition.guard {
                     if !guard_fn(&self.context, event) {
-                        continue;
+                        continue; // Guard failed, try next transition
                     }
                 }
 
-                // --- TODO: Phase 2 - Hierarchy & Guards ---
-                // 1. Call exit actions: from current_state_id up to the common ancestor
-                //    of current_state_id and transition.to_state.
-                //    (This requires finding the common ancestor and path traversal using self.machine_def.states)
+                let old_state_id = self.current_state_id;
+                let new_state_id = transition.to_state;
 
-                self.current_state_id = transition.to_state;
+                // 1. Call exit action for the current (old) state if it's different from the new state
+                if old_state_id != new_state_id {
+                    if let Some(old_state_node) = self
+                        .machine_def
+                        .states
+                        .iter()
+                        .find(|s| s.id == old_state_id)
+                    {
+                        if let Some(exit_fn) = old_state_node.exit_action {
+                            exit_fn(&mut self.context);
+                        }
+                    }
+                }
+                // TODO: Phase 2 - Hierarchy: Handle exit actions for parent states up to LCA.
 
-                // 2. Call transition action (if any)
-                if let Some(action) = transition.action {
-                    action(&mut self.context);
+                // Update current state
+                self.current_state_id = new_state_id;
+
+                // 2. Call transition action (if any) - this should always run, even for self-transitions
+                if let Some(action_fn) = transition.action {
+                    action_fn(&mut self.context);
                 }
 
-                // 3. Call entry actions: from the common ancestor (or just above it)
-                //    down to the new self.current_state_id (transition.to_state).
-                //    (This requires path traversal using self.machine_def.states)
+                // 3. Call entry action for the new state if it's different from the old state
+                if old_state_id != new_state_id {
+                    if let Some(new_state_node) = self
+                        .machine_def
+                        .states
+                        .iter()
+                        .find(|s| s.id == new_state_id)
+                    {
+                        if let Some(entry_fn) = new_state_node.entry_action {
+                            entry_fn(&mut self.context);
+                        }
+                    }
+                }
+                // TODO: Phase 2 - Hierarchy: Handle entry actions for parent states down from LCA.
 
-                // --- End TODO ---
-                return true;
+                return true; // Transition occurred
             }
         }
-        false
+        false // No matching transition found
     }
 }
 

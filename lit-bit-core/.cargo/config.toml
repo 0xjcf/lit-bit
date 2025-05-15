@@ -7,8 +7,7 @@
 # Specific flags for the RISC-V target
 [target.riscv32imac-unknown-none-elf]
 rustflags = [
-  "-C", "link-arg=-Tmemory_riscv_for_link.x", # build.rs copies to this name in OUT_DIR
-  "-C", "link-arg=-Tlink.x",                  # From riscv-rt, found via search path
+  "-C", "link-arg=-Tlink.x" # Use riscv-rt's link.x. It should INCLUDE memory.x from OUT_DIR (via build.rs link-search path).
 ]
 runner = "qemu-system-riscv32 -nographic -M virt -cpu rv32 -bios none -m 128M -chardev stdio,mux=on,id=char0 -serial chardev:char0 -mon chardev=char0,mode=readline -semihosting-config enable=on,target=native,chardev=char0 -D /tmp/qemu_litbit_debug.log -d unimp -kernel"
 

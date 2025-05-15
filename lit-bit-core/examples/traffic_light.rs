@@ -11,8 +11,7 @@ mod riscv_logic {
     use riscv_rt::entry;
     use semihosting::println;
 
-    use lit_bit_core::StateMachine;
-    use lit_bit_core::core::{ActionFn, MachineDefinition, Runtime, Transition};
+    use lit_bit_core::core::{ActionFn, MachineDefinition, Runtime, StateNode, Transition};
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     #[repr(u8)]
@@ -28,7 +27,8 @@ mod riscv_logic {
         TimerElapsed = 0,
     }
 
-    #[derive(Debug, Clone, Default, PartialEq, Eq)]
+    // Reinstate TrafficLightContext with cycle_count
+    #[derive(Debug, Clone, Default, PartialEq, Eq)] // Added Default for initialization
     struct TrafficLightContext {
         cycle_count: u32,
     }
@@ -78,6 +78,7 @@ mod riscv_logic {
         }
     }
 
+    // Define the transitions
     const TRAFFIC_LIGHT_TRANSITIONS: &[Transition<
         TrafficLightState,
         TrafficLightEvent,
@@ -106,11 +107,20 @@ mod riscv_logic {
         },
     ];
 
+    // Define the states (even if simple, the definition needs an array)
+    const TRAFFIC_LIGHT_STATENODES: &[StateNode<TrafficLightState, TrafficLightContext>] = &[];
+
+    // Create the machine definition
+    // This is what the `statechart!` macro would generate.
     const TRAFFIC_LIGHT_MACHINE_DEF: MachineDefinition<
         TrafficLightState,
         TrafficLightEvent,
         TrafficLightContext,
-    > = MachineDefinition::new(TrafficLightState::Red, TRAFFIC_LIGHT_TRANSITIONS);
+    > = MachineDefinition::new(
+        TRAFFIC_LIGHT_STATENODES, // Added states argument
+        TRAFFIC_LIGHT_TRANSITIONS,
+        TrafficLightState::Red, // Initial state
+    );
 
     #[entry]
     fn main_riscv_entry() -> ! {

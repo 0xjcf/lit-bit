@@ -10,27 +10,32 @@ mod cortex_m_logic {
     // If we want to see output during size check (optional, adds size)
     // use cortex_m_semihosting::{debug, hprintln};
 
-    use lit_bit_core::StateMachine;
-    use lit_bit_core::core::{DefaultContext, MachineDefinition, Runtime, Transition};
+    use lit_bit_core::core::{
+        // StateMachine, // This will be removed
+        DefaultContext,
+        MachineDefinition,
+        Runtime,
+        StateNode,
+        Transition,
+    };
 
-    // --- State Definitions (can be very simple for size check) ---
+    // Define states for the traffic light
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     enum LightState {
         Off,
         On,
     }
 
-    // --- Event Definitions ---
+    // Define events for the traffic light
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     enum LightEvent {
         Toggle,
     }
 
-    // --- Context Definition ---
-    type LightContext = DefaultContext; // Simplest context
+    // For this example, we'll use the DefaultContext since actions don't modify a specific context.
+    type BlinkyContext = DefaultContext;
 
-    // --- Machine Definition (Static) ---
-    const LIGHT_TRANSITIONS: &[Transition<LightState, LightEvent, LightContext>] = &[
+    const LIGHT_TRANSITIONS: &[Transition<LightState, LightEvent, BlinkyContext>] = &[
         Transition {
             from_state: LightState::Off,
             event: LightEvent::Toggle,
@@ -47,14 +52,22 @@ mod cortex_m_logic {
         },
     ];
 
-    static LIGHT_MACHINE_DEF: MachineDefinition<LightState, LightEvent, LightContext> =
-        MachineDefinition::new(LightState::Off, LIGHT_TRANSITIONS);
+    // Define the states (even if simple, the definition needs an array)
+    const LIGHT_STATENODES: &[StateNode<LightState, BlinkyContext>] = &[];
+
+    #[allow(dead_code)]
+    const BLINKY_MACHINE_DEF: MachineDefinition<LightState, LightEvent, BlinkyContext> =
+        MachineDefinition::new(
+            LIGHT_STATENODES, // Added states argument
+            LIGHT_TRANSITIONS,
+            LightState::Off, // Initial state
+        );
 
     #[entry]
     fn main_cortex_m_entry() -> ! {
         // Renamed to avoid conflict if main is defined outside
         let initial_context = DefaultContext::default();
-        let mut runtime = Runtime::new(LIGHT_MACHINE_DEF.clone(), initial_context);
+        let mut runtime = Runtime::new(BLINKY_MACHINE_DEF.clone(), initial_context);
 
         runtime.send(LightEvent::Toggle);
         runtime.send(LightEvent::Toggle);
