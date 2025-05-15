@@ -34,6 +34,7 @@
     6.3. [`diagram`](#63-diagram)
 7.  [Actor Model (Phase 4 Target)](#7-actor-model-phase-4-target)
 8.  [Future Considerations (Post v0.1)](#8-future-considerations-post-v01)
+9.  [Design Insights & Mitigation Strategies (2025-05 Research Audit)](#9-design-insights--mitigation-strategies-2025-05-research-audit)
 
 ---
 
@@ -533,3 +534,32 @@ _Ideas for v0.2 and beyond (e.g., statechart inspection API, advanced testing ut
 *   Event Payloads (Allowing events to carry data)
 *   More sophisticated Timer options (e.g., cron-like scheduling)
 *   SCXML Import/Export
+
+---
+
+## 9. Design Insights & Mitigation Strategies (2025-05 Research Audit)
+
+The following distilled lessons are drawn from an audit of Rust-native state-machine crates (e.g. `statig`, `rust-fsm`, `async_fsm`) and from prior art such as Boost.SML (C++) and XState (JavaScript).  They inform lit-bit's public API, CI policy, and roadmap.
+
+1. **Context Lifetimes & Ownership**
+   * Use flexible lifetime parameters or GATs so context borrowing does not over-constrain the API (addresses `statig` #19).
+   * Prefer *owned* event payloads to sidestep complex lifetime chains; allow borrowing as an optimisation, not a requirement.
+2. **Compile-Time & Binary-Size Budget**
+   * Macro expansion must scale *linearly* with the number of states/events.  CI runs a `bench_1000_states` crate and fails if compilation exceeds 30 s or binary size regresses >10 %.
+   * Expensive tooling (diagram export, tracing) is **feature-gated** so typical firmware builds stay lean.
+3. **Hierarchy Semantics**
+   * Every compound state **must** declare an `initial:` sub-state; the macro emits a compile-time error otherwise.
+   * Parent→child and child→parent transitions execute entry/exit actions exactly once; tests assert correct LCA behaviour.
+4. **Async & Timer Determinism**
+   * The Actor layer serialises event handling; a transition (incl. awaited actions) must finish **before** the next event dequeues.
+   * Timers are cancelled automatically on state exit via an internal `TimerHandle` abstraction.
+5. **Diagram Generation Accuracy**
+   * The `diagram` feature generates DOT/Mermaid directly from the transition table during compilation, eliminating stale docs.
+   * A CI check parses the emitted graph to ensure every defined state/transition appears exactly once.
+6. **Soundness & `unsafe` Policy**
+   * Core crates carry `#![deny(unsafe_code)]`.  Any unavoidable `unsafe` is isolated behind a feature flag (`unsafe_opt`) and documented.
+   * Fuzz and MIRI jobs run nightly to detect UB or double-drop scenarios across random event sequences.
+7. **Custom Lints & Clippy Pedantic**
+   * Development builds enable `clippy::pedantic`; additional lints flag duplicate state attributes, large enum variants, or reference-holding state structs.
+
+> These mitigations feed directly into the updated roadmap KPIs and CI steps (see `ROADMAP.md`).

@@ -14,7 +14,7 @@ fn main() {
         println!("cargo:rerun-if-changed={source_path}");
         if fs::metadata(source_path).is_ok() {
             let content = include_bytes!("memory_riscv_source.x");
-            fs::write(out_dir.join("memory_riscv_for_link.x"), content).unwrap();
+            fs::write(out_dir.join("memory.x"), content).unwrap();
         } else {
             panic!("Error: Source script {source_path} not found for target {target}");
         }

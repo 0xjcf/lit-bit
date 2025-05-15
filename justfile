@@ -55,7 +55,7 @@ kill-qemu:
 # Run the traffic_light example from lit-bit-core on RISC-V QEMU
 run-rv: kill-qemu
   @echo "Running traffic_light example (from lit-bit-core) on RISC-V QEMU..."
-  @cargo run -p lit-bit-core --example traffic_light --target riscv32imac-unknown-none-elf
+  @cargo run -p lit-bit-core --example traffic_light --target riscv32imac-unknown-none-elf --verbose
 
 # --- Code Quality & Analysis ---
 coverage: # Coverage might also need --workspace or to target specific packages

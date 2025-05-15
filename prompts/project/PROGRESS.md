@@ -6,7 +6,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ## 2025-05-15 · _Session End_
 *   _Author_: @Gemini (via @0xjcf)
-*   _Phase_: 02-hierarchy-guards (Core Implementation & Testing)
+*   _Phase_: 02-hierarchy-guards (Core Implementation, Testing & RISC-V Troubleshooting)
 *   _Work_:
     *   Added three new complex hierarchical transition tests to `lit-bit-core`:
         *   `test_grandchild_to_grandparent_reentry`
@@ -16,7 +16,16 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
     *   Reviewed open issues from `statig` project for proactive pitfall avoidance.
     *   Generated a research prompt for deeper investigation into other state machine libraries.
     *   Test coverage report generated: `lit-bit-core` at 92.64% lines, `lit-bit-macro` at 91.70% lines. Overall: 91.91% lines.
-*   _Next_: Continue with research prompt for other state machine libraries. Address any findings or proceed with Phase 02 checklist items.
+    *   Reviewed extensive user-provided research on RISC-V linker issues with `riscv-rt`.
+    *   Verified and aligned `lit-bit-core/.cargo/config.toml`, `lit-bit-core/build.rs`, and `lit-bit-core/memory_riscv_source.x` with research best practices and previous known fix (High-Five Huddle Recap).
+    *   Ensured `build.rs` copies `memory_riscv_source.x` to `$OUT_DIR/memory.x`.
+    *   Ensured `lit-bit-core/.cargo/config.toml` uses `rustflags = ["-C", "link-arg=-Tmemory.x", "-C", "link-arg=-Tlink.x", ...]` for RISC-V.
+    *   Despite these changes, the `just run-rv` command continues to fail with the same "undefined symbol" linker errors (e.g., `_stack_start`, `__sdata`), indicating `memory.x` is still not being effectively processed by the linker.
+    *   Attempted `cargo clean` and verbose builds, which did not resolve the RISC-V linker issue or provide further clues.
+    *   Diagnostic attempt to explicitly define `_stack_start` in `memory.x` also failed to resolve the symbol, confirming `memory.x` is likely not being processed for RISC-V builds.
+*   _Next_:
+    *   Continue with research prompt for other state machine libraries. Address any findings or proceed with Phase 02 checklist items.
+    *   Further investigation needed into why the RISC-V linker is not processing `memory.x` despite a configuration that appears correct. Potential areas: toolchain/environment issues, subtle linker version incompatibilities not covered, or interference from an unknown configuration source.
 
 ---
 

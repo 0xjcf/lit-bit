@@ -35,6 +35,7 @@ Thought for 9 seconds
 | Compile-time error clarity            | 90 % "unknown-state" mistakes explained in ≤3 lines |
 | Docs coverage                         | **≥ 95 %** rustdoc                                  |
 | CI matrix passes                      | Stable, beta, nightly; Linux, macOS, Windows        |
+| Compile-time performance (large SM)   | **≤ 30 s** to compile a 1 000-state benchmark on `x86_64-unknown-linux-gnu` (release) |
 
 ---
 
@@ -43,8 +44,10 @@ Thought for 9 seconds
 1. **Lock grammar first** (Phase 0): changes later are breaking.
 2. **Eat your own dog food:** convert a CMS agent to the macro after Phase 2; switch it to actor after Phase 4.
 3. **Automate benchmarks & size checks** in CI so regressions surface early.
-4. **Community outreach:** open discussions after Phase 5 to gather feedback before 0.1.
-5. **Keep embedded first-class**: every feature must compile under `#![no_std]` (CI job).
+4. **Track compile-time & binary-size budgets** with a dedicated `bench_1000_states` crate; fail CI if compile time >30 s or size increases >10 %.
+5. **Deny `unsafe` code by default** and run `clippy --all-targets --all-features -D warnings -D clippy::pedantic`.
+6. **Community outreach:** open discussions after Phase 5 to gather feedback before 0.1.
+7. **Keep embedded first-class**: every feature must compile under `#![no_std]` (CI job).
 
 Follow this phased roadmap and you'll land a **production-grade, XState-class Rust statechart library** that delights both embedded and backend developers—and positions you for a polished public launch.
 

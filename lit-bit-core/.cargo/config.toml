@@ -7,7 +7,7 @@
 # Specific flags for the RISC-V target
 [target.riscv32imac-unknown-none-elf]
 rustflags = [
-  "-C", "link-arg=-Tmemory_riscv_for_link.x",  # Our memory layout from OUT_DIR (via build.rs), processed first.
+  "-C", "link-arg=-Tmemory.x",  # Our memory layout from OUT_DIR (via build.rs), processed first.
   "-C", "link-arg=-Tlink.x",    # riscv-rt's main linker script, processed second, using definitions from memory.x.
   "-C", "link-arg=-Map=riscv_traffic_light.map" # Generate a linker map file (alternative syntax)
 ]

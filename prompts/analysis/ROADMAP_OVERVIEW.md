@@ -34,6 +34,7 @@ The purpose of this document is to give a concise, AI-consumable overview of the
 * Max RAM overhead ≤ **512 B** (single actor, N=8 queue)
 * Throughput (Tokio, release) ≥ **1 M events/s** single-thread
 * Compile-time error clarity: 90 % unknown-state mistakes explained in ≤ 3 lines
+* Compile-time performance: **≤ 30 s** to compile benchmark with 1 000 states/events on `x86_64` release
 * Docs coverage ≥ **95 %** rustdoc
 * CI matrix passes: stable, beta, nightly; Linux, macOS, Windows
 
