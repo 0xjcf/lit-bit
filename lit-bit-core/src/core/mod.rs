@@ -1162,4 +1162,194 @@ mod tests {
 
         assert_eq!(runtime.context().get_log(), &expected_log);
     }
+
+    // --- Tests for Multiple Guard Selection ---
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    enum MultiGuardTestState {
+        InitialState,
+        TargetStateOne,
+        TargetStateTwo,
+        TargetStateThree,
+    }
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    enum MultiGuardTestEvent {
+        TriggerEvent,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct MultiGuardContext {
+        selector_value: i32,
+        action_taken_for: Option<MultiGuardTestState>,
+    }
+
+    fn guard_for_target_one(context: &MultiGuardContext, _event: MultiGuardTestEvent) -> bool {
+        context.selector_value == 1
+    }
+    fn action_for_target_one(context: &mut MultiGuardContext) {
+        context.action_taken_for = Some(MultiGuardTestState::TargetStateOne);
+    }
+
+    fn guard_for_target_two(context: &MultiGuardContext, _event: MultiGuardTestEvent) -> bool {
+        context.selector_value == 2
+    }
+    fn action_for_target_two(context: &mut MultiGuardContext) {
+        context.action_taken_for = Some(MultiGuardTestState::TargetStateTwo);
+    }
+
+    fn guard_for_target_three(context: &MultiGuardContext, _event: MultiGuardTestEvent) -> bool {
+        context.selector_value == 3
+    }
+    fn action_for_target_three(context: &mut MultiGuardContext) {
+        context.action_taken_for = Some(MultiGuardTestState::TargetStateThree);
+    }
+
+    const MULTI_GUARD_STATENODES: &[StateNode<MultiGuardTestState, MultiGuardContext>] = &[
+        StateNode {
+            id: MultiGuardTestState::InitialState,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+        },
+        StateNode {
+            id: MultiGuardTestState::TargetStateOne,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+        },
+        StateNode {
+            id: MultiGuardTestState::TargetStateTwo,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+        },
+        StateNode {
+            id: MultiGuardTestState::TargetStateThree,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+        },
+    ];
+
+    const MULTI_GUARD_TRANSITIONS: &[Transition<
+        MultiGuardTestState,
+        MultiGuardTestEvent,
+        MultiGuardContext,
+    >] = &[
+        Transition {
+            from_state: MultiGuardTestState::InitialState,
+            event: MultiGuardTestEvent::TriggerEvent,
+            to_state: MultiGuardTestState::TargetStateOne,
+            action: Some(action_for_target_one),
+            guard: Some(guard_for_target_one),
+        },
+        Transition {
+            from_state: MultiGuardTestState::InitialState,
+            event: MultiGuardTestEvent::TriggerEvent,
+            to_state: MultiGuardTestState::TargetStateTwo,
+            action: Some(action_for_target_two),
+            guard: Some(guard_for_target_two),
+        },
+        Transition {
+            from_state: MultiGuardTestState::InitialState,
+            event: MultiGuardTestEvent::TriggerEvent,
+            to_state: MultiGuardTestState::TargetStateThree,
+            action: Some(action_for_target_three),
+            guard: Some(guard_for_target_three),
+        },
+    ];
+
+    #[test]
+    fn test_multiple_guards_selects_correct_transition() {
+        let machine_def = MachineDefinition::new(
+            MULTI_GUARD_STATENODES,
+            MULTI_GUARD_TRANSITIONS,
+            MultiGuardTestState::InitialState,
+        );
+
+        // Scenario 1: Guard for TargetStateOne passes
+        let mut runtime1 = Runtime::new(
+            machine_def.clone(),
+            MultiGuardContext {
+                selector_value: 1,
+                action_taken_for: None,
+            },
+        );
+        assert!(runtime1.send(MultiGuardTestEvent::TriggerEvent));
+        assert_eq!(runtime1.state(), MultiGuardTestState::TargetStateOne);
+        assert_eq!(
+            runtime1.context().action_taken_for,
+            Some(MultiGuardTestState::TargetStateOne)
+        );
+
+        // Scenario 2: Guard for TargetStateTwo passes
+        let mut runtime2 = Runtime::new(
+            machine_def.clone(),
+            MultiGuardContext {
+                selector_value: 2,
+                action_taken_for: None,
+            },
+        );
+        assert!(runtime2.send(MultiGuardTestEvent::TriggerEvent));
+        assert_eq!(runtime2.state(), MultiGuardTestState::TargetStateTwo);
+        assert_eq!(
+            runtime2.context().action_taken_for,
+            Some(MultiGuardTestState::TargetStateTwo)
+        );
+
+        // Scenario 3: Guard for TargetStateThree passes
+        let mut runtime3 = Runtime::new(
+            machine_def.clone(),
+            MultiGuardContext {
+                selector_value: 3,
+                action_taken_for: None,
+            },
+        );
+        assert!(runtime3.send(MultiGuardTestEvent::TriggerEvent));
+        assert_eq!(runtime3.state(), MultiGuardTestState::TargetStateThree);
+        assert_eq!(
+            runtime3.context().action_taken_for,
+            Some(MultiGuardTestState::TargetStateThree)
+        );
+
+        // Scenario 4: No guard passes
+        let mut runtime4 = Runtime::new(
+            machine_def.clone(),
+            MultiGuardContext {
+                selector_value: 4,
+                action_taken_for: None,
+            },
+        );
+        assert!(!runtime4.send(MultiGuardTestEvent::TriggerEvent));
+        assert_eq!(runtime4.state(), MultiGuardTestState::InitialState);
+        assert_eq!(runtime4.context().action_taken_for, None);
+
+        // Scenario 5: First matching guard (selector_value = 1) even if others would also pass
+        // This relies on the order of transitions in MULTI_GUARD_TRANSITIONS
+        // and the runtime iterating them in that order.
+        let mut runtime5 = Runtime::new(
+            machine_def.clone(),
+            MultiGuardContext {
+                selector_value: 1,
+                action_taken_for: None,
+            },
+        );
+        // (If guards could somehow make selector_value change to 2 mid-evaluation, this test would be more complex,
+        // but simple guards don't do that. Assuming guards are pure functions of context and event.)
+        assert!(runtime5.send(MultiGuardTestEvent::TriggerEvent));
+        assert_eq!(
+            runtime5.state(),
+            MultiGuardTestState::TargetStateOne,
+            "Expected TargetStateOne due to transition order"
+        );
+        assert_eq!(
+            runtime5.context().action_taken_for,
+            Some(MultiGuardTestState::TargetStateOne)
+        );
+    }
 }

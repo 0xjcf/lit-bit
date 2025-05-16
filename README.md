@@ -11,8 +11,6 @@ It aims to provide a similar developer experience to XState but within the Rust 
 *   Procedural macro (`statechart!`) for defining state machines is operational for flat structures.
 *   Hierarchical state machine logic is under active development.
 *   Examples for RISC-V (QEMU) and Cortex-M (QEMU/hardware) are available.
-*   See [`prompts/project/PROGRESS.md`](./prompts/project/PROGRESS.md) for detailed development log.
-*   See [`prompts/rules/statechart.md`](./prompts/rules/statechart.md) for development rules and roadmap.
 
 
 ## ✨ Features
@@ -87,8 +85,6 @@ just test-core
 
 Contributions are welcome! Please adhere to the project's development rules and conventions:
 
-*   **Development Rules & Roadmap:** [`prompts/rules/statechart.md`](./prompts/rules/statechart.md)
-*   **Progress Log:** [`prompts/project/PROGRESS.md`](./prompts/project/PROGRESS.md)
 *   **Code Style:** `rustfmt` (use default settings), Clippy for lints.
 *   **Commit Messages:** Conventional Commits style (`feat:`, `fix:`, etc.).
 

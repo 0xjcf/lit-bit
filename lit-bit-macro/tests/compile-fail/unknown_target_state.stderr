@@ -1,0 +1,5 @@
+error: Transition target state 'NonExistentState' (normalized from AST path: 'NonExistentState') not found or path is ambiguous.
+  --> tests/compile-fail/unknown_target_state.rs:19:18
+   |
+19 |         on Go => NonExistentState; // Error: NonExistentState is not defined
+   |                  ^^^^^^^^^^^^^^^^

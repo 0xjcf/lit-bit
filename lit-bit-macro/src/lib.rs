@@ -1,4 +1,3 @@
-// lit-bit-macro/src/lib.rs
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
