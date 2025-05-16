@@ -1,0 +1,26 @@
+# /Users/joseflores/Development/lit-bit/.cargo/config.toml
+# Workspace-level Cargo configuration
+
+[build]
+# Default target can be set here if desired, e.g.:
+# target = "riscv32imac-unknown-none-elf"
+
+# Specific flags for the RISC-V target
+[target.riscv32imac-unknown-none-elf]
+rustflags = [
+  "-C", "link-arg=-Tmemory.x",  # Memory layout script, processed first.
+  "-C", "link-arg=-Tlink.x",    # Default linker script from riscv-rt, processed after memory.x.
+  "-C", "link-arg=-Map=riscv_traffic_light.map" # Generate a linker map file.
+]
+runner = "qemu-system-riscv32 -nographic -M virt -cpu rv32 -bios none -m 128M -chardev stdio,mux=on,id=char0 -serial chardev:char0 -mon chardev=char0,mode=readline -semihosting-config enable=on,target=native,chardev=char0 -D /tmp/qemu_litbit_debug.log -d unimp -kernel"
+
+# Specific flags for the ARM Cortex-M target
+[target.thumbv7m-none-eabi]
+rustflags = [
+  # For ARM, build.rs typically copies memory_cortex_m_source.x to $OUT_DIR/memory.x
+  # The -Tlink.x (from cortex-m-rt) should find $OUT_DIR/memory.x via its INCLUDE directive.
+  "-C", "link-arg=-Tlink.x", 
+  "-C", "linker=rust-lld",
+]
+
+# Add other global or target-specific configurations here as needed. 

@@ -6,26 +6,14 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ## 2025-05-15 · _Session End_
 *   _Author_: @Gemini (via @0xjcf)
-*   _Phase_: 02-hierarchy-guards (Core Implementation, Testing & RISC-V Troubleshooting)
+*   _Phase_: 02-hierarchy-guards (RISC-V QEMU Runtime Fix & Documentation Planning)
 *   _Work_:
-    *   Added three new complex hierarchical transition tests to `lit-bit-core`:
-        *   `test_grandchild_to_grandparent_reentry`
-        *   `test_cousin_child_transition`
-        *   `test_cross_top_level_parent_transition`
-    *   All core tests (14) are passing, validating LCA and entry/exit logic for these new scenarios.
-    *   Reviewed open issues from `statig` project for proactive pitfall avoidance.
-    *   Generated a research prompt for deeper investigation into other state machine libraries.
-    *   Test coverage report generated: `lit-bit-core` at 92.64% lines, `lit-bit-macro` at 91.70% lines. Overall: 91.91% lines.
-    *   Reviewed extensive user-provided research on RISC-V linker issues with `riscv-rt`.
-    *   Verified and aligned `lit-bit-core/.cargo/config.toml`, `lit-bit-core/build.rs`, and `lit-bit-core/memory_riscv_source.x` with research best practices and previous known fix (High-Five Huddle Recap).
-    *   Ensured `build.rs` copies `memory_riscv_source.x` to `$OUT_DIR/memory.x`.
-    *   Ensured `lit-bit-core/.cargo/config.toml` uses `rustflags = ["-C", "link-arg=-Tmemory.x", "-C", "link-arg=-Tlink.x", ...]` for RISC-V.
-    *   Despite these changes, the `just run-rv` command continues to fail with the same "undefined symbol" linker errors (e.g., `_stack_start`, `__sdata`), indicating `memory.x` is still not being effectively processed by the linker.
-    *   Attempted `cargo clean` and verbose builds, which did not resolve the RISC-V linker issue or provide further clues.
-    *   Diagnostic attempt to explicitly define `_stack_start` in `memory.x` also failed to resolve the symbol, confirming `memory.x` is likely not being processed for RISC-V builds.
+    *   Successfully resolved the `just run-rv` QEMU execution error by correcting the `-mon chardev` argument in the workspace `/.cargo/config.toml` runner string (changed `chardev:char0` to `chardev=char0`).
+    *   The `traffic_light` example now compiles and runs correctly on the `riscv32imac-unknown-none-elf` target via QEMU, showing semihosting and UART output.
+    *   Consolidated Cargo configurations by moving target-specific `rustflags` and `runner` settings from `lit-bit-core/.cargo/config.toml` to the workspace root `/.cargo/config.toml`, ensuring correct linker script processing.
 *   _Next_:
-    *   Continue with research prompt for other state machine libraries. Address any findings or proceed with Phase 02 checklist items.
-    *   Further investigation needed into why the RISC-V linker is not processing `memory.x` despite a configuration that appears correct. Potential areas: toolchain/environment issues, subtle linker version incompatibilities not covered, or interference from an unknown configuration source.
+    *   Create an initial `README.md` for the `lit-bit` project.
+    *   Continue with research prompt for other state machine libraries and address Phase 02 checklist items.
 
 ---
 

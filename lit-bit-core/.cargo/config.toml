@@ -1,25 +1,22 @@
-# .cargo/config.toml
+# lit-bit-core/.cargo/config.toml
+# This file is intentionally kept minimal.
+# Target-specific rustflags and runner configurations that apply to the entire
+# workspace (including examples) have been moved to the workspace root:
+# /Users/joseflores/Development/lit-bit/.cargo/config.toml
+#
+# This ensures that Cargo correctly picks up these settings when building
+# examples or any crate from the workspace root, as per Cargo's configuration
+# resolution rules documented at:
+# https://doc.rust-lang.org/cargo/reference/config.html#hierarchical-structure
+#
+# If this crate ('lit-bit-core') had build-time configurations that are *truly*
+# specific only to its direct compilation and not meant for general target setup
+# (e.g., a crate-specific `--cfg` flag not related to the target architecture),
+# they could be placed here.
 
 [build]
-# Default target for `cargo build` (optional, but convenient for embedded projects)
-# target = "riscv32imac-unknown-none-elf"
+# Example of a truly crate-specific build setting (if ever needed):
+# rustflags = ["--cfg=lit_bit_core_specific_feature"]
 
-# Specific flags for the RISC-V target
-[target.riscv32imac-unknown-none-elf]
-rustflags = [
-  "-C", "link-arg=-Tmemory.x",  # Our memory layout from OUT_DIR (via build.rs), processed first.
-  "-C", "link-arg=-Tlink.x",    # riscv-rt's main linker script, processed second, using definitions from memory.x.
-  "-C", "link-arg=-Map=riscv_traffic_light.map" # Generate a linker map file (alternative syntax)
-]
-runner = "qemu-system-riscv32 -nographic -M virt -cpu rv32 -bios none -m 128M -chardev stdio,mux=on,id=char0 -serial chardev:char0 -mon chardev:char0,mode=readline -semihosting-config enable=on,target=native,chardev=char0 -D /tmp/qemu_litbit_debug.log -d unimp -kernel"
-
-# Specific flags for the ARM Cortex-M target
-[target.thumbv7m-none-eabi]
-rustflags = [
-  # build.rs copies memory_cortex_m_source.x to $OUT_DIR/memory.x
-  # This -Tlink.x will find $OUT_DIR/memory.x via its INCLUDE directive.
-  "-C", "link-arg=-Tlink.x", 
-  "-C", "linker=rust-lld",
-]
-
-# (Removed top-level runner as it's now target-specific) 
+# Previously defined target-specific sections for riscv32imac-unknown-none-elf
+# and thumbv7m-none-eabi have been moved to the workspace root config.
