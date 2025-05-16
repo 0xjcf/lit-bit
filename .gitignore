@@ -1,6 +1,5 @@
 # Standard Rust ignores
 /target/
-Cargo.lock
 
 # Environment files
 .env*
@@ -20,3 +19,4 @@ Cargo.lock
 *.dll
 prompts/
 *.map
+.cursor/
