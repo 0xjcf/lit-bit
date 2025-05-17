@@ -2,6 +2,20 @@
 
 Reverse-chronological log of daily coding sessions.  Keep entries **concise** and link to PRs / issues for full detail.
 
+## 2025-05-17 · _Session Start (Runtime & Test Refinements)_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Runtime Refinement)
+*   _Work_:
+    *   Fixed a runtime bug where simple leaf self-transitions would result in an empty active state set by ensuring the state is correctly processed through the entry execution path in `Runtime::send()`.
+    *   Addressed a comprehensive set of Clippy linter warnings and compilation errors across `lit-bit-core`, `lit-bit-macro`, and example files. This included fixes for `unreachable_code`, `manual_assert`, `uninlined_format_args`, const generic argument inference in examples, and `const fn` compatibility.
+    *   Corrected state definitions in the `traffic_light.rs` (RISC-V) example to resolve a runtime hang.
+    *   Refactored test assertions in `basic_machine_integration_test.rs` for clarity and correctness.
+*   _Next_:
+    *   Continue with outstanding high-priority items from the latest code review for `lit-bit-core/src/core/mod.rs`, particularly:
+        *   Refining the `retain` predicate for `next_active_leaf_states` in `Runtime::send()` to correctly handle parallel regions during composite self-transitions.
+        *   Implementing safeguards (cycle/capacity checks) in `collect_states_for_exit_post_order`.
+    *   Address major deferred refactoring tasks like optimizing child lookup for parallel states.
+
 ---
 
 ## 2025-05-17 · _Session End (Parallel Runtime Logic - Exit Implemented)_

@@ -13,6 +13,7 @@ mod cortex_m_logic {
     use lit_bit_core::core::{
         // StateMachine, // This will be removed
         DefaultContext,
+        MAX_ACTIVE_REGIONS,
         MachineDefinition,
         Runtime,
         StateNode,
@@ -63,11 +64,26 @@ mod cortex_m_logic {
             LightState::Off, // Initial state
         );
 
+    // Define M and MTMAR for the Runtime instantiation
+    // M_VAL: Represents the maximum expected hierarchy depth of any state path in this specific machine.
+    // For this simple blinky machine, depth is 1 (only top-level states).
+    // A value like 8 is a safe default if not precisely calculated for a flat machine.
+    const M_VAL: usize = 8;
+    // MAX_NODES_FOR_COMPUTATION (formerly MTMAR): Buffer for computations involving multiple hierarchy branches.
+    // Calculated as M_VAL * MAX_ACTIVE_REGIONS. For this machine, 8 * 4 = 32.
+    const MAX_NODES_FOR_COMPUTATION_VAL: usize = M_VAL * MAX_ACTIVE_REGIONS;
+
     #[entry]
     fn main_cortex_m_entry() -> ! {
         // Renamed to avoid conflict if main is defined outside
         let initial_context = DefaultContext::default();
-        let mut runtime = Runtime::new(BLINKY_MACHINE_DEF.clone(), initial_context);
+        let mut runtime: Runtime<
+            LightState,
+            LightEvent,
+            DefaultContext,
+            M_VAL,
+            MAX_NODES_FOR_COMPUTATION_VAL, // Use the renamed const
+        > = Runtime::new(BLINKY_MACHINE_DEF.clone(), initial_context);
 
         runtime.send(LightEvent::Toggle);
         runtime.send(LightEvent::Toggle);

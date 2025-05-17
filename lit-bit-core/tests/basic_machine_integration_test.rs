@@ -1,7 +1,7 @@
 // lit-bit-core/tests/basic_machine_integration_test.rs
 
 #[cfg(test)]
-mod basic_machine_integration_test {
+pub mod basic_machine_integration_test {
     use lit_bit_core::StateMachine;
     use lit_bit_macro::statechart;
     // heapless::Vec might be used by tests if they assert on machine.state()
@@ -67,7 +67,6 @@ mod basic_machine_integration_test {
             machine.context().entry_action_called,
             "State1 entry action should have been called on init"
         );
-        // ... other assertions ...
         machine.context_mut().entry_action_called = false;
         let transition_occurred_1 = machine.send(TestEvent::Increment);
         assert!(
@@ -75,13 +74,11 @@ mod basic_machine_integration_test {
             "Expected a transition for first Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        // ... other assertions ...
         machine.context_mut().exit_action_called = false;
         machine.context_mut().transition_action_called = false;
         let transition_occurred_reset = machine.send(TestEvent::Reset);
         assert!(transition_occurred_reset, "Expected a transition for Reset");
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        // ... other assertions ...
         machine.context_mut().entry_action_called = false;
         machine.context_mut().exit_action_called = false;
         let transition_occurred_inc2 = machine.send(TestEvent::Increment);
@@ -90,7 +87,6 @@ mod basic_machine_integration_test {
             "Expected a transition for second Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        // ... other assertions ...
         machine.context_mut().exit_action_called = false;
         machine.context_mut().transition_action_called = false;
         machine.context_mut().entry_action_called = false;
@@ -100,7 +96,6 @@ mod basic_machine_integration_test {
             "Expected a transition for second Reset"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        // ... other assertions ...
         machine.context_mut().entry_action_called = false;
         machine.context_mut().exit_action_called = false;
         let transition_occurred_blocked = machine.send(TestEvent::Increment);
@@ -109,7 +104,6 @@ mod basic_machine_integration_test {
             "Expected no transition for blocked Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        // ... other assertions ...
         assert_eq!(
             machine.context().count,
             2,
@@ -144,27 +138,24 @@ mod basic_machine_integration_test {
 // --- Test for Parallel Initial State Activation ---
 #[cfg(test)]
 mod parallel_initial_state_test {
+    use core::convert::TryFrom;
     use lit_bit_core::StateMachine;
     use lit_bit_macro::statechart;
     // Reuse TestEvent from the other module for simplicity as no events are sent.
-    use crate::basic_machine_integration_test::TestEvent;
+    use super::basic_machine_integration_test::TestEvent;
 
     #[derive(Debug, Default, Clone, PartialEq)]
     pub struct ParallelInitContext {
-        log: heapless::Vec<heapless::String<64>, 16>,
+        log: heapless::Vec<heapless::String<32>, 10>,
     }
 
     impl ParallelInitContext {
         fn record(&mut self, entry: &str) {
-            let mut s = heapless::String::new();
-            assert!(
-                s.push_str(entry).is_ok(),
-                "Failed to record log entry: {entry}"
-            );
-            assert!(
-                self.log.push(s).is_ok(),
-                "Log vec full, cannot record: {entry}"
-            );
+            let s = heapless::String::try_from(entry)
+                .expect("Failed to create heapless string for log entry");
+            self.log
+                .push(s)
+                .expect("Log vec full in ParallelInitContext");
         }
     }
 
@@ -189,32 +180,25 @@ mod parallel_initial_state_test {
         context: ParallelInitContext,
         event: TestEvent,
         initial: P,
-
         state P [parallel] {
             entry: entry_p;
-
             state R1 {
                 initial: R1A;
                 entry: entry_r1;
-                state R1A {
-                    entry: entry_r1a;
-                }
+                state R1A { entry: entry_r1a; /* on E_TOGGLE => R1B; */ }
+                state R1B { /* entry: entry_r1b; */ }
             }
-
             state R2 {
                 initial: R2X;
                 entry: entry_r2;
-                state R2X {
-                    entry: entry_r2x;
-                }
-                state R2Y {}
+                state R2X { entry: entry_r2x; /* on E_TOGGLE => R2Y; */ }
+                state R2Y { /* entry: entry_r2y; */ }
             }
         }
         state Other {}
     }
 
     #[test]
-    #[allow(clippy::similar_names)]
     fn test_initial_parallel_state_activation() {
         let machine = ParallelInitialMachine::new(ParallelInitContext::default());
 
@@ -223,69 +207,34 @@ mod parallel_initial_state_test {
         assert_eq!(
             active_states.len(),
             2,
-            "Should have two active leaf states. Got: {active_states:?}"
-        );
-        let is_r1a_active = active_states
-            .iter()
-            .any(|s| *s == ParallelInitialMachineStateId::PR1R1A);
-        let is_r2x_active = active_states
-            .iter()
-            .any(|s| *s == ParallelInitialMachineStateId::PR2R2X);
-        assert!(
-            is_r1a_active,
-            "Active state PR1R1A missing. Active: {active_states:?}"
-        );
-        assert!(
-            is_r2x_active,
-            "Active state PR2R2X missing. Active: {active_states:?}"
+            "Should have two active leaf states. Got len: {} expected: 2. Full active states: {:?}",
+            active_states.len(),
+            active_states
         );
 
+        // Use from_str_path for assertions
+        let expected_state_in_region1 = ParallelInitialMachineStateId::from_str_path("P_R1_R1A")
+            .expect("State P_R1_R1A not found via from_str_path");
+        let expected_state_in_region2 = ParallelInitialMachineStateId::from_str_path("P_R2_R2X")
+            .expect("State P_R2_R2X not found via from_str_path");
+
+        assert!(
+            active_states.contains(&expected_state_in_region1),
+            "Active state P_R1_R1A missing. Active: {active_states:?}"
+        );
+        assert!(
+            active_states.contains(&expected_state_in_region2),
+            "Active state P_R2_R2X missing. Active: {active_states:?}"
+        );
+
+        // Keep original log assertions but assert the whole sequence
         let log = machine.context().log.as_slice();
-        assert_eq!(
-            log.len(),
-            5,
-            "Incorrect number of entry actions logged. Log: {log:?}"
-        );
-        assert_eq!(
-            log[0].as_str(),
-            "EnterP",
-            "First log should be EnterP. Log: {log:?}"
-        );
+        let actual_log_strs: Vec<&str> = log.iter().map(heapless::String::as_str).collect();
 
-        let expected_entries = ["EnterP", "EnterR1", "EnterR1A", "EnterR2", "EnterR2X"];
-        for entry_val in expected_entries {
-            assert!(
-                log.iter().any(|s| s.as_str() == entry_val),
-                "Missing log entry: {entry_val}. Log: {log:?}"
-            );
-        }
-
-        let pos = |entry_val: &str| log.iter().position(|s| s.as_str() == entry_val);
-        if let (Some(p_idx), Some(r1_idx), Some(r1a_idx), Some(r2_idx), Some(r2x_idx)) = (
-            pos("EnterP"),
-            pos("EnterR1"),
-            pos("EnterR1A"),
-            pos("EnterR2"),
-            pos("EnterR2X"),
-        ) {
-            assert!(
-                p_idx < r1_idx,
-                "P entry (idx {p_idx}) should be before R1 entry (idx {r1_idx}). Log: {log:?}"
-            );
-            assert!(
-                p_idx < r2_idx,
-                "P entry (idx {p_idx}) should be before R2 entry (idx {r2_idx}). Log: {log:?}"
-            );
-            assert!(
-                r1_idx < r1a_idx,
-                "R1 entry (idx {r1_idx}) should be before R1A entry (idx {r1a_idx}). Log: {log:?}"
-            );
-            assert!(
-                r2_idx < r2x_idx,
-                "R2 entry (idx {r2_idx}) should be before R2X entry (idx {r2x_idx}). Log: {log:?}"
-            );
-        } else {
-            panic!("One or more expected log entries for order checking are missing. Log: {log:?}");
-        }
+        let expected_log_sequence = vec!["EnterP", "EnterR1", "EnterR1A", "EnterR2", "EnterR2X"];
+        assert_eq!(
+            actual_log_strs, expected_log_sequence,
+            "Full log sequence mismatch."
+        );
     }
 }

@@ -11,7 +11,9 @@ mod riscv_logic {
     use riscv_rt::entry;
     use semihosting::println;
 
-    use lit_bit_core::core::{ActionFn, MachineDefinition, Runtime, StateNode, Transition};
+    use lit_bit_core::core::{
+        ActionFn, MAX_ACTIVE_REGIONS, MachineDefinition, Runtime, StateNode, Transition,
+    };
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     #[repr(u8)]
@@ -70,14 +72,6 @@ mod riscv_logic {
         context.cycle_count += 1;
     }
 
-    fn transition_to_red_action(context: &mut TrafficLightContext) {
-        log_red(context);
-        increment_cycle(context);
-        unsafe {
-            uart_print_str("U: Cycle to RED action done.\n");
-        }
-    }
-
     // Define the transitions
     const TRAFFIC_LIGHT_TRANSITIONS: &[Transition<
         TrafficLightState,
@@ -88,27 +82,52 @@ mod riscv_logic {
             from_state: TrafficLightState::Red,
             event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Green,
-            action: Some(log_green as ActionFn<TrafficLightContext>),
+            action: None,
             guard: None,
         },
         Transition {
             from_state: TrafficLightState::Green,
             event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Yellow,
-            action: Some(log_yellow as ActionFn<TrafficLightContext>),
+            action: None,
             guard: None,
         },
         Transition {
             from_state: TrafficLightState::Yellow,
             event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Red,
-            action: Some(transition_to_red_action as ActionFn<TrafficLightContext>),
+            action: Some(increment_cycle as ActionFn<TrafficLightContext>),
             guard: None,
         },
     ];
 
-    // Define the states (even if simple, the definition needs an array)
-    const TRAFFIC_LIGHT_STATENODES: &[StateNode<TrafficLightState, TrafficLightContext>] = &[];
+    // Define the states
+    const TRAFFIC_LIGHT_STATENODES: &[StateNode<TrafficLightState, TrafficLightContext>] = &[
+        StateNode {
+            id: TrafficLightState::Red,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(log_red as ActionFn<TrafficLightContext>),
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TrafficLightState::Green,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(log_green as ActionFn<TrafficLightContext>),
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TrafficLightState::Yellow,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(log_yellow as ActionFn<TrafficLightContext>),
+            exit_action: None,
+            is_parallel: false,
+        },
+    ];
 
     // Create the machine definition
     // This is what the `statechart!` macro would generate.
@@ -122,6 +141,10 @@ mod riscv_logic {
         TrafficLightState::Red, // Initial state
     );
 
+    // Define M and MTMAR for the Runtime instantiation
+    const M_VAL: usize = 8; // Max hierarchy depth
+    const MTMAR_VAL: usize = M_VAL * MAX_ACTIVE_REGIONS; // M * MAX_ACTIVE_REGIONS (e.g. 8 * 4 = 32)
+
     #[entry]
     fn main_riscv_entry() -> ! {
         unsafe {
@@ -134,7 +157,14 @@ mod riscv_logic {
         }
 
         let initial_context = TrafficLightContext { cycle_count: 0 };
-        let mut runtime = Runtime::new(TRAFFIC_LIGHT_MACHINE_DEF.clone(), initial_context);
+        // Provide the const generic arguments for Runtime
+        let mut runtime: Runtime<
+            TrafficLightState,
+            TrafficLightEvent,
+            TrafficLightContext,
+            M_VAL,
+            MTMAR_VAL,
+        > = Runtime::new(TRAFFIC_LIGHT_MACHINE_DEF.clone(), initial_context);
 
         unsafe {
             uart_print_str("UART: SM created.\n");

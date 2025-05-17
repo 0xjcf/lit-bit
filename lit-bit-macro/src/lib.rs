@@ -52,7 +52,10 @@ impl Parse for StateAttributesInputAst {
             content.parse_terminated(StateAttributeAst::parse, Token![,])?;
 
         if attributes.is_empty() {
-            return Err(syn::Error::new(bracket_token.span.join(), "State attribute list cannot be empty if brackets are present. Expected at least one attribute like '[parallel]'."));
+            return Err(syn::Error::new(
+                bracket_token.span.join(), // Reverted to .join() as DelimSpan::join() returns Span
+                "State attribute list cannot be empty if brackets are present. Expected at least one attribute like '[parallel]'.",
+            ));
         }
 
         Ok(StateAttributesInputAst {
@@ -185,10 +188,10 @@ impl Parse for StateDeclarationAst {
             } else if content_in_braces.peek(keywords::exit) {
                 body_items.push(StateBodyItemAst::ExitHook(content_in_braces.parse()?));
             } else if content_in_braces.peek(keywords::on) {
-                // When creating StateBodyItemAst::Transition, wrap the parsed TransitionDefinitionAst in a Box
-                body_items.push(StateBodyItemAst::Transition(Box::new(
-                    content_in_braces.parse()?,
-                )));
+                // Removed Box wrapping for TransitionDefinitionAst
+                body_items.push(StateBodyItemAst::Transition(
+                    content_in_braces.parse()?, // Parse directly
+                ));
             } else if content_in_braces.peek(keywords::state) {
                 body_items.push(StateBodyItemAst::NestedState(Box::new(
                     content_in_braces.parse()?,
@@ -235,10 +238,11 @@ impl Parse for DefaultChildDeclarationAst {
 
 #[derive(Debug)]
 #[allow(dead_code)]
+#[allow(clippy::large_enum_variant)] // Proactively adding, can be removed if not triggered
 enum StateBodyItemAst {
     EntryHook(LifecycleHookAst),
     ExitHook(LifecycleHookAst),
-    Transition(Box<TransitionDefinitionAst>), // Boxed this variant
+    Transition(TransitionDefinitionAst), // Removed Box<> // Already was Boxed, so this line is fine to be changed
     NestedState(Box<StateDeclarationAst>),
 }
 
@@ -770,6 +774,9 @@ pub(crate) mod intermediate_tree {
             let mut exit_handler_opt: Option<&'ast Expr> = None; // Changed from Path
             let mut transitions_for_this_state: Vec<TmpTransition<'ast>> = Vec::new();
 
+            // Initialize a HashSet to track local names of direct children of *this* state.
+            let mut children_sibling_names: HashSet<String> = HashSet::new();
+
             for item in &state_decl_ast.body_items {
                 match item {
                     crate::StateBodyItemAst::EntryHook(hook_ast) => {
@@ -801,7 +808,7 @@ pub(crate) mod intermediate_tree {
                             nested_state_decl_ast,
                             Some(&full_path_name),
                             depth + 1,
-                            &mut HashSet::new(),
+                            &mut children_sibling_names, // Pass the shared set for direct children
                         )?;
                         children_indices_for_this_state.push(child_idx);
                     }
@@ -856,10 +863,8 @@ pub(crate) mod code_generator {
     #[derive(Debug)]
     pub(crate) struct GeneratedStateIds {
         pub enum_definition_tokens: TokenStream,
-        #[allow(dead_code)]
         pub state_id_enum_name: Ident,
-        #[allow(dead_code)]
-        pub full_path_to_variant_ident: HashMap<String, Ident>,
+        pub full_path_to_variant_ident: HashMap<String, Ident>, // Make this accessible
     }
 
     pub(crate) fn generate_state_id_logic(
@@ -870,29 +875,54 @@ pub(crate) mod code_generator {
         let state_id_enum_name = format_ident!("{}", enum_name_str);
 
         let mut full_path_to_variant_map = HashMap::new();
+        let mut variants_code: Vec<Ident> = Vec::new(); // Ensure it's Vec<Ident>
 
-        let variants_code: Vec<Ident> = builder
-            .all_states
-            .iter()
-            .map(|tmp_state| {
-                let variant_ident = to_pascal_case(&tmp_state.full_path_name);
-                full_path_to_variant_map
-                    .insert(tmp_state.full_path_name.clone(), variant_ident.clone());
-                variant_ident
-            })
-            .collect();
+        // Sort TmpState by full_path_name to ensure consistent enum variant order for generated code
+        // This is important for derive(PartialOrd, Ord) if ever added, and for deterministic output.
+        let mut sorted_states: Vec<_> = builder.all_states.iter().collect();
+        sorted_states.sort_by_key(|s| &s.full_path_name);
+
+        for tmp_state in sorted_states {
+            let variant_ident = to_pascal_case(&tmp_state.full_path_name);
+            full_path_to_variant_map
+                .insert(tmp_state.full_path_name.clone(), variant_ident.clone());
+            variants_code.push(variant_ident);
+        }
+
+        let mut match_arms = Vec::new();
+        // Iterate over the same sorted full_path_names that determined variant order to build match arms
+        // This ensures the string literals in `from_str_path` correspond to the variants.
+        // We need to re-iterate based on a sorted list of keys from full_path_to_variant_map or re-use sorted_states approach.
+        let mut sorted_map_entries: Vec<_> = full_path_to_variant_map.iter().collect();
+        sorted_map_entries.sort_by_key(|(k, _v)| *k); // Sort by the string path
+
+        for (path_str, variant_ident) in sorted_map_entries {
+            match_arms.push(quote! {
+                #path_str => Some(Self::#variant_ident),
+            });
+        }
 
         let enum_definition_tokens = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
             pub enum #state_id_enum_name {
                 #(#variants_code),*
             }
+
+            impl #state_id_enum_name {
+                // Reverted from const fn due to E0015: cannot match on `str` in constant functions
+                pub fn from_str_path(path_str: &str) -> Option<Self> {
+                    match path_str {
+                        #(#match_arms)*
+                        _ => None,
+                    }
+                }
+            }
         };
 
         GeneratedStateIds {
             enum_definition_tokens,
             state_id_enum_name,
-            full_path_to_variant_ident: full_path_to_variant_map,
+            full_path_to_variant_ident: full_path_to_variant_map, // Return the map
         }
     }
 
@@ -1136,12 +1166,22 @@ pub(crate) mod code_generator {
         context_type_path: &syn::Path,
         machine_definition_const_ident: &Ident,
     ) -> TokenStream {
-        let max_active_regions_literal = proc_macro2::Literal::usize_unsuffixed(4);
+        let m_val = proc_macro2::Literal::usize_unsuffixed(8);
+        // MAX_NODES_FOR_COMPUTATION = M * MAX_ACTIVE_REGIONS.
+        // lit_bit_core::core::MAX_ACTIVE_REGIONS is fixed at 4.
+        // Compute this value at macro expansion time.
+        let max_nodes_for_computation_val = proc_macro2::Literal::usize_unsuffixed(8 * 4); // M * 4
 
         let machine_struct_ts = quote! {
             #[derive(Debug)]
             pub struct #machine_name {
-                runtime: lit_bit_core::core::Runtime<#state_id_enum_name, #event_type_path, #context_type_path>,
+                runtime: lit_bit_core::core::Runtime<
+                    #state_id_enum_name,
+                    #event_type_path,
+                    #context_type_path,
+                    #m_val,
+                    #max_nodes_for_computation_val // Use the computed literal directly
+                >,
             }
             impl #machine_name {
                 pub fn new(context: #context_type_path) -> Self {
@@ -1150,7 +1190,7 @@ pub(crate) mod code_generator {
                     }
                 }
             }
-            // Ensure this impl block correctly implements the StateMachine trait from lit_bit_core (not lit_bit_core::core)
+            // Ensure this impl block correctly implements the StateMachine trait from lit_bit_core
             impl lit_bit_core::StateMachine for #machine_name {
                 type State = #state_id_enum_name;
                 type Event = #event_type_path;
@@ -1158,9 +1198,8 @@ pub(crate) mod code_generator {
                 fn send(&mut self, event: Self::Event) -> bool {
                     self.runtime.send(event)
                 }
-                // Corrected signature for state() method
-                fn state(&self) -> heapless::Vec<Self::State, #max_active_regions_literal> {
-                    self.runtime.state() // This assumes runtime.state() also returns the Vec
+                fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::core::MAX_ACTIVE_REGIONS}> {
+                    self.runtime.state()
                 }
                 fn context(&self) -> &Self::Context {
                     self.runtime.context()
@@ -1248,7 +1287,8 @@ pub fn statechart(input: TokenStream) -> TokenStream {
     let state_id_enum_ts = generated_ids_info.enum_definition_tokens;
 
     let core_types_definitions = quote! {
-        use lit_bit_core::core::{StateMachine, Runtime, StateNode, Transition, ActionFn, GuardFn};
+        // Runtime is used directly. StateMachine trait is at lit_bit_core::StateMachine.
+        use lit_bit_core::core::{/* StateMachine, -- Removed */ Runtime, StateNode, Transition, ActionFn, GuardFn, MAX_ACTIVE_REGIONS};
     };
 
     let final_code = quote! {
@@ -1981,17 +2021,30 @@ mod tests {
         let machine_name_ident = &ast.name;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
 
+        // Expected output now includes the impl block for from_str_path
         let expected_enum_str = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
             pub enum TestSimpleStateId {
                 S1,
                 S2
             }
+
+            impl TestSimpleStateId {
+                pub fn from_str_path(path_str: &str) -> Option<Self> {
+                    match path_str {
+                        "S1" => Some(Self::S1),
+                        "S2" => Some(Self::S2),
+                        _ => None,
+                    }
+                }
+            }
         }
         .to_string();
+        // Normalize whitespace for comparison, as quote! formatting can vary slightly
+        let normalize = |s: String| s.split_whitespace().collect::<Vec<&str>>().join(" ");
         assert_eq!(
-            ids_info.enum_definition_tokens.to_string(),
-            expected_enum_str
+            normalize(ids_info.enum_definition_tokens.to_string()),
+            normalize(expected_enum_str)
         );
         assert_eq!(ids_info.state_id_enum_name.to_string(), "TestSimpleStateId");
         assert_eq!(
@@ -2013,11 +2066,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Allow for this test due to extensive DSL and expected output string
     fn generate_nested_state_id_enum_updated() {
         let dsl = concat!(
             "name: TestNested, \n",
             "context: Ctx, \n",
-            "event: Ev,\n", // Assuming Ev is a valid Type for event_type
+            "event: Ev,\n",
             "initial: P1, \n",
             "state P1 { \n",
             "    initial: C1; \n",
@@ -2030,13 +2084,15 @@ mod tests {
             "} \n",
             "state P2 {}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed for nested state_id_enum test "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed for nested state_id_enum test ");
         let mut builder = TmpStateTreeBuilder::new();
         builder
             .build_from_ast(&ast)
-            .expect("Builder failed for nested state_id_enum test "); // Added space
+            .expect("Builder failed for nested state_id_enum test ");
         let machine_name_ident = &ast.name;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
+
+        // Expected output now includes the impl block for from_str_path
         let expected_enum_str = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
             pub enum TestNestedStateId {
@@ -2047,11 +2103,27 @@ mod tests {
                 P1C2,
                 P2
             }
+
+            impl TestNestedStateId {
+                pub fn from_str_path(path_str: &str) -> Option<Self> {
+                    match path_str {
+                        "P1" => Some(Self::P1),
+                        "P1_C1" => Some(Self::P1C1),
+                        "P1_C1_GC1" => Some(Self::P1C1GC1),
+                        "P1_C1_GC2" => Some(Self::P1C1GC2),
+                        "P1_C2" => Some(Self::P1C2),
+                        "P2" => Some(Self::P2),
+                        _ => None,
+                    }
+                }
+            }
         }
         .to_string();
+        // Normalize whitespace for comparison
+        let normalize = |s: String| s.split_whitespace().collect::<Vec<&str>>().join(" ");
         assert_eq!(
-            ids_info.enum_definition_tokens.to_string(),
-            expected_enum_str
+            normalize(ids_info.enum_definition_tokens.to_string()),
+            normalize(expected_enum_str)
         );
         assert_eq!(ids_info.state_id_enum_name.to_string(), "TestNestedStateId");
         assert_eq!(
