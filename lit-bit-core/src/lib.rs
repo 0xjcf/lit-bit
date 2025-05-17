@@ -42,7 +42,7 @@ pub trait StateMachine {
     type Context;
 
     fn send(&mut self, event: Self::Event) -> bool;
-    fn state(&self) -> Self::State;
+    fn state(&self) -> heapless::Vec<Self::State, 4>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;
 }

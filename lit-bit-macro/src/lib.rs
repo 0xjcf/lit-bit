@@ -18,6 +18,48 @@ mod keywords {
     syn::custom_keyword!(exit);
     syn::custom_keyword!(action);
     syn::custom_keyword!(guard);
+    syn::custom_keyword!(parallel); // New
+}
+
+// Define attribute structures BEFORE StateDeclarationAst
+#[derive(Debug, Clone, PartialEq)]
+enum StateAttributeAst {
+    Parallel(keywords::parallel),
+}
+
+impl Parse for StateAttributeAst {
+    fn parse(input: ParseStream) -> Result<Self> {
+        if input.peek(keywords::parallel) {
+            Ok(StateAttributeAst::Parallel(input.parse()?))
+        } else {
+            Err(input.error("Expected 'parallel' attribute within state attribute brackets"))
+        }
+    }
+}
+
+#[derive(Debug)]
+struct StateAttributesInputAst {
+    #[allow(dead_code)]
+    bracket_token: syn::token::Bracket,
+    attributes: syn::punctuated::Punctuated<StateAttributeAst, Token![,]>,
+}
+
+impl Parse for StateAttributesInputAst {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let content;
+        let bracket_token = bracketed!(content in input);
+        let attributes: syn::punctuated::Punctuated<StateAttributeAst, Token![,]> =
+            content.parse_terminated(StateAttributeAst::parse, Token![,])?;
+
+        if attributes.is_empty() {
+            return Err(syn::Error::new(bracket_token.span.join(), "State attribute list cannot be empty if brackets are present. Expected at least one attribute like '[parallel]'."));
+        }
+
+        Ok(StateAttributesInputAst {
+            bracket_token,
+            attributes,
+        })
+    }
 }
 
 // Overall structure for the statechart! macro input
@@ -109,6 +151,7 @@ impl Parse for StateChartInputAst {
 struct StateDeclarationAst {
     state_keyword_token: keywords::state,
     name: Ident,
+    attributes: Option<StateAttributesInputAst>, // New field
     brace_token: syn::token::Brace,
     default_child_declaration: Option<DefaultChildDeclarationAst>,
     body_items: Vec<StateBodyItemAst>,
@@ -118,6 +161,12 @@ impl Parse for StateDeclarationAst {
     fn parse(input: ParseStream) -> Result<Self> {
         let state_keyword_token: keywords::state = input.parse()?;
         let name: Ident = input.parse()?;
+
+        let attributes: Option<StateAttributesInputAst> = if input.peek(syn::token::Bracket) {
+            Some(input.parse()?)
+        } else {
+            None
+        };
 
         let content_in_braces;
         let brace_token = braced!(content_in_braces in input);
@@ -149,6 +198,7 @@ impl Parse for StateDeclarationAst {
         Ok(StateDeclarationAst {
             state_keyword_token,
             name,
+            attributes, // Added
             brace_token,
             default_child_declaration,
             body_items,
@@ -389,6 +439,7 @@ pub(crate) mod intermediate_tree {
         pub entry_handler: Option<&'ast Expr>, // Changed from Path
         pub exit_handler: Option<&'ast Expr>,  // Changed from Path
         pub transitions: Vec<TmpTransition<'ast>>,
+        pub is_parallel: bool, // New field
         pub state_keyword_span: Span,
         pub name_span: Span,
         pub declared_initial_child_expression: Option<&'ast Path>,
@@ -454,7 +505,7 @@ pub(crate) mod intermediate_tree {
 
         fn resolve_and_validate_initial_children(&mut self) -> SynResult<()> {
             for i in 0..self.all_states.len() {
-                let parent_state_full_path = self.all_states[i].full_path_name.clone();
+                let parent_state_full_path = self.all_states[i].full_path_name.clone(); // Keep for existing error messages if needed
                 let parent_has_children = !self.all_states[i].children_indices.is_empty();
                 let declared_initial_expr_opt =
                     self.all_states[i].declared_initial_child_expression;
@@ -462,43 +513,87 @@ pub(crate) mod intermediate_tree {
                 let initial_decl_span = declared_initial_expr_opt
                     .map_or_else(|| self.all_states[i].name_span, Spanned::span);
 
-                if parent_has_children && declared_initial_expr_opt.is_none() {
-                    return Err(SynError::new(self.all_states[i].name_span,
-                        format!("Composite state '{parent_state_full_path}' must declare an 'initial' child state.")));
-                } else if !parent_has_children && declared_initial_expr_opt.is_some() {
-                    return Err(SynError::new(initial_decl_span,
-                        format!("State '{parent_state_full_path}' declares an 'initial' child but has no nested states defined.")));
-                }
+                let current_state = &self.all_states[i]; // More direct access
 
-                if let Some(initial_path) = declared_initial_expr_opt {
-                    let initial_child_local_ident = Self::extract_ident_from_path(initial_path)
-                        .ok_or_else(|| SynError::new(initial_path.span(),
-                            "'initial' state target must be a simple identifier (name of a direct child state)."))?;
-
-                    let initial_child_local_name = initial_child_local_ident.to_string();
-                    let expected_child_full_path =
-                        format!("{parent_state_full_path}_{initial_child_local_name}");
-
-                    let mut found_child_idx: Option<usize> = None;
-                    for &child_idx_in_all_states in &self.all_states[i].children_indices {
-                        if self.all_states[child_idx_in_all_states].full_path_name
-                            == expected_child_full_path
-                            && self.all_states[child_idx_in_all_states].local_name
-                                == initial_child_local_ident
-                        {
-                            found_child_idx = Some(child_idx_in_all_states);
-                            break;
-                        }
+                if current_state.is_parallel {
+                    // Validation 1: Parallel state must have at least two children (regions)
+                    if current_state.children_indices.len() < 2 {
+                        return Err(SynError::new(
+                            current_state.name_span,
+                            format!(
+                                "Parallel state '{}' must have at least two child regions.",
+                                current_state.full_path_name
+                            ),
+                        ));
                     }
 
-                    match found_child_idx {
-                        Some(idx) => {
-                            self.all_states[i].initial_child_idx = Some(idx);
+                    // Validation 2: Parallel state should not have an 'initial:' declaration itself
+                    if current_state.declared_initial_child_expression.is_some() {
+                        // Use the span of the 'initial:' declaration for the error
+                        let error_span = current_state
+                            .declared_initial_child_expression
+                            .unwrap()
+                            .span();
+                        return Err(SynError::new(error_span,
+                            format!("Parallel state '{}' must not declare an 'initial' child for itself. Initial states are defined within its regions.", current_state.full_path_name)));
+                    }
+
+                    // Validation 3: Each direct child (region) of a parallel state, if compound, must declare an initial state.
+                    for &child_idx in &current_state.children_indices {
+                        let region_state = &self.all_states[child_idx];
+                        let region_is_compound_by_having_children =
+                            !region_state.children_indices.is_empty();
+                        // A region is compound if it HAS children. Its own initial_child_idx being Some also indicates it was declared compound.
+                        if region_is_compound_by_having_children
+                            && region_state.declared_initial_child_expression.is_none()
+                        {
+                            return Err(SynError::new(region_state.name_span,
+                                format!("Region '{}' within parallel state '{}' is a compound state and must declare an 'initial' child.", region_state.full_path_name, current_state.full_path_name)));
                         }
-                        None => {
-                            // Corrected: Use initial_path.span() and ensure only one return Err.
-                            return Err(SynError::new(initial_path.span(),
-                                format!("Initial state target '{initial_child_local_name}' for state '{parent_state_full_path}' is not a defined direct child state.")));
+                    }
+                } else {
+                    // Not parallel: existing logic for compound states
+                    if parent_has_children && declared_initial_expr_opt.is_none() {
+                        return Err(SynError::new(
+                            self.all_states[i].name_span,
+                            format!(
+                                "Compound state '{parent_state_full_path}' must declare an 'initial' child state."
+                            ),
+                        ));
+                    } else if !parent_has_children && declared_initial_expr_opt.is_some() {
+                        return Err(SynError::new(initial_decl_span,
+                            format!("State '{parent_state_full_path}' declares an 'initial' child but has no nested states defined.")));
+                    }
+
+                    if let Some(initial_path) = declared_initial_expr_opt {
+                        let initial_child_local_ident = Self::extract_ident_from_path(initial_path)
+                            .ok_or_else(|| SynError::new(initial_path.span(),
+                                "'initial' state target must be a simple identifier (name of a direct child state)."))?;
+
+                        let initial_child_local_name = initial_child_local_ident.to_string();
+                        let expected_child_full_path =
+                            format!("{parent_state_full_path}_{initial_child_local_name}");
+
+                        let mut found_child_idx: Option<usize> = None;
+                        for &child_idx_in_all_states in &self.all_states[i].children_indices {
+                            if self.all_states[child_idx_in_all_states].full_path_name
+                                == expected_child_full_path
+                                && self.all_states[child_idx_in_all_states].local_name
+                                    == initial_child_local_ident
+                            {
+                                found_child_idx = Some(child_idx_in_all_states);
+                                break;
+                            }
+                        }
+
+                        match found_child_idx {
+                            Some(idx) => {
+                                self.all_states[i].initial_child_idx = Some(idx);
+                            }
+                            None => {
+                                return Err(SynError::new(initial_path.span(),
+                                    format!("Initial child '{initial_child_local_name}' declared for state '{parent_state_full_path}' is not defined as a direct child of this state.")));
+                            }
                         }
                     }
                 }
@@ -599,6 +694,7 @@ pub(crate) mod intermediate_tree {
             Ok(())
         }
 
+        #[allow(clippy::too_many_lines)]
         fn process_state_declaration(
             &mut self,
             state_decl_ast: &'ast crate::StateDeclarationAst,
@@ -611,7 +707,7 @@ pub(crate) mod intermediate_tree {
             if !sibling_local_names.insert(local_name_str.clone()) {
                 return Err(SynError::new(
                     state_decl_ast.name.span(),
-                    format!("Duplicate state name '{local_name_str}' under the same parent."),
+                    format!("Duplicate state name '{local_name_str}' at this level."),
                 ));
             }
 
@@ -620,31 +716,50 @@ pub(crate) mod intermediate_tree {
                 None => local_name_str.clone(),
             };
 
-            if !self.defined_full_paths.insert(full_path_name.clone()) {
-                return Err(SynError::new(state_decl_ast.name.span(), format!("Duplicate fully qualified state name generated: {full_path_name}. Ensure unique state names, possibly due to nesting.")));
+            if self.defined_full_paths.contains(&full_path_name) {
+                return Err(SynError::new(
+                    state_decl_ast.name.span(),
+                    format!("State full path '{full_path_name}' is not unique. This can happen with duplicate top-level names or identically named nested states under the same hierarchy."),
+                ));
+            }
+            self.defined_full_paths.insert(full_path_name.clone());
+
+            let mut is_parallel_flag = false;
+            if let Some(attrs_input) = &state_decl_ast.attributes {
+                for attr in &attrs_input.attributes {
+                    match attr {
+                        crate::StateAttributeAst::Parallel(_) => {
+                            // Fully qualified path
+                            if is_parallel_flag {
+                                // Optionally error or warn on duplicate [parallel, parallel]
+                                // For now, just allow it, effect is idempotent.
+                            }
+                            is_parallel_flag = true;
+                        }
+                    }
+                }
             }
 
-            let current_state_idx = self.all_states.len();
-            let declared_initial_expr = state_decl_ast
-                .default_child_declaration
-                .as_ref()
-                .map(|decl| &decl.child_state_expression);
-
-            let tmp_state_placeholder = TmpState {
+            let current_node_index = self.all_states.len();
+            let new_state_node = TmpState {
                 local_name: &state_decl_ast.name,
                 full_path_name: full_path_name.clone(),
                 parent_full_path_name: current_parent_full_path.map(String::from),
                 depth,
                 children_indices: Vec::new(),
-                initial_child_idx: None,
-                entry_handler: None,
-                exit_handler: None,
-                transitions: Vec::new(),
-                state_keyword_span: state_decl_ast.state_keyword_token.span,
+                initial_child_idx: None, // Will be resolved in a later pass
+                entry_handler: None,     // Placeholder
+                exit_handler: None,      // Placeholder
+                transitions: Vec::new(), // Placeholder
+                is_parallel: is_parallel_flag, // Set based on parsed attributes
+                state_keyword_span: state_decl_ast.state_keyword_token.span(),
                 name_span: state_decl_ast.name.span(),
-                declared_initial_child_expression: declared_initial_expr,
+                declared_initial_child_expression: state_decl_ast
+                    .default_child_declaration
+                    .as_ref()
+                    .map(|dcd| &dcd.child_state_expression),
             };
-            self.all_states.push(tmp_state_placeholder);
+            self.all_states.push(new_state_node);
 
             let mut children_indices_for_this_state = Vec::new();
             // Correct types for local handler options
@@ -688,7 +803,7 @@ pub(crate) mod intermediate_tree {
                 }
             }
 
-            if let Some(state_to_update) = self.all_states.get_mut(current_state_idx) {
+            if let Some(state_to_update) = self.all_states.get_mut(current_node_index) {
                 state_to_update.children_indices = children_indices_for_this_state;
                 state_to_update.entry_handler = entry_handler_opt;
                 state_to_update.exit_handler = exit_handler_opt;
@@ -699,7 +814,7 @@ pub(crate) mod intermediate_tree {
                     "Internal error: Failed to find placeholder state for update",
                 ));
             }
-            Ok(current_state_idx)
+            Ok(current_node_index)
         }
     }
 }
@@ -780,11 +895,12 @@ pub(crate) mod code_generator {
     pub(crate) fn generate_states_array<'ast>(
         builder: &'ast TmpStateTreeBuilder<'ast>,
         generated_ids: &GeneratedStateIds,
-        context_type_path: &'ast syn::Path, // Changed from context_type_ast: &'ast syn::Type
+        context_type_path: &'ast syn::Path,
     ) -> SynResult<TokenStream> {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         let mut state_node_initializers = Vec::new();
         for tmp_state in &builder.all_states {
+            // ... existing id, parent_id, initial_child_id, entry_action, exit_action expressions ...
             let current_state_id_variant = generated_ids
                 .full_path_to_variant_ident
                 .get(&tmp_state.full_path_name)
@@ -822,11 +938,13 @@ pub(crate) mod code_generator {
             let entry_action_expr = tmp_state.entry_handler.map_or_else(
                 || quote! { None },
                 |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path>) },
-            ); // p_expr is &Expr
+            );
             let exit_action_expr = tmp_state.exit_handler.map_or_else(
                 || quote! { None },
                 |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path>) },
-            ); // p_expr is &Expr
+            );
+
+            let is_parallel_literal = tmp_state.is_parallel; // This is already a bool
 
             state_node_initializers.push(quote! {
                 StateNode {
@@ -835,6 +953,7 @@ pub(crate) mod code_generator {
                     initial_child: #initial_child_id_expr,
                     entry_action: #entry_action_expr,
                     exit_action: #exit_action_expr,
+                    is_parallel: #is_parallel_literal, // Added field
                 }
             });
         }
@@ -1008,10 +1127,12 @@ pub(crate) mod code_generator {
     pub(crate) fn generate_machine_struct_and_impl(
         machine_name: &Ident,
         state_id_enum_name: &Ident,
-        event_type_path: &syn::Path,   // Changed
-        context_type_path: &syn::Path, // Changed
+        event_type_path: &syn::Path,
+        context_type_path: &syn::Path,
         machine_definition_const_ident: &Ident,
     ) -> TokenStream {
+        let max_active_regions_literal = proc_macro2::Literal::usize_unsuffixed(4);
+
         let machine_struct_ts = quote! {
             #[derive(Debug)]
             pub struct #machine_name {
@@ -1024,15 +1145,17 @@ pub(crate) mod code_generator {
                     }
                 }
             }
-            impl lit_bit_core::core::StateMachine for #machine_name {
+            // Ensure this impl block correctly implements the StateMachine trait from lit_bit_core (not lit_bit_core::core)
+            impl lit_bit_core::StateMachine for #machine_name {
                 type State = #state_id_enum_name;
                 type Event = #event_type_path;
                 type Context = #context_type_path;
                 fn send(&mut self, event: Self::Event) -> bool {
                     self.runtime.send(event)
                 }
-                fn state(&self) -> Self::State {
-                    self.runtime.state()
+                // Corrected signature for state() method
+                fn state(&self) -> heapless::Vec<Self::State, #max_active_regions_literal> {
+                    self.runtime.state() // This assumes runtime.state() also returns the Vec
                 }
                 fn context(&self) -> &Self::Context {
                     self.runtime.context()
@@ -1747,9 +1870,12 @@ mod tests {
             "Expected error for missing initial declaration"
         );
         if let Err(e) = build_result {
-            assert!(e
-                .to_string()
-                .contains("Composite state 'S1' must declare an 'initial' child state."));
+            // Exact match for the format string part, variable part will differ
+            let expected_message = format!(
+                "Compound state '{}' must declare an 'initial' child state.",
+                "S1"
+            );
+            assert_eq!(e.to_string(), expected_message, "Error message mismatch");
         }
     }
 
@@ -1801,9 +1927,10 @@ mod tests {
             "Expected error for initial target not being a direct child"
         );
         if let Err(e) = build_result {
-            assert!(e.to_string().contains(
-                "Initial state target 'S2_A' for state 'S1' is not a defined direct child state."
-            ));
+            let error_string = e.to_string();
+            let expected_message = format!("Initial child '{}' declared for state '{}' is not defined as a direct child of this state.", "S2_A", "S1");
+            // Trim both strings to remove potential leading/trailing whitespace differences
+            assert_eq!(error_string.trim(), expected_message.trim(), "Error message mismatch. Actual trimmed: [{actual}], Expected trimmed: [{expected}]", actual = error_string.trim(), expected = expected_message.trim());
         }
     }
 
@@ -1975,7 +2102,6 @@ mod tests {
     // Tests for STATES Array Generation (re-adding with updated DSL)
     #[test]
     fn generate_states_array_simple_no_actions() {
-        // ... (DSL string with event: Ev,) ...
         let dsl = concat!(
             "name: TestMachine, ",
             "context: Ctx, ",
@@ -1984,15 +2110,15 @@ mod tests {
             "state S1 {}",
             "state S2 {}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed "); // Added space
+        builder.build_from_ast(&ast).expect("Builder failed ");
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
         let states_array_tokens =
             crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
-                .expect("generate_states_array failed "); // Added space
+                .expect("generate_states_array failed ");
         let expected_states_array_str = quote! {
             const STATES: &[StateNode<TestMachineStateId, Ctx>] = &[
                 StateNode {
@@ -2001,6 +2127,7 @@ mod tests {
                     initial_child: None,
                     entry_action: None,
                     exit_action: None,
+                    is_parallel: false, // Added
                 },
                 StateNode {
                     id: TestMachineStateId::S2,
@@ -2008,6 +2135,7 @@ mod tests {
                     initial_child: None,
                     entry_action: None,
                     exit_action: None,
+                    is_parallel: false, // Added
                 }
             ];
         }
@@ -2021,7 +2149,6 @@ mod tests {
 
     #[test]
     fn generate_states_array_with_hierarchy_and_initial() {
-        // ... (DSL string with event: AppEvent,) ...
         let dsl = concat!(
             "name: HierarchicalMachine, ",
             "context: AppContext, ",
@@ -2034,15 +2161,15 @@ mod tests {
             "    state ChildB {}",
             "}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed "); // Added space
+        builder.build_from_ast(&ast).expect("Builder failed ");
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
         let states_array_tokens =
             crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
-                .expect("generate_states_array failed "); // Added space
+                .expect("generate_states_array failed ");
         let expected_states_array_str = quote! {
             const STATES: &[StateNode<HierarchicalMachineStateId, AppContext>] = &[
                 StateNode {
@@ -2051,6 +2178,7 @@ mod tests {
                     initial_child: Some(HierarchicalMachineStateId::ParentChildA),
                     entry_action: Some(self.on_enter_parent as ActionFn<AppContext>),
                     exit_action: None,
+                    is_parallel: false, // Added
                 },
                 StateNode {
                     id: HierarchicalMachineStateId::ParentChildA,
@@ -2058,6 +2186,7 @@ mod tests {
                     initial_child: None,
                     entry_action: Some(self.on_enter_child_a as ActionFn<AppContext>),
                     exit_action: None,
+                    is_parallel: false, // Added
                 },
                 StateNode {
                     id: HierarchicalMachineStateId::ParentChildB,
@@ -2065,6 +2194,7 @@ mod tests {
                     initial_child: None,
                     entry_action: None,
                     exit_action: None,
+                    is_parallel: false, // Added
                 }
             ];
         }
@@ -2586,5 +2716,108 @@ mod tests {
         assert!(transitions_array_str.contains("to_state : AgentStateId :: OperationalActive"));
         assert!(transitions_array_str.contains("from_state : AgentStateId :: Operational"));
         assert!(transitions_array_str.contains("to_state : AgentStateId :: Errored"));
+    }
+
+    #[test]
+    fn parse_state_with_parallel_attribute() {
+        let input_dsl = r"
+            state MyState [parallel] {
+                initial: A;
+                state A {}
+            }
+        "; // Removed #
+        let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let state_decl = result.unwrap();
+        assert_eq!(state_decl.name.to_string(), "MyState");
+        assert!(state_decl.attributes.is_some(), "Attributes should be Some");
+        let attrs_input = state_decl.attributes.unwrap();
+        assert_eq!(attrs_input.attributes.len(), 1);
+        let parsed_attr = attrs_input.attributes.first().unwrap(); // Removed second unwrap
+        match parsed_attr {
+            StateAttributeAst::Parallel(_) => { /* Correct */ }
+        }
+        assert!(state_decl.default_child_declaration.is_some());
+    }
+
+    #[test]
+    fn parse_state_with_parallel_attribute_trailing_comma() {
+        let input_dsl = r"
+            state MyState [parallel,] {
+                initial: A;
+                state A {}
+            }
+        ";
+        let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
+        assert!(
+            result.is_ok(),
+            "Failed to parse with trailing comma: {:?}",
+            result.err()
+        );
+        let state_decl = result.unwrap();
+        assert!(state_decl.attributes.is_some());
+        let attributes_input_ast = state_decl.attributes.unwrap(); // Extended lifetime
+        assert_eq!(attributes_input_ast.attributes.len(), 1);
+        let parsed_attr = attributes_input_ast.attributes.first().unwrap(); // Corrected
+        match parsed_attr {
+            StateAttributeAst::Parallel(_) => { /* Correct */ }
+        }
+    }
+
+    #[test]
+    fn parse_state_without_attributes() {
+        let input_dsl = r"
+            state MyState {
+                initial: A;
+                state A {}
+            }
+        "; // Removed #
+        let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let state_decl = result.unwrap();
+        assert_eq!(state_decl.name.to_string(), "MyState");
+        assert!(state_decl.attributes.is_none(), "Attributes should be None");
+    }
+
+    #[test]
+    fn parse_state_with_empty_attributes_should_error() {
+        let input_dsl = r"
+            state MyState [] { // Empty brackets
+                initial: A;
+                state A {}
+            }
+        ";
+        let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
+        assert!(
+            result.is_err(),
+            "Parsing empty attribute brackets should now error due to StateAttributesInputAst validation"
+        );
+        if let Err(e) = result {
+            // Check for the new error message
+            assert!(
+                e.to_string()
+                    .contains("State attribute list cannot be empty if brackets are present"),
+                "Error message mismatch for empty attributes: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_state_with_unknown_attribute_should_error() {
+        let input_dsl = r"
+            state MyState [foo] { // Unknown attribute
+                initial: A;
+                state A {}
+            }
+        ";
+        let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
+        assert!(result.is_err(), "Parsing unknown attribute should error");
+        if let Err(e) = result {
+            assert!(
+                e.to_string()
+                    .contains("Expected 'parallel' attribute within state attribute brackets"),
+                "Error message mismatch: {e}" // Inlined e
+            );
+        }
     }
 }

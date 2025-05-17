@@ -12,7 +12,7 @@
 #[cfg(test)]
 mod basic_machine_integration_test {
     // Ensure StateMachine trait is in scope for calling its methods on TestMachine
-    use lit_bit_core::core::StateMachine;
+    use lit_bit_core::StateMachine;
     use lit_bit_macro::statechart; // Keep for test assertions if needed.
 
     // 1. Define Context and Event types (now inside this module)
@@ -76,7 +76,8 @@ mod basic_machine_integration_test {
     fn test_basic_state_machine_transitions_and_actions() {
         let mut machine = TestMachine::new(TestContext::default());
 
-        assert_eq!(machine.state(), TestMachineStateId::State1);
+        // Assuming non-parallel state, the Vec will contain one item.
+        assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         assert!(
             machine.context().entry_action_called,
             "State1 entry action should have been called on init"
@@ -92,7 +93,7 @@ mod basic_machine_integration_test {
             transition_occurred_1,
             "Expected a transition for first Increment"
         );
-        assert_eq!(machine.state(), TestMachineStateId::State2);
+        assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
         assert!(machine.context().exit_action_called);
         assert!(machine.context().transition_action_called);
         assert_eq!(machine.context().count, 1);
@@ -102,7 +103,7 @@ mod basic_machine_integration_test {
 
         let transition_occurred_reset = machine.send(TestEvent::Reset);
         assert!(transition_occurred_reset, "Expected a transition for Reset");
-        assert_eq!(machine.state(), TestMachineStateId::State1);
+        assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         assert!(machine.context().entry_action_called);
         machine.context_mut().entry_action_called = false;
         machine.context_mut().exit_action_called = false;
@@ -112,7 +113,7 @@ mod basic_machine_integration_test {
             transition_occurred_inc2,
             "Expected a transition for second Increment"
         );
-        assert_eq!(machine.state(), TestMachineStateId::State2);
+        assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
         assert_eq!(machine.context().count, 2);
         assert!(machine.context().exit_action_called);
         assert!(machine.context().transition_action_called);
@@ -127,7 +128,7 @@ mod basic_machine_integration_test {
             transition_occurred_reset_2,
             "Expected a transition for second Reset"
         );
-        assert_eq!(machine.state(), TestMachineStateId::State1);
+        assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         assert!(
             machine.context().entry_action_called,
             "Entry action for State1 should be called on Reset"
@@ -141,7 +142,7 @@ mod basic_machine_integration_test {
             !transition_occurred_blocked,
             "Expected no transition for blocked Increment"
         );
-        assert_eq!(machine.state(), TestMachineStateId::State1); // Should remain in State1
+        assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         assert!(
             !machine.context().exit_action_called,
             "Exit action for State1 should not be called if transition is blocked"
@@ -164,7 +165,7 @@ mod basic_machine_integration_test {
             transition_occurred_decrement,
             "Expected a transition for Decrement"
         );
-        assert_eq!(machine.state(), TestMachineStateId::State1); // Stays in State1 as per definition
+        assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         assert!(!machine.context().entry_action_called); // No entry for State1 if already in State1 and re-entering (unless specific re-entry action defined)
         assert!(!machine.context().exit_action_called); // No exit from State1 if target is State1
     }

@@ -4,6 +4,38 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ---
 
+## 2025-05-17 · _Session End (Planned Next: Parallel Runtime Logic)_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (P0 Tasks Complete, P1 Structs Done)
+*   _Work_:
+    *   Fixed all linter errors in `lit-bit-macro` and `lit-bit-core`.
+    *   Completed all P0 tasks for Parallel States (Macro Syntax, Parsing, Semantic Analysis & Validation, including tests and `Spec.md` updates). (Tasks 1.1-1.4, 2.1-2.3 from `prompts/decomposition/03_parallel_states_tasks.md`)
+    *   Updated `StateNode` in `lit-bit-core` to include `is_parallel: bool`.
+    *   Updated `Runtime` in `lit-bit-core` to use `active_leaf_states: heapless::Vec` for managing multiple active states.
+    *   Updated `StateMachine` trait (in `lit-bit-core/src/lib.rs`) and macro-generated code for `fn state()` to return `heapless::Vec`.
+    *   Updated integration tests to correctly assert `machine.state().as_slice()`.
+*   _Next_:
+    *   Begin core runtime implementation for parallel states in `lit-bit-core/src/core/mod.rs`:
+        *   Refactor `Runtime::send()` to handle event dispatch to multiple active regions in a parallel state (Task 3.2).
+        *   Implement correct entry/exit logic for parallel states and their regions (Tasks 3.3, 3.4).
+        *   Update `Runtime::new()` to handle initial activation of parallel states (Task 3.5).
+
+---
+
+## 2025-05-17 · _Session Start_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Begin Implementation)
+*   _Work_:
+    *   Completed re-entry process, initiating Phase 03 planning.
+    *   Created `prompts/phases/03-parallel-states/03_checklist.md`.
+    *   Created `prompts/decomposition/03_parallel_states_tasks.md`.
+    *   Confirmed alignment of Phase 03 plan with `Spec.md` and `ROADMAP.md`, clarifying that the `[parallel]` attribute syntax from `Spec.md` is to be used for parallel states.
+*   _Next_:
+    *   Confirm and document usage of the `[parallel]` attribute for parallel states as defined in `Spec.md` (Task 1.1 from `03_parallel_states_tasks.md`).
+    *   Update `StateAttributes` in `lit-bit-macro/src/parser/ast.rs` to include a representation for the `[parallel]` attribute (Task 1.2 from `03_parallel_states_tasks.md`).
+
+---
+
 ## 2025-05-16 · _Session End_
 *   _Author_: @0xjcf (with @Gemini)
 *   _Phase_: 02-hierarchy-guards (Phase Complete!)

@@ -311,7 +311,7 @@ _Region activation/deactivation, event processing in parallel regions. Defined u
 Parallel states allow a state machine to be in multiple orthogonal (independent) child states simultaneously. This is useful for modeling components that operate concurrently.
 
 1.  **Definition**: A state is declared as parallel by adding the `[parallel]` attribute to its definition: `state MyParallelState [parallel] { ... }`.
-2.  **Regions**: A parallel state contains two or more child state definitions, often referred to as **regions**. Unlike compound states which have only one active child state at a time, a parallel state has *all* of its direct child regions active concurrently. Each region is itself a standard state (atomic or compound) with its own initial state, transitions, etc.
+2.  **Regions**: A parallel state must contain **two or more** direct child state definitions (effectively, regions). These regions are active concurrently. If a state is marked `[parallel]`, it cannot be an atomic state; it must define these regions. Unlike compound states which have only one active child state at a time, a parallel state has *all* of its direct child regions active concurrently. Each region is itself a standard state (atomic or compound) with its own initial state (if compound), transitions, etc.
     *   Example:
         ```rust
         state Parent [parallel] {
