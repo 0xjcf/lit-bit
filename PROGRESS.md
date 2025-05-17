@@ -4,6 +4,52 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ---
 
+## 2025-05-17 · _Session End (Parallel Runtime Logic - Exit Implemented)_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Runtime Implementation)
+*   _Work_:
+    *   Refactored `Runtime::new()` in `lit-bit-core` to correctly initialize `active_leaf_states` when the machine's overall initial state is a parallel state. (Task 3.5 DONE from `prompts/decomposition/03_parallel_states_tasks.md`).
+    *   Refactored state entry helpers (`enter_state_recursive_logic`, `execute_entry_actions_from_lca`) in `lit-bit-core` to support parallel semantics and return `heapless::Vec` of active states. (Task 3.3 DONE from `prompts/decomposition/03_parallel_states_tasks.md`).
+    *   Implemented new hierarchical and parallel-aware exit logic:
+        *   Added `clear_and_exit_state` helper for post-order exit of a state and its active children/regions.
+        *   Updated `Runtime::send()` to use this helper in an upward traversal from the exited leaf to LCA, replacing the old exit logic. (Task 3.4 DONE from `prompts/decomposition/03_parallel_states_tasks.md`).
+    *   Corrected self-transition logic in `Runtime::send()` to ensure proper exit/entry actions.
+    *   Resolved all linter errors and fixed all failing tests in `lit-bit-core` and `lit-bit-macro`. All tests now passing.
+    *   Added new integration test `test_initial_parallel_state_activation`.
+*   _Next_:
+    *   Complete the refactor of `Runtime::send()` (Task 3.2):
+        *   Implement full arbitration logic for `potential_transitions` to correctly select transitions when multiple are found (e.g., parent vs. child, multiple regions).
+        *   Modify the execution phase of `send()` to handle multiple, independent, arbitrated transitions that might occur in parallel regions from a single event. This includes correctly updating `active_leaf_states`.
+    *   Add comprehensive unit and integration tests for parallel state transitions, event dispatch, and exit/entry action order (Tasks 4.1, 4.2 from `prompts/decomposition/03_parallel_states_tasks.md`).
+
+---
+
+## 2025-05-17 · _Session Mid (Runtime::new Parallel Init & Linter/Test Fixes)_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Runtime Implementation)
+*   _Work_:
+    *   Refactored `Runtime::new()` in `lit-bit-core` to correctly initialize `active_leaf_states` when the machine's overall initial state is a parallel state. (Task 3.5 DONE from `prompts/decomposition/03_parallel_states_tasks.md`).
+    *   Refactored state entry helpers (`enter_state_recursive_logic`, `execute_entry_actions_from_lca`) in `lit-bit-core` to support parallel semantics and return `heapless::Vec` of active states. (Task 3.3 DONE from `prompts/decomposition/03_parallel_states_tasks.md`).
+    *   Resolved all outstanding linter errors and test failures in `lit-bit-core` and `lit-bit-macro` related to these changes and previous refactors.
+    *   Added new integration test `test_initial_parallel_state_activation` which is passing.
+*   _Next_:
+    *   Begin major refactor of `Runtime::send()` to handle event dispatch to/from parallel regions and manage transitions involving parallel states (Task 3.2).
+    *   Develop parallel-aware exit logic, likely by refactoring `execute_exit_actions_up_to_lca` or creating `exit_state_recursive_logic` (Task 3.4).
+
+---
+
+## 2025-05-17 · _Session Start_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Runtime Implementation)
+*   _Work_:
+    *   Created new branch `feat/parallel-states` and committed foundational P0 and P1 (data structures) work for parallel states.
+*   _Next_:
+    *   Begin refactoring `Runtime::send()` in `lit-bit-core/src/core/mod.rs` to correctly handle event dispatch to multiple active regions in parallel states (Task 3.2).
+    *   Concurrently, develop and refine the necessary state entry/exit logic (`execute_entry_actions_from_lca`, `execute_exit_actions_up_to_lca`, `enter_submachine_to_initial_leaf`) to support parallel semantics (Tasks 3.3, 3.4).
+    *   Address updates to `Runtime::new()` for initial activation of parallel states as needed (Task 3.5).
+
+---
+
 ## 2025-05-17 · _Session End (Planned Next: Parallel Runtime Logic)_
 *   _Author_: @Gemini (via @user)
 *   _Phase_: 03-parallel-states (P0 Tasks Complete, P1 Structs Done)

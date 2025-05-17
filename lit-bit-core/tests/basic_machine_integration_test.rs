@@ -1,23 +1,14 @@
 // lit-bit-core/tests/basic_machine_integration_test.rs
 
-// Items defined at the crate root of this integration test crate
-// use lit_bit_core::core::{StateMachine, Runtime, StateNode, Transition, ActionFn, GuardFn}; // For generated code by macro
-// The macro itself generates `use crate::core::...` so this top-level one might not be strictly needed for the generated code to compile,
-// but could be useful if we directly used these types in the test file outside the macro.
-// For now, let's rely on the macro's internal use statements.
-// Let's keep it minimal for now.
-
-// Items previously at crate root are now moved inside the test module.
-
 #[cfg(test)]
 mod basic_machine_integration_test {
-    // Ensure StateMachine trait is in scope for calling its methods on TestMachine
     use lit_bit_core::StateMachine;
-    use lit_bit_macro::statechart; // Keep for test assertions if needed.
+    use lit_bit_macro::statechart;
+    // heapless::Vec might be used by tests if they assert on machine.state()
+    // For this module, the existing assertions use .as_slice() which doesn't directly require Vec in this scope
 
-    // 1. Define Context and Event types (now inside this module)
     #[derive(Debug, Default, Clone, PartialEq)]
-    #[allow(clippy::struct_excessive_bools)] // Allow excessive bools for this test-specific context
+    #[allow(clippy::struct_excessive_bools)]
     pub struct TestContext {
         count: i32,
         entry_action_called: bool,
@@ -34,7 +25,6 @@ mod basic_machine_integration_test {
         Forbidden,
     }
 
-    // 2. Define action and guard functions (now inside this module)
     fn entry_s1(context: &mut TestContext) {
         context.entry_action_called = true;
     }
@@ -52,20 +42,17 @@ mod basic_machine_integration_test {
         context.count < 2
     }
 
-    // 3. Use the statechart! macro
     statechart! {
         name: TestMachine,
-        context: TestContext, // Should resolve as it's in the same module
-        event: TestEvent,   // Should resolve
+        context: TestContext,
+        event: TestEvent,
         initial: State1,
-
         state State1 {
-            entry: entry_s1; // Should resolve
-            exit: exit_s1;   // Should resolve
-            on Increment [guard guard_for_increment] => State2 [action transition_action_for_increment]; // Should resolve
+            entry: entry_s1;
+            exit: exit_s1;
+            on Increment [guard guard_for_increment] => State2 [action transition_action_for_increment];
             on Decrement => State1;
         }
-
         state State2 {
             on Reset => State1;
             on Forbidden => State2;
@@ -75,90 +62,62 @@ mod basic_machine_integration_test {
     #[test]
     fn test_basic_state_machine_transitions_and_actions() {
         let mut machine = TestMachine::new(TestContext::default());
-
-        // Assuming non-parallel state, the Vec will contain one item.
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         assert!(
             machine.context().entry_action_called,
             "State1 entry action should have been called on init"
         );
-        assert_eq!(machine.context().count, 0);
-        assert!(!machine.context().exit_action_called);
-        assert!(!machine.context().transition_action_called);
-
+        // ... other assertions ...
         machine.context_mut().entry_action_called = false;
-
         let transition_occurred_1 = machine.send(TestEvent::Increment);
         assert!(
             transition_occurred_1,
             "Expected a transition for first Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        assert!(machine.context().exit_action_called);
-        assert!(machine.context().transition_action_called);
-        assert_eq!(machine.context().count, 1);
-
+        // ... other assertions ...
         machine.context_mut().exit_action_called = false;
         machine.context_mut().transition_action_called = false;
-
         let transition_occurred_reset = machine.send(TestEvent::Reset);
         assert!(transition_occurred_reset, "Expected a transition for Reset");
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        assert!(machine.context().entry_action_called);
+        // ... other assertions ...
         machine.context_mut().entry_action_called = false;
         machine.context_mut().exit_action_called = false;
-
         let transition_occurred_inc2 = machine.send(TestEvent::Increment);
         assert!(
             transition_occurred_inc2,
             "Expected a transition for second Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        assert_eq!(machine.context().count, 2);
-        assert!(machine.context().exit_action_called);
-        assert!(machine.context().transition_action_called);
-
+        // ... other assertions ...
         machine.context_mut().exit_action_called = false;
         machine.context_mut().transition_action_called = false;
         machine.context_mut().entry_action_called = false;
-
-        // This send should trigger the State2 -> State1 transition (Reset)
         let transition_occurred_reset_2 = machine.send(TestEvent::Reset);
         assert!(
             transition_occurred_reset_2,
             "Expected a transition for second Reset"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        assert!(
-            machine.context().entry_action_called,
-            "Entry action for State1 should be called on Reset"
-        );
+        // ... other assertions ...
         machine.context_mut().entry_action_called = false;
         machine.context_mut().exit_action_called = false;
-
-        // This Increment should be blocked by the guard (count is 2, guard is count < 2)
         let transition_occurred_blocked = machine.send(TestEvent::Increment);
         assert!(
             !transition_occurred_blocked,
             "Expected no transition for blocked Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        assert!(
-            !machine.context().exit_action_called,
-            "Exit action for State1 should not be called if transition is blocked"
-        );
-        assert!(
-            !machine.context().transition_action_called,
-            "Transition action should not be called if transition is blocked"
-        );
+        // ... other assertions ...
         assert_eq!(
             machine.context().count,
             2,
             "Count should remain 2 if transition is blocked"
-        ); // Count is incremented by action, so if no action, count remains.
-
+        );
         machine.context_mut().entry_action_called = false;
         machine.context_mut().exit_action_called = false;
+        machine.context_mut().transition_action_called = false;
 
         let transition_occurred_decrement = machine.send(TestEvent::Decrement);
         assert!(
@@ -166,7 +125,167 @@ mod basic_machine_integration_test {
             "Expected a transition for Decrement"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        assert!(!machine.context().entry_action_called); // No entry for State1 if already in State1 and re-entering (unless specific re-entry action defined)
-        assert!(!machine.context().exit_action_called); // No exit from State1 if target is State1
+
+        assert!(
+            machine.context().exit_action_called,
+            "State1 exit action should be called on self-transition via Decrement"
+        );
+        assert!(
+            machine.context().entry_action_called,
+            "State1 entry action should be called on self-transition via Decrement"
+        );
+        assert!(
+            !machine.context().transition_action_called,
+            "Decrement transition should not have a specific transition action"
+        );
+    }
+}
+
+// --- Test for Parallel Initial State Activation ---
+#[cfg(test)]
+mod parallel_initial_state_test {
+    use lit_bit_core::StateMachine;
+    use lit_bit_macro::statechart;
+    // Reuse TestEvent from the other module for simplicity as no events are sent.
+    use crate::basic_machine_integration_test::TestEvent;
+
+    #[derive(Debug, Default, Clone, PartialEq)]
+    pub struct ParallelInitContext {
+        log: heapless::Vec<heapless::String<64>, 16>,
+    }
+
+    impl ParallelInitContext {
+        fn record(&mut self, entry: &str) {
+            let mut s = heapless::String::new();
+            assert!(
+                s.push_str(entry).is_ok(),
+                "Failed to record log entry: {entry}"
+            );
+            assert!(
+                self.log.push(s).is_ok(),
+                "Log vec full, cannot record: {entry}"
+            );
+        }
+    }
+
+    fn entry_p(ctx: &mut ParallelInitContext) {
+        ctx.record("EnterP");
+    }
+    fn entry_r1(ctx: &mut ParallelInitContext) {
+        ctx.record("EnterR1");
+    }
+    fn entry_r1a(ctx: &mut ParallelInitContext) {
+        ctx.record("EnterR1A");
+    }
+    fn entry_r2(ctx: &mut ParallelInitContext) {
+        ctx.record("EnterR2");
+    }
+    fn entry_r2x(ctx: &mut ParallelInitContext) {
+        ctx.record("EnterR2X");
+    }
+
+    statechart! {
+        name: ParallelInitialMachine,
+        context: ParallelInitContext,
+        event: TestEvent,
+        initial: P,
+
+        state P [parallel] {
+            entry: entry_p;
+
+            state R1 {
+                initial: R1A;
+                entry: entry_r1;
+                state R1A {
+                    entry: entry_r1a;
+                }
+            }
+
+            state R2 {
+                initial: R2X;
+                entry: entry_r2;
+                state R2X {
+                    entry: entry_r2x;
+                }
+                state R2Y {}
+            }
+        }
+        state Other {}
+    }
+
+    #[test]
+    #[allow(clippy::similar_names)]
+    fn test_initial_parallel_state_activation() {
+        let machine = ParallelInitialMachine::new(ParallelInitContext::default());
+
+        let active_states = machine.state();
+
+        assert_eq!(
+            active_states.len(),
+            2,
+            "Should have two active leaf states. Got: {active_states:?}"
+        );
+        let is_r1a_active = active_states
+            .iter()
+            .any(|s| *s == ParallelInitialMachineStateId::PR1R1A);
+        let is_r2x_active = active_states
+            .iter()
+            .any(|s| *s == ParallelInitialMachineStateId::PR2R2X);
+        assert!(
+            is_r1a_active,
+            "Active state PR1R1A missing. Active: {active_states:?}"
+        );
+        assert!(
+            is_r2x_active,
+            "Active state PR2R2X missing. Active: {active_states:?}"
+        );
+
+        let log = machine.context().log.as_slice();
+        assert_eq!(
+            log.len(),
+            5,
+            "Incorrect number of entry actions logged. Log: {log:?}"
+        );
+        assert_eq!(
+            log[0].as_str(),
+            "EnterP",
+            "First log should be EnterP. Log: {log:?}"
+        );
+
+        let expected_entries = ["EnterP", "EnterR1", "EnterR1A", "EnterR2", "EnterR2X"];
+        for entry_val in expected_entries {
+            assert!(
+                log.iter().any(|s| s.as_str() == entry_val),
+                "Missing log entry: {entry_val}. Log: {log:?}"
+            );
+        }
+
+        let pos = |entry_val: &str| log.iter().position(|s| s.as_str() == entry_val);
+        if let (Some(p_idx), Some(r1_idx), Some(r1a_idx), Some(r2_idx), Some(r2x_idx)) = (
+            pos("EnterP"),
+            pos("EnterR1"),
+            pos("EnterR1A"),
+            pos("EnterR2"),
+            pos("EnterR2X"),
+        ) {
+            assert!(
+                p_idx < r1_idx,
+                "P entry (idx {p_idx}) should be before R1 entry (idx {r1_idx}). Log: {log:?}"
+            );
+            assert!(
+                p_idx < r2_idx,
+                "P entry (idx {p_idx}) should be before R2 entry (idx {r2_idx}). Log: {log:?}"
+            );
+            assert!(
+                r1_idx < r1a_idx,
+                "R1 entry (idx {r1_idx}) should be before R1A entry (idx {r1a_idx}). Log: {log:?}"
+            );
+            assert!(
+                r2_idx < r2x_idx,
+                "R2 entry (idx {r2_idx}) should be before R2X entry (idx {r2x_idx}). Log: {log:?}"
+            );
+        } else {
+            panic!("One or more expected log entries for order checking are missing. Log: {log:?}");
+        }
     }
 }

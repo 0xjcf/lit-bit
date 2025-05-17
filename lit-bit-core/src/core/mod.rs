@@ -2,7 +2,9 @@
 // This module will house core state machine logic and types.
 // For now, it's a placeholder.
 
-use heapless::Vec; // Added for hierarchical path tracking
+#[allow(unused_imports)]
+// Allow as it's needed for type resolution even if clippy thinks it's unused directly
+use heapless::Vec;
 
 // Re-export the StateMachine trait for easier use if core types implement it.
 // Potentially, the macro-generated machine would be in a submodule of `core` or a user module.
@@ -135,77 +137,120 @@ where
     context: ContextType,
 }
 
+// Helper function, can be outside impl Runtime or a static method if preferred.
+// Making it a free function for now to ensure no `self` issues initially.
+fn enter_state_recursive_logic<StateType, EventType, ContextType>(
+    machine_def: &MachineDefinition<StateType, EventType, ContextType>,
+    context: &mut ContextType,
+    state_id_to_enter: StateType,
+    accumulator: &mut heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
+) where
+    StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
+    EventType: Copy + Clone + PartialEq + Eq + core::hash::Hash + 'static,
+    ContextType: Clone + 'static,
+{
+    if let Some(node) = machine_def.get_state_node(state_id_to_enter) {
+        if let Some(entry_fn) = node.entry_action {
+            entry_fn(context);
+        }
+
+        if node.is_parallel {
+            for s_node_in_def in machine_def.states {
+                if s_node_in_def.parent == Some(state_id_to_enter) {
+                    enter_state_recursive_logic(
+                        machine_def,
+                        context,
+                        s_node_in_def.id,
+                        accumulator,
+                    );
+                }
+            }
+        } else if let Some(initial_child_id) = node.initial_child {
+            enter_state_recursive_logic(machine_def, context, initial_child_id, accumulator);
+        } else {
+            accumulator
+                .push(state_id_to_enter)
+                .expect("MAX_ACTIVE_REGIONS exceeded while accumulating leaf states.");
+        }
+    } else {
+        #[cfg(debug_assertions)]
+        panic!(
+            "enter_state_recursive_logic: State ID ({state_id_to_enter:?}) not found in MachineDefinition."
+        );
+    }
+}
+
+// Define PotentialTransition struct at the module level
+#[derive(Debug, Clone, Copy)]
+struct PotentialTransition<StateType, EventType, ContextType>
+where
+    StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
+    EventType: Copy + Clone + PartialEq + Eq + core::hash::Hash + 'static,
+    ContextType: Clone + 'static,
+{
+    source_leaf_id: StateType,
+    #[allow(dead_code)] // Will be used in full send() logic for arbitration
+    transition_from_state_id: StateType,
+    target_state_id: StateType,
+    transition_ref: &'static Transition<StateType, EventType, ContextType>,
+}
+
 impl<StateType, EventType, ContextType> Runtime<StateType, EventType, ContextType>
 where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     EventType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     ContextType: Clone + 'static,
 {
+    // Removed old fn enter_state_recursive(&mut self, ...) here
+
     /// Creates a new runtime instance for the given machine definition and initial context.
     ///
     /// # Panics
     ///
-    /// Panics if the determined state hierarchy depth for the initial state exceeds `MAX_HIERARCHY_DEPTH`.
-    /// This indicates that the state machine has a deeper nesting than currently supported by the fixed-size
-    /// internal path tracking vector.
+    /// This function may panic under the following conditions:
+    /// - If the `initial_leaf_state` specified in the `MachineDefinition` is not found in the `STATES` array.
+    /// - If `MAX_ACTIVE_REGIONS` is exceeded while trying to push initial leaf states (e.g. for a parallel initial state).
+    /// - If `MAX_HIERARCHY_DEPTH` is exceeded during internal path calculations (via `expect` calls).
     pub fn new(
         machine_def: MachineDefinition<StateType, EventType, ContextType>,
-        mut initial_context: ContextType,
+        initial_context: ContextType,
     ) -> Self {
+        let mut mutable_context = initial_context;
+        let mut active_states_vec = heapless::Vec::new();
+
         let top_level_initial_state_id = machine_def.initial_leaf_state;
-        let mut active_states_vec = heapless::Vec::<StateType, MAX_ACTIVE_REGIONS>::new();
 
-        // For now, assume initial_leaf_state is a single state.
-        // If it were parallel, this logic would need to find all initial leaves of its regions.
-        // The existing logic in `new` already finds the *deepest* initial leaf and executes entry actions.
-        // We'll use that deepest leaf as the single active state for non-parallel initial setup.
+        enter_state_recursive_logic(
+            &machine_def,
+            &mut mutable_context,
+            top_level_initial_state_id,
+            &mut active_states_vec,
+        );
 
-        let mut path_to_deepest_initial: heapless::Vec<StateType, MAX_HIERARCHY_DEPTH> =
-            heapless::Vec::new();
-        let mut current_id_for_path = Some(top_level_initial_state_id);
-        while let Some(id) = current_id_for_path {
-            path_to_deepest_initial
-                .push(id)
-                .expect("Path too long for initial state hierarchy");
-            if let Some(node) = machine_def.get_state_node(id) {
-                current_id_for_path = node.initial_child;
-            } else {
-                current_id_for_path = None;
-            }
+        if active_states_vec.is_empty()
+            && machine_def
+                .get_state_node(top_level_initial_state_id)
+                .is_none()
+        {
+            #[cfg(debug_assertions)]
+            panic!(
+                "Initial state ID specified in MachineDefinition not found in STATES array, or initial state setup resulted in no active states."
+            );
         }
-
-        for &state_to_enter in &path_to_deepest_initial {
-            if let Some(state_node) = machine_def.get_state_node(state_to_enter) {
-                if let Some(entry_fn) = state_node.entry_action {
-                    entry_fn(&mut initial_context);
-                }
-            }
-        }
-
-        let actual_initial_leaf_id = path_to_deepest_initial
-            .last()
-            .copied()
-            .unwrap_or(top_level_initial_state_id);
-
-        active_states_vec
-            .push(actual_initial_leaf_id)
-            .expect("Failed to push initial state");
 
         Runtime {
             machine_def,
             active_leaf_states: active_states_vec,
-            context: initial_context,
+            context: mutable_context, // context is moved here
         }
     }
 
     pub fn state(&self) -> heapless::Vec<StateType, MAX_ACTIVE_REGIONS> {
         self.active_leaf_states.clone()
     }
-
     pub fn context(&self) -> &ContextType {
         &self.context
     }
-
     pub fn context_mut(&mut self) -> &mut ContextType {
         &mut self.context
     }
@@ -214,8 +259,11 @@ where
 
     /// Collects the path from a leaf state up to the root, including the leaf itself.
     /// The path is returned with the leaf state at index 0 and ancestors following.
-    fn get_path_to_root(&self, leaf_state_id: StateType) -> Vec<StateType, MAX_HIERARCHY_DEPTH> {
-        let mut path: Vec<StateType, MAX_HIERARCHY_DEPTH> = Vec::new();
+    fn get_path_to_root(
+        &self,
+        leaf_state_id: StateType,
+    ) -> heapless::Vec<StateType, MAX_HIERARCHY_DEPTH> {
+        let mut path: heapless::Vec<StateType, MAX_HIERARCHY_DEPTH> = heapless::Vec::new();
         let mut current_id = Some(leaf_state_id);
         while let Some(id) = current_id {
             // Should not fail if MAX_HIERARCHY_DEPTH is reasonable and machine is validated
@@ -255,57 +303,155 @@ where
             .copied()
     }
 
-    /// Executes exit actions from a leaf state up to (but not including) a common ancestor (LCA).
-    fn execute_exit_actions_up_to_lca(
-        &mut self,
-        leaf_state_id: StateType,
-        lca_id: Option<StateType>,
-    ) {
-        let mut current_id_opt = Some(leaf_state_id);
-        while let Some(current_id) = current_id_opt {
-            if lca_id == Some(current_id) {
-                // Stop if we reached the LCA
-                break;
-            }
-            if let Some(state_node) = self.machine_def.get_state_node(current_id) {
-                if let Some(exit_fn) = state_node.exit_action {
-                    exit_fn(&mut self.context);
+    fn is_proper_ancestor(
+        &self,
+        ancestor_candidate_id: StateType,
+        descendant_candidate_id: StateType,
+    ) -> bool {
+        if ancestor_candidate_id == descendant_candidate_id {
+            return false;
+        }
+        let path_from_descendant = self.get_path_to_root(descendant_candidate_id);
+        path_from_descendant
+            .iter()
+            .skip(1)
+            .any(|&p_state| p_state == ancestor_candidate_id)
+    }
+
+    // Helper to find the direct child of parent_id that is currently active or an ancestor of an active leaf.
+    fn get_active_child_of(&self, parent_id: StateType) -> Option<StateType> {
+        for &leaf_id in &self.active_leaf_states {
+            let mut path_from_root = self.get_path_to_root(leaf_id);
+            path_from_root.reverse();
+
+            if let Some(parent_idx_in_path) = path_from_root.iter().position(|&s| s == parent_id) {
+                if parent_idx_in_path < path_from_root.len() - 1 {
+                    return Some(path_from_root[parent_idx_in_path + 1]);
                 }
             }
-            current_id_opt = self.machine_def.get_parent_of(current_id);
+        }
+        None
+    }
+
+    // Helper to compute the ordered list of states to exit.
+    fn compute_ordered_exit_set(
+        &self,
+        leaf_state_id_being_exited: StateType,
+        lca_id: Option<StateType>,
+    ) -> heapless::Vec<StateType, MAX_HIERARCHY_DEPTH> {
+        // Capacity might need adjustment
+        let mut states_to_potentially_exit: heapless::Vec<StateType, MAX_HIERARCHY_DEPTH> =
+            heapless::Vec::new();
+        let mut collected_for_exit: heapless::Vec<StateType, MAX_HIERARCHY_DEPTH> =
+            heapless::Vec::new();
+
+        // 1. Collect all states on the direct path from the active leaf up to (but not including) the LCA.
+        let mut current_id_on_path = Some(leaf_state_id_being_exited);
+        while let Some(id) = current_id_on_path {
+            if lca_id == Some(id) {
+                break;
+            }
+            states_to_potentially_exit.push(id).unwrap_or_else(|_| {
+                panic!("Exit path too long for states_to_potentially_exit vec")
+            });
+            current_id_on_path = self.machine_def.get_parent_of(id);
+        }
+        // states_to_potentially_exit is now [leaf, p1, p2, ..., child_of_lca]
+
+        // 2. For each state collected, recursively add its active children (for composite/parallel) first, then itself, to ensure post-order.
+        //    Use a helper that ensures each state is added to `collected_for_exit` only once.
+        let mut already_added_to_final_list: heapless::Vec<StateType, MAX_HIERARCHY_DEPTH> =
+            heapless::Vec::new();
+        for &state_to_process_for_exit in states_to_potentially_exit.iter().rev() {
+            // Process from child_of_lca down to leaf
+            self.collect_states_for_exit_post_order(
+                state_to_process_for_exit,
+                lca_id,
+                &mut collected_for_exit,
+                &mut already_added_to_final_list,
+            );
+        }
+        collected_for_exit
+    }
+
+    // Recursive helper for compute_ordered_exit_set
+    fn collect_states_for_exit_post_order(
+        &self,
+        current_state_id: StateType,
+        lca_id: Option<StateType>, // To ensure we don't process parts of LCA if it was part of a sub-path.
+        ordered_exit_list: &mut heapless::Vec<StateType, MAX_HIERARCHY_DEPTH>,
+        already_added: &mut heapless::Vec<StateType, MAX_HIERARCHY_DEPTH>,
+    ) {
+        if Some(current_state_id) == lca_id || already_added.contains(&current_state_id) {
+            return;
+        }
+
+        let Some(current_node) = self.machine_def.get_state_node(current_state_id) else {
+            return;
+        };
+
+        // Mark as visited for *this specific traversal context* to avoid issues if it's an ancestor of another part of main path.
+        // The main `already_added` list prevents adding to `ordered_exit_list` multiple times.
+
+        if current_node.is_parallel {
+            for region_node in self
+                .machine_def
+                .states
+                .iter()
+                .filter(|n| n.parent == Some(current_state_id))
+            {
+                // Check if region is active (has a descendant in active_leaf_states)
+                let mut region_active_leaf: Option<StateType> = None;
+                for &leaf in &self.active_leaf_states {
+                    if self.is_descendant_or_self(leaf, region_node.id) {
+                        region_active_leaf = Some(leaf);
+                        break;
+                    }
+                }
+                if let Some(active_leaf_in_region) = region_active_leaf {
+                    // Recurse from the active leaf of the region, stopping at the region itself (as region will be added later)
+                    self.collect_states_for_exit_post_order(
+                        active_leaf_in_region,
+                        Some(region_node.id),
+                        ordered_exit_list,
+                        already_added,
+                    );
+                }
+                // After region's children, add region itself (if not already added)
+                if !already_added.contains(&region_node.id) {
+                    self.collect_states_for_exit_post_order(
+                        region_node.id,
+                        lca_id,
+                        ordered_exit_list,
+                        already_added,
+                    );
+                }
+            }
+        } else if current_node.initial_child.is_some() {
+            // Composite non-parallel
+            if let Some(active_direct_child) = self.get_active_child_of(current_state_id) {
+                self.collect_states_for_exit_post_order(
+                    active_direct_child,
+                    lca_id,
+                    ordered_exit_list,
+                    already_added,
+                );
+            }
+        }
+
+        // Add current_state_id to the list *after* its children have been processed and added.
+        if !already_added.contains(&current_state_id) {
+            // Ensure it's added only once
+            ordered_exit_list
+                .push(current_state_id)
+                .unwrap_or_else(|_| panic!("Exit list overflow"));
+            already_added.push(current_state_id).ok(); // Track that it has been added
         }
     }
 
-    /// Helper to recursively enter a state and then its initial children until a leaf is reached.
-    /// Executes entry actions for all states entered along this path.
-    fn enter_submachine_to_initial_leaf(&mut self, state_to_enter: StateType) -> StateType {
-        if let Some(state_node) = self.machine_def.get_state_node(state_to_enter) {
-            if let Some(entry_fn) = state_node.entry_action {
-                entry_fn(&mut self.context);
-            }
-        }
-
-        let mut current_leaf = state_to_enter;
-        let mut current_composite_opt = Some(state_to_enter);
-
-        while let Some(composite_id) = current_composite_opt {
-            if let Some(composite_node) = self.machine_def.get_state_node(composite_id) {
-                if let Some(initial_child_id) = composite_node.initial_child {
-                    if let Some(child_node) = self.machine_def.get_state_node(initial_child_id) {
-                        if let Some(entry_fn) = child_node.entry_action {
-                            entry_fn(&mut self.context);
-                        }
-                    }
-                    current_leaf = initial_child_id;
-                    current_composite_opt = Some(initial_child_id); // Continue drilling if this child is also composite
-                } else {
-                    current_composite_opt = None; // Reached a leaf or a non-composite state with no initial child
-                }
-            } else {
-                current_composite_opt = None; // Should not happen if ID is valid
-            }
-        }
-        current_leaf // Return the actual leaf state reached
+    // is_descendant_or_self method from before
+    fn is_descendant_or_self(&self, candidate_id: StateType, ancestor_id: StateType) -> bool {
+        candidate_id == ancestor_id || self.is_proper_ancestor(ancestor_id, candidate_id)
     }
 
     /// Executes entry actions from a state (typically child of LCA) down to a target leaf state.
@@ -314,119 +460,204 @@ where
         &mut self,
         target_state_id: StateType,
         lca_id: Option<StateType>,
-    ) -> StateType {
-        let mut path_from_target_to_root = self.get_path_to_root(target_state_id); // [target, p, ..., root]
-        path_from_target_to_root.reverse(); // Now [root, ..., p, target]
+    ) -> heapless::Vec<StateType, MAX_ACTIVE_REGIONS> {
+        let mut new_active_leaf_states: heapless::Vec<StateType, MAX_ACTIVE_REGIONS> =
+            heapless::Vec::new();
 
-        let lca_pos_in_reversed_path =
-            lca_id.and_then(|lca| path_from_target_to_root.iter().position(|&s| s == lca));
+        let mut path_to_target = self.get_path_to_root(target_state_id);
+        path_to_target.reverse();
 
-        let start_index_for_entry = match lca_pos_in_reversed_path {
-            Some(pos) => pos + 1, // Start entering from the child of LCA
-            None => 0, // No LCA (or different trees), enter full path from root's first child on path
-        };
+        let mut start_entering_idx = 0;
+        if let Some(lca) = lca_id {
+            if let Some(pos) = path_to_target.iter().position(|&s| s == lca) {
+                start_entering_idx = pos + 1;
+            }
+        }
 
-        let mut final_entered_leaf = target_state_id; // Default if no entry path found or target is simple leaf at LCA
+        if start_entering_idx >= path_to_target.len() {
+            if self.machine_def.get_state_node(target_state_id).is_some() {
+                enter_state_recursive_logic(
+                    &self.machine_def,
+                    &mut self.context,
+                    target_state_id,
+                    &mut new_active_leaf_states,
+                );
+            }
+            return new_active_leaf_states;
+        }
 
-        if start_index_for_entry < path_from_target_to_root.len() {
-            for i in start_index_for_entry..path_from_target_to_root.len() {
-                let state_to_enter_explicitly = path_from_target_to_root[i];
-                if state_to_enter_explicitly == target_state_id {
-                    final_entered_leaf =
-                        self.enter_submachine_to_initial_leaf(state_to_enter_explicitly);
-                    // Once the designated target of the transition is entered (and its submachine),
-                    // we don't need to process further states from path_from_target_to_root,
-                    // as enter_submachine_to_initial_leaf handles the rest of the descent.
+        for i in start_entering_idx..path_to_target.len() {
+            let state_on_path_id = path_to_target[i];
+
+            if state_on_path_id == target_state_id {
+                enter_state_recursive_logic(
+                    &self.machine_def,
+                    &mut self.context,
+                    state_on_path_id,
+                    &mut new_active_leaf_states,
+                );
+                break;
+            }
+            if let Some(node) = self.machine_def.get_state_node(state_on_path_id) {
+                if node.is_parallel {
+                    enter_state_recursive_logic(
+                        &self.machine_def,
+                        &mut self.context,
+                        state_on_path_id,
+                        &mut new_active_leaf_states,
+                    );
                     break;
                 }
-                // This is an intermediate composite state on the path from LCA's child to target_state_id.
-                if let Some(state_node) = self.machine_def.get_state_node(state_to_enter_explicitly)
-                {
-                    if let Some(entry_fn) = state_node.entry_action {
-                        entry_fn(&mut self.context);
-                    }
+                if let Some(entry_fn) = node.entry_action {
+                    entry_fn(&mut self.context);
                 }
             }
-        } else if lca_id.is_some() && lca_id == Some(target_state_id) {
-            // This case handles when the target_state_id is the LCA itself.
-            // No states between LCA and target to enter; just enter the target and its submachine.
-            final_entered_leaf = self.enter_submachine_to_initial_leaf(target_state_id);
         }
-        // If start_index_for_entry >= path_from_target_to_root.len() AND it's not the (LCA == target) case:
-        // This implies the target was an ancestor of or same as LCA's child used for start_index.
-        // Or, target_state_id was the LCA, and was handled by the else-if.
-        // If path was empty (e.g. target is root and no lca or lca is root), loop isn't entered.
-        // In such cases, if not handled by (LCA == target), `final_entered_leaf` remains `target_state_id`,
-        // which might need a final call to `enter_submachine_to_initial_leaf` if no loop ran.
-        // However, the above logic with `break` and the `else if` should cover most direct scenarios.
-        // A scenario: target_state_id is P1, lca_id is None. start_index=0. path=[P1]. Loop for P1, calls enter_submachine(P1).
-
-        final_entered_leaf
+        new_active_leaf_states
     }
 
     /// Sends an event to the state machine for processing.
     ///
     /// This is a **TEMPORARY IMPLEMENTATION** and will be significantly refactored
-    /// to support parallel states. Currently, it only considers the first active state.
+    /// to support parallel states.
     ///
     /// # Panics
-    ///
-    /// Panics if `active_leaf_states.push()` fails after a transition, which might occur
-    /// if `MAX_ACTIVE_REGIONS` is too small (e.g., 0, though current code sets to 1 state).
-    /// This specific panic condition will change as parallel state logic is implemented.
+    /// Contains `expect` and `panic` calls that might trigger if `MAX_ACTIVE_REGIONS` or
+    /// `MAX_HIERARCHY_DEPTH` are too small, or if internal logic errors occur.
+    #[allow(clippy::too_many_lines)]
     pub fn send(&mut self, event: EventType) -> bool {
-        if self.active_leaf_states.is_empty() {
-            return false; // No active state to handle event
+        let mut potential_transitions: heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_ACTIVE_REGIONS,
+        > = heapless::Vec::new();
+        let current_active_leaves = self.active_leaf_states.clone();
+        for &active_leaf_id in &current_active_leaves {
+            let mut check_state_id_opt = Some(active_leaf_id);
+            'hierarchy_search: while let Some(check_state_id) = check_state_id_opt {
+                if self.machine_def.get_state_node(check_state_id).is_some() {
+                    for t_def in self.machine_def.transitions {
+                        if t_def.from_state == check_state_id && t_def.event == event {
+                            if let Some(guard_fn) = t_def.guard {
+                                if !guard_fn(&self.context, event) {
+                                    continue;
+                                }
+                            }
+                            let pot_trans = PotentialTransition {
+                                source_leaf_id: active_leaf_id,
+                                transition_from_state_id: check_state_id,
+                                target_state_id: t_def.to_state,
+                                transition_ref: t_def,
+                            };
+                            let push_result = potential_transitions.push(pot_trans);
+                            #[cfg(debug_assertions)]
+                            assert!(
+                                push_result.is_ok(),
+                                "Exceeded capacity for potential transitions..."
+                            );
+                            break 'hierarchy_search;
+                        }
+                    }
+                }
+                check_state_id_opt = self.machine_def.get_parent_of(check_state_id);
+            }
         }
-        let primary_active_state_id = self.active_leaf_states[0]; // TEMPORARY
+        if potential_transitions.is_empty() {
+            return false;
+        }
 
-        let mut current_check_state_id = Some(primary_active_state_id);
-
-        while let Some(check_state_id) = current_check_state_id {
-            for transition in self.machine_def.transitions {
-                if transition.from_state == check_state_id && transition.event == event {
-                    if let Some(guard_fn) = transition.guard {
-                        if !guard_fn(&self.context, event) {
-                            continue;
-                        }
-                    }
-
-                    let old_leaf_state_id = primary_active_state_id; // Was self.current_state_id
-                    let target_state_id_from_transition = transition.to_state;
-
-                    // Self-transition logic might need care with multiple active states
-                    if old_leaf_state_id == target_state_id_from_transition
-                        && transition.from_state == old_leaf_state_id
-                    {
-                        if let Some(action_fn) = transition.action {
-                            action_fn(&mut self.context);
-                        }
-                        return true;
-                    }
-
-                    let lca_id = self.find_lca(old_leaf_state_id, target_state_id_from_transition);
-                    self.execute_exit_actions_up_to_lca(old_leaf_state_id, lca_id);
-
-                    if let Some(action_fn) = transition.action {
-                        action_fn(&mut self.context);
-                    }
-
-                    // Entry actions and updating active_leaf_states will be complex.
-                    // For now, just assume it transitions to a single state.
-                    let new_current_leaf_id = self
-                        .execute_entry_actions_from_lca(target_state_id_from_transition, lca_id);
-
-                    self.active_leaf_states.clear();
-                    self.active_leaf_states
-                        .push(new_current_leaf_id)
-                        .expect("Failed to set new active state");
-
-                    return true;
+        // 2. Resolve conflicts (Arbitration Phase)
+        let mut arbitrated_transitions: heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_ACTIVE_REGIONS,
+        > = heapless::Vec::new();
+        'candidate_loop: for pt_candidate in &potential_transitions {
+            // Changed .iter() to direct reference
+            for other_pt in &potential_transitions {
+                // Changed .iter() to direct reference
+                if core::ptr::eq(pt_candidate, other_pt) {
+                    continue;
+                }
+                if self.is_proper_ancestor(
+                    other_pt.transition_from_state_id,
+                    pt_candidate.transition_from_state_id,
+                ) {
+                    continue 'candidate_loop;
                 }
             }
-            current_check_state_id = self.machine_def.get_parent_of(check_state_id);
+            let push_result = arbitrated_transitions.push(pt_candidate.clone());
+            #[cfg(debug_assertions)]
+            assert!(
+                push_result.is_ok(),
+                "Exceeded capacity for arbitrated_transitions."
+            );
+            if push_result.is_err() {
+                break;
+            }
         }
-        false
+
+        if arbitrated_transitions.is_empty() {
+            return false;
+        }
+
+        let mut actual_transition_occurred = false;
+        if let Some(selected_transition_info) = arbitrated_transitions.first() {
+            let old_leaf_state_id = selected_transition_info.source_leaf_id;
+            let transition_source_state_id = selected_transition_info.transition_from_state_id;
+            let target_state_id_from_transition = selected_transition_info.target_state_id;
+            let transition_action = selected_transition_info.transition_ref.action;
+
+            if transition_source_state_id == target_state_id_from_transition
+                && old_leaf_state_id == transition_source_state_id
+            {
+                // True self-transition on an active leaf state
+                if let Some(node) = self.machine_def.get_state_node(transition_source_state_id) {
+                    if let Some(exit_fn) = node.exit_action {
+                        exit_fn(&mut self.context);
+                    }
+                }
+                if let Some(action_fn) = transition_action {
+                    action_fn(&mut self.context);
+                }
+                if let Some(node) = self.machine_def.get_state_node(transition_source_state_id) {
+                    if let Some(entry_fn) = node.entry_action {
+                        entry_fn(&mut self.context);
+                    }
+                }
+                actual_transition_occurred = true;
+            } else {
+                let lca_id = self.find_lca(old_leaf_state_id, target_state_id_from_transition);
+
+                let states_to_exit = self.compute_ordered_exit_set(old_leaf_state_id, lca_id);
+                for &state_to_exit in &states_to_exit {
+                    // Iterate the ordered list
+                    if let Some(node) = self.machine_def.get_state_node(state_to_exit) {
+                        if let Some(exit_fn) = node.exit_action {
+                            exit_fn(&mut self.context);
+                        }
+                    }
+                }
+
+                if let Some(action_fn) = transition_action {
+                    action_fn(&mut self.context);
+                }
+                let new_leaves =
+                    self.execute_entry_actions_from_lca(target_state_id_from_transition, lca_id);
+                self.active_leaf_states.clear();
+                for leaf in new_leaves {
+                    let push_result = self.active_leaf_states.push(leaf);
+                    #[cfg(debug_assertions)]
+                    assert!(
+                        push_result.is_ok(),
+                        "MAX_ACTIVE_REGIONS too small during send execution."
+                    );
+                    if push_result.is_err() {
+                        break;
+                    }
+                }
+                actual_transition_occurred = true;
+            }
+        }
+        actual_transition_occurred
     }
 }
 
@@ -492,9 +723,60 @@ mod tests {
         context.count == 0
     }
 
-    // Placeholder for states, to be generated by macro later
-    const TEST_STATENODES_EMPTY_CTX: &[StateNode<TestState, TestContextForEmpty>] = &[];
-    const TEST_STATENODES_COUNTER_CTX: &[StateNode<TestState, CounterContext>] = &[];
+    // Populated StateNode arrays for tests
+    const TEST_STATENODES_EMPTY_CTX_POPULATED: &[StateNode<TestState, TestContextForEmpty>] = &[
+        StateNode {
+            id: TestState::S0,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TestState::S1,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TestState::S2,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+    ];
+
+    const TEST_STATENODES_COUNTER_CTX_POPULATED: &[StateNode<TestState, CounterContext>] = &[
+        StateNode {
+            id: TestState::S0,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TestState::S1,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TestState::S2,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+    ];
 
     // --- New Test Setup for Hierarchical Transitions ---
 
@@ -509,8 +791,11 @@ mod tests {
     impl HierarchicalActionLogContext {
         fn log_action(&mut self, action_description: &str) {
             let mut s = heapless::String::<MAX_LOG_STRING_LEN>::new();
-            s.push_str(action_description).expect("Log string too long");
-            self.log.push(s).expect("Log full");
+            s.push_str(action_description)
+                .expect("Log string too long for heapless::String");
+            self.log
+                .push(s)
+                .expect("Log vec full in HierarchicalActionLogContext");
         }
         fn get_log(&self) -> &Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> {
             &self.log
@@ -743,21 +1028,19 @@ mod tests {
         );
 
         // Check entry action log
-        let mut expected_log_vec: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            Vec::new();
-
-        let mut s1 = heapless::String::<MAX_LOG_STRING_LEN>::new();
-        s1.push_str("EnterParentOne").unwrap();
-        expected_log_vec.push(s1).unwrap();
-
-        let mut s2 = heapless::String::<MAX_LOG_STRING_LEN>::new();
-        s2.push_str("EnterChildOneAlpha").unwrap();
-        expected_log_vec.push(s2).unwrap();
-
-        let mut s3 = heapless::String::<MAX_LOG_STRING_LEN>::new();
-        s3.push_str("EnterGrandchildOneAlphaXray").unwrap();
-        expected_log_vec.push(s3).unwrap();
-
+        let mut expected_log_vec: heapless::Vec<
+            heapless::String<MAX_LOG_STRING_LEN>,
+            MAX_LOG_ENTRIES,
+        > = heapless::Vec::new();
+        expected_log_vec
+            .push(heapless::String::try_from("EnterParentOne").unwrap())
+            .expect("Log full");
+        expected_log_vec
+            .push(heapless::String::try_from("EnterChildOneAlpha").unwrap())
+            .expect("Log full");
+        expected_log_vec
+            .push(heapless::String::try_from("EnterGrandchildOneAlphaXray").unwrap())
+            .expect("Log full");
         assert_eq!(runtime.context().get_log(), &expected_log_vec);
     }
 
@@ -793,25 +1076,20 @@ mod tests {
         // 2. Exit ChildOneAlpha
         // 3. TransitionAction (defined on ChildOneAlpha -> ChildOneBravo transition)
         // 4. Enter ChildOneBravo
-        let mut expected_log: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            Vec::new();
-
-        let mut s_exit_gcax = heapless::String::<MAX_LOG_STRING_LEN>::new();
-        s_exit_gcax.push_str("ExitGrandchildOneAlphaXray").unwrap();
-        expected_log.push(s_exit_gcax).unwrap();
-
-        let mut s_exit_c1a = heapless::String::<MAX_LOG_STRING_LEN>::new();
-        s_exit_c1a.push_str("ExitChildOneAlpha").unwrap();
-        expected_log.push(s_exit_c1a).unwrap();
-
-        let mut s_trans = heapless::String::<MAX_LOG_STRING_LEN>::new();
-        s_trans.push_str("TransitionAction").unwrap();
-        expected_log.push(s_trans).unwrap();
-
-        let mut s_enter_c1b = heapless::String::<MAX_LOG_STRING_LEN>::new();
-        s_enter_c1b.push_str("EnterChildOneBravo").unwrap();
-        expected_log.push(s_enter_c1b).unwrap();
-
+        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
+            heapless::Vec::new();
+        expected_log
+            .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
+            .expect("Log full");
+        expected_log
+            .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
+            .expect("Log full");
+        expected_log
+            .push(heapless::String::try_from("TransitionAction").unwrap())
+            .expect("Log full");
+        expected_log
+            .push(heapless::String::try_from("EnterChildOneBravo").unwrap())
+            .expect("Log full");
         assert_eq!(runtime.context().get_log(), &expected_log);
     }
 
@@ -819,7 +1097,11 @@ mod tests {
     fn machine_starts_in_initial_state() {
         const TEST_TRANSITIONS: &[Transition<TestState, TestEvent, TestContextForEmpty>] = &[];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContextForEmpty> =
-            MachineDefinition::new(TEST_STATENODES_EMPTY_CTX, TEST_TRANSITIONS, TestState::S0);
+            MachineDefinition::new(
+                TEST_STATENODES_EMPTY_CTX_POPULATED,
+                TEST_TRANSITIONS,
+                TestState::S0,
+            );
 
         let initial_context = DefaultContext::default();
         let runtime = Runtime::new(TEST_MACHINE_DEF, initial_context);
@@ -838,7 +1120,7 @@ mod tests {
             }];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, CounterContext> =
             MachineDefinition::new(
-                TEST_STATENODES_COUNTER_CTX,
+                TEST_STATENODES_COUNTER_CTX_POPULATED,
                 ACTION_TRANSITIONS,
                 TestState::S0,
             );
@@ -863,7 +1145,7 @@ mod tests {
             }];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, CounterContext> =
             MachineDefinition::new(
-                TEST_STATENODES_COUNTER_CTX,
+                TEST_STATENODES_COUNTER_CTX_POPULATED,
                 GUARDED_TRANSITIONS,
                 TestState::S0,
             );
@@ -883,7 +1165,11 @@ mod tests {
     fn context_mut_provides_mutable_access() {
         const NO_TRANSITIONS: &[Transition<TestState, TestEvent, CounterContext>] = &[];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, CounterContext> =
-            MachineDefinition::new(TEST_STATENODES_COUNTER_CTX, NO_TRANSITIONS, TestState::S0);
+            MachineDefinition::new(
+                TEST_STATENODES_COUNTER_CTX_POPULATED,
+                NO_TRANSITIONS,
+                TestState::S0,
+            );
 
         let initial_context = CounterContext { count: 42 };
         let mut runtime = Runtime::new(TEST_MACHINE_DEF, initial_context);
@@ -903,7 +1189,11 @@ mod tests {
                 guard: None,
             }];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContextForEmpty> =
-            MachineDefinition::new(TEST_STATENODES_EMPTY_CTX, TEST_TRANSITIONS, TestState::S0);
+            MachineDefinition::new(
+                TEST_STATENODES_EMPTY_CTX_POPULATED,
+                TEST_TRANSITIONS,
+                TestState::S0,
+            );
         let mut runtime = Runtime::new(TEST_MACHINE_DEF, DefaultContext::default());
         assert!(!runtime.send(TestEvent::E1)); // Different event
         assert_eq!(runtime.state().as_slice(), &[TestState::S0]);
@@ -920,7 +1210,11 @@ mod tests {
                 guard: None,
             }];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContextForEmpty> =
-            MachineDefinition::new(TEST_STATENODES_EMPTY_CTX, TEST_TRANSITIONS, TestState::S1); // Start in S1
+            MachineDefinition::new(
+                TEST_STATENODES_EMPTY_CTX_POPULATED,
+                TEST_TRANSITIONS,
+                TestState::S1,
+            ); // Start in S1
         let mut runtime = Runtime::new(TEST_MACHINE_DEF, DefaultContext::default());
         assert!(!runtime.send(TestEvent::E0)); // Event E0 is for S0
         assert_eq!(runtime.state().as_slice(), &[TestState::S1]);
@@ -957,21 +1251,20 @@ mod tests {
         // 2. TransitionAction (from GC1AX -> C1A transition)
         // 3. Enter ChildOneAlpha (target of transition)
         // 4. Enter GrandchildOneAlphaXray (initial child of ChildOneAlpha)
-        let mut expected_log: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            Vec::new();
+        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
+            heapless::Vec::new();
         expected_log
             .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("TransitionAction").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterChildOneAlpha").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterGrandchildOneAlphaXray").unwrap())
-            .unwrap();
-
+            .expect("Log full");
         assert_eq!(runtime.context().get_log(), &expected_log);
     }
 
@@ -1007,21 +1300,20 @@ mod tests {
         // (Transition is on ParentOne, exits happen from current leaf up to ParentOne)
         // 3. TransitionAction (from P1 -> C1B transition)
         // 4. Enter ChildOneBravo (target is leaf, directly entered)
-        let mut expected_log: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            Vec::new();
+        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
+            heapless::Vec::new();
         expected_log
             .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("TransitionAction").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterChildOneBravo").unwrap())
-            .unwrap();
-
+            .expect("Log full");
         assert_eq!(runtime.context().get_log(), &expected_log);
     }
 
@@ -1077,30 +1369,29 @@ mod tests {
         // 1. Exit GrandchildOneAlphaYankee
         // 2. Exit ChildOneAlpha
         // 3. TransitionAction (from GCAY -> P1 transition)
-        // 4. Enter ParentOne (target of transition)
+        // 4. Enter ParentOne
         // 5. Enter ChildOneAlpha (initial child of P1)
         // 6. Enter GrandchildOneAlphaXray (initial child of C1A)
-        let mut expected_log: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            Vec::new();
+        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
+            heapless::Vec::new();
         expected_log
             .push(heapless::String::try_from("ExitGrandchildOneAlphaYankee").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("TransitionAction").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterParentOne").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterChildOneAlpha").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterGrandchildOneAlphaXray").unwrap())
-            .unwrap();
-
+            .expect("Log full");
         assert_eq!(runtime.context().get_log(), &expected_log);
     }
 
@@ -1148,21 +1439,20 @@ mod tests {
         // 2. TransitionAction (from C1B -> GCAY transition)
         // 3. Enter ChildOneAlpha (intermediate state on path from LCA's child to target)
         // 4. Enter GrandchildOneAlphaYankee (target state, and it's a leaf)
-        let mut expected_log: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            Vec::new();
+        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
+            heapless::Vec::new();
         expected_log
             .push(heapless::String::try_from("ExitChildOneBravo").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("TransitionAction").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterChildOneAlpha").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterGrandchildOneAlphaYankee").unwrap())
-            .unwrap();
-
+            .expect("Log full");
         assert_eq!(runtime.context().get_log(), &expected_log);
     }
 
@@ -1205,27 +1495,26 @@ mod tests {
         // 4. TransitionAction (from P1 -> P2 transition)
         // 5. Enter ParentTwo
         // 6. Enter ChildTwoAlpha (initial child of P2)
-        let mut expected_log: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            Vec::new();
+        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
+            heapless::Vec::new();
         expected_log
             .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("ExitParentOne").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("TransitionAction").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterParentTwo").unwrap())
-            .unwrap();
+            .expect("Log full");
         expected_log
             .push(heapless::String::try_from("EnterChildTwoAlpha").unwrap())
-            .unwrap();
-
+            .expect("Log full");
         assert_eq!(runtime.context().get_log(), &expected_log);
     }
 

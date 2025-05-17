@@ -185,7 +185,10 @@ impl Parse for StateDeclarationAst {
             } else if content_in_braces.peek(keywords::exit) {
                 body_items.push(StateBodyItemAst::ExitHook(content_in_braces.parse()?));
             } else if content_in_braces.peek(keywords::on) {
-                body_items.push(StateBodyItemAst::Transition(content_in_braces.parse()?));
+                // When creating StateBodyItemAst::Transition, wrap the parsed TransitionDefinitionAst in a Box
+                body_items.push(StateBodyItemAst::Transition(Box::new(
+                    content_in_braces.parse()?,
+                )));
             } else if content_in_braces.peek(keywords::state) {
                 body_items.push(StateBodyItemAst::NestedState(Box::new(
                     content_in_braces.parse()?,
@@ -198,7 +201,7 @@ impl Parse for StateDeclarationAst {
         Ok(StateDeclarationAst {
             state_keyword_token,
             name,
-            attributes, // Added
+            attributes,
             brace_token,
             default_child_declaration,
             body_items,
@@ -235,7 +238,7 @@ impl Parse for DefaultChildDeclarationAst {
 enum StateBodyItemAst {
     EntryHook(LifecycleHookAst),
     ExitHook(LifecycleHookAst),
-    Transition(TransitionDefinitionAst),
+    Transition(Box<TransitionDefinitionAst>), // Boxed this variant
     NestedState(Box<StateDeclarationAst>),
 }
 
@@ -775,6 +778,8 @@ pub(crate) mod intermediate_tree {
                     crate::StateBodyItemAst::ExitHook(hook_ast) => {
                         exit_handler_opt = Some(&hook_ast.hook_function_expression);
                     }
+                    // trans_ast is now &Box<TransitionDefinitionAst> due to pattern matching
+                    // Auto-deref should allow direct field access on trans_ast as if it were &TransitionDefinitionAst
                     crate::StateBodyItemAst::Transition(trans_ast) => {
                         transitions_for_this_state.push(TmpTransition {
                             event_name: &trans_ast.event_name,
@@ -783,11 +788,11 @@ pub(crate) mod intermediate_tree {
                             guard_handler: trans_ast
                                 .guard_clause
                                 .as_ref()
-                                .map(|gc| &gc.condition_function_expression), // This is now &Expr
+                                .map(|gc| &gc.condition_function_expression),
                             action_handler: trans_ast
                                 .action_clause
                                 .as_ref()
-                                .map(|ac| &ac.transition_action_expression), // This is now &Expr
+                                .map(|ac| &ac.transition_action_expression),
                             on_keyword_span: trans_ast.on_keyword_token.span,
                         });
                     }
