@@ -2,19 +2,40 @@
 
 #[cfg(test)]
 pub mod basic_machine_integration_test {
+    use core::convert::TryFrom;
     use lit_bit_core::StateMachine;
     use lit_bit_macro::statechart;
     // heapless::Vec might be used by tests if they assert on machine.state()
     // For this module, the existing assertions use .as_slice() which doesn't directly require Vec in this scope
 
-    #[derive(Debug, Default, Clone, PartialEq)]
+    const ACTION_LOG_CAPACITY: usize = 10;
+    const ACTION_STRING_CAPACITY: usize = 32;
+
+    #[derive(Debug, Clone, PartialEq)]
     #[allow(clippy::struct_excessive_bools)]
     pub struct TestContext {
         count: i32,
-        entry_action_called: bool,
-        exit_action_called: bool,
-        transition_action_called: bool,
-        guard_called_for_increment: bool,
+        action_log: heapless::Vec<heapless::String<ACTION_STRING_CAPACITY>, ACTION_LOG_CAPACITY>,
+    }
+
+    impl Default for TestContext {
+        fn default() -> Self {
+            TestContext {
+                count: 0,
+                action_log: heapless::Vec::new(),
+            }
+        }
+    }
+
+    impl TestContext {
+        fn record(&mut self, action_name: &str) {
+            let s = heapless::String::try_from(action_name)
+                .expect("Failed to create heapless string for action log");
+            self.action_log.push(s).expect("Action log full");
+        }
+        fn clear_log(&mut self) {
+            self.action_log.clear();
+        }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,16 +47,16 @@ pub mod basic_machine_integration_test {
     }
 
     fn entry_s1(context: &mut TestContext) {
-        context.entry_action_called = true;
+        context.record("entry_s1");
     }
 
     fn exit_s1(context: &mut TestContext) {
-        context.exit_action_called = true;
+        context.record("exit_s1");
     }
 
     fn transition_action_for_increment(context: &mut TestContext) {
         context.count += 1;
-        context.transition_action_called = true;
+        context.record("action_increment");
     }
 
     fn guard_for_increment(context: &TestContext, _event: TestEvent) -> bool {
@@ -63,56 +84,79 @@ pub mod basic_machine_integration_test {
     fn test_basic_state_machine_transitions_and_actions() {
         let mut machine = TestMachine::new(TestContext::default());
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        assert!(
-            machine.context().entry_action_called,
-            "State1 entry action should have been called on init"
-        );
-        machine.context_mut().entry_action_called = false;
+        let expected_log_init: [heapless::String<ACTION_STRING_CAPACITY>; 1] =
+            [heapless::String::try_from("entry_s1").expect("Log string create failed")];
+        assert_eq!(machine.context().action_log.as_slice(), &expected_log_init);
+
+        machine.context_mut().clear_log();
         let transition_occurred_1 = machine.send(TestEvent::Increment);
         assert!(
             transition_occurred_1,
             "Expected a transition for first Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        machine.context_mut().exit_action_called = false;
-        machine.context_mut().transition_action_called = false;
+        let expected_log_inc1: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
+            heapless::String::try_from("exit_s1").expect("Log string create failed"),
+            heapless::String::try_from("action_increment").expect("Log string create failed"),
+        ];
+        assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc1);
+
+        machine.context_mut().clear_log();
         let transition_occurred_reset = machine.send(TestEvent::Reset);
         assert!(transition_occurred_reset, "Expected a transition for Reset");
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        machine.context_mut().entry_action_called = false;
-        machine.context_mut().exit_action_called = false;
+        let expected_log_reset1: [heapless::String<ACTION_STRING_CAPACITY>; 1] =
+            [heapless::String::try_from("entry_s1").expect("Log string create failed")];
+        assert_eq!(
+            machine.context().action_log.as_slice(),
+            &expected_log_reset1
+        );
+
+        machine.context_mut().clear_log();
         let transition_occurred_inc2 = machine.send(TestEvent::Increment);
         assert!(
             transition_occurred_inc2,
             "Expected a transition for second Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        machine.context_mut().exit_action_called = false;
-        machine.context_mut().transition_action_called = false;
-        machine.context_mut().entry_action_called = false;
+        let expected_log_inc2: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
+            heapless::String::try_from("exit_s1").expect("Log string create failed"),
+            heapless::String::try_from("action_increment").expect("Log string create failed"),
+        ];
+        assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc2);
+
+        machine.context_mut().clear_log();
         let transition_occurred_reset_2 = machine.send(TestEvent::Reset);
         assert!(
             transition_occurred_reset_2,
             "Expected a transition for second Reset"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        machine.context_mut().entry_action_called = false;
-        machine.context_mut().exit_action_called = false;
+        let expected_log_reset2: [heapless::String<ACTION_STRING_CAPACITY>; 1] =
+            [heapless::String::try_from("entry_s1").expect("Log string create failed")];
+        assert_eq!(
+            machine.context().action_log.as_slice(),
+            &expected_log_reset2
+        );
+
+        machine.context_mut().clear_log();
         let transition_occurred_blocked = machine.send(TestEvent::Increment);
         assert!(
             !transition_occurred_blocked,
             "Expected no transition for blocked Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
+        assert!(
+            machine.context().action_log.is_empty(),
+            "No actions should occur for blocked increment"
+        );
         assert_eq!(
             machine.context().count,
             2,
             "Count should remain 2 if transition is blocked"
         );
-        machine.context_mut().entry_action_called = false;
-        machine.context_mut().exit_action_called = false;
-        machine.context_mut().transition_action_called = false;
 
+        machine.context_mut().clear_log();
         let transition_occurred_decrement = machine.send(TestEvent::Decrement);
         assert!(
             transition_occurred_decrement,
@@ -120,17 +164,16 @@ pub mod basic_machine_integration_test {
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
 
-        assert!(
-            machine.context().exit_action_called,
-            "State1 exit action should be called on self-transition via Decrement"
-        );
-        assert!(
-            machine.context().entry_action_called,
-            "State1 entry action should be called on self-transition via Decrement"
-        );
-        assert!(
-            !machine.context().transition_action_called,
-            "Decrement transition should not have a specific transition action"
+        let expected_decrement_log: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
+            heapless::String::try_from("exit_s1")
+                .expect("Failed to create string for expected log"),
+            heapless::String::try_from("entry_s1")
+                .expect("Failed to create string for expected log"),
+        ];
+        assert_eq!(
+            machine.context().action_log.as_slice(),
+            &expected_decrement_log,
+            "Self-transition action order incorrect"
         );
     }
 }

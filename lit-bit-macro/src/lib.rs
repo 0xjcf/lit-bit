@@ -242,7 +242,7 @@ impl Parse for DefaultChildDeclarationAst {
 enum StateBodyItemAst {
     EntryHook(LifecycleHookAst),
     ExitHook(LifecycleHookAst),
-    Transition(TransitionDefinitionAst), // Removed Box<> // Already was Boxed, so this line is fine to be changed
+    Transition(TransitionDefinitionAst), // Stores TransitionDefinitionAst directly by value
     NestedState(Box<StateDeclarationAst>),
 }
 
@@ -835,7 +835,7 @@ pub(crate) mod code_generator {
     use crate::intermediate_tree::TmpStateTreeBuilder;
     use proc_macro2::{Span, TokenStream};
     use quote::{format_ident, quote};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet}; // Added HashSet
     use syn::{Error as SynError, Ident, Path, Result as SynResult}; // Added Path
                                                                     // Removed: use crate::StateChartInputAst;
     use syn::spanned::Spanned;
@@ -874,19 +874,43 @@ pub(crate) mod code_generator {
         let enum_name_str = format!("{machine_name}StateId");
         let state_id_enum_name = format_ident!("{}", enum_name_str);
 
-        let mut full_path_to_variant_map = HashMap::new();
-        let mut variants_code: Vec<Ident> = Vec::new(); // Ensure it's Vec<Ident>
+        let mut full_path_to_variant_map: HashMap<String, Ident> = HashMap::new(); // Explicit types
+        let mut variants_code: Vec<Ident> = Vec::new();
+        let mut used_variant_strings: HashSet<String> = HashSet::new();
 
-        // Sort TmpState by full_path_name to ensure consistent enum variant order for generated code
-        // This is important for derive(PartialOrd, Ord) if ever added, and for deterministic output.
         let mut sorted_states: Vec<_> = builder.all_states.iter().collect();
         sorted_states.sort_by_key(|s| &s.full_path_name);
 
         for tmp_state in sorted_states {
-            let variant_ident = to_pascal_case(&tmp_state.full_path_name);
-            full_path_to_variant_map
-                .insert(tmp_state.full_path_name.clone(), variant_ident.clone());
-            variants_code.push(variant_ident);
+            let variant_ident_pascal_case = to_pascal_case(&tmp_state.full_path_name); // This is an Ident
+            let variant_ident_str = variant_ident_pascal_case.to_string();
+
+            if !used_variant_strings.insert(variant_ident_str.clone()) {
+                // Collision detected! Two different full_path_names resulted in the same PascalCase variant identifier.
+                // Find the other state that caused this collision for a better error message.
+                let mut colliding_full_path = "<unknown>".to_string();
+                for (fp, vi) in &full_path_to_variant_map {
+                    // Compare as &str to satisfy clippy::cmp_owned
+                    if vi.to_string().as_str() == variant_ident_str.as_str() {
+                        // Use clone_from to satisfy clippy::assigning_clones
+                        colliding_full_path.clone_from(fp);
+                        break;
+                    }
+                }
+                // This should be a compile_error! but that's hard to return from here directly.
+                // For now, let it panic during macro expansion. This is a development-time error.
+                // Ideally, TmpStateTreeBuilder would detect this semantic error earlier.
+                panic!(
+                    "State name collision: Full path '{}' and '{}' both generate the PascalCase enum variant identifier '{}'. Please ensure state names produce unique variants.", 
+                    tmp_state.full_path_name, colliding_full_path, variant_ident_str
+                );
+            }
+
+            full_path_to_variant_map.insert(
+                tmp_state.full_path_name.clone(),
+                variant_ident_pascal_case.clone(),
+            );
+            variants_code.push(variant_ident_pascal_case);
         }
 
         let mut match_arms = Vec::new();

@@ -2,6 +2,31 @@
 
 Reverse-chronological log of daily coding sessions.  Keep entries **concise** and link to PRs / issues for full detail.
 
+---
+
+## 2025-05-17 · _Session End (Linter & Runtime Refinements)_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Runtime Refinement)
+*   _Work_:
+    *   Addressed a comprehensive set of new Clippy linter warnings in `lit-bit-core/src/core/mod.rs` that arose from previous refactorings. This involved:
+        *   Refining `#[cfg(debug_assertions)] panic!` patterns to better satisfy `unreachable_code` and `manual_assert` lints (e.g., using explicit `else { /* release path code */ }`).
+        *   Applying `let...else` and `if let...else` for `manual_let_else` and `single_match_else`.
+        *   Correcting `uninlined_format_args` in `panic!` messages.
+        *   Fixing `needless_return`, `used_underscore_binding`, and `match_wild_err_arm`.
+    *   Resolved linter warnings in `lit-bit-core/tests/basic_machine_integration_test.rs` related to format arguments in assertions and correct `heapless::String` array initialization for comparisons.
+    *   Addressed linter warnings (`cmp_owned`, `assigning_clones`) in `lit-bit-macro/src/lib.rs`.
+    *   All linter checks and tests are now passing. `size-check-cortex-m` and `run-rv` examples are functional.
+*   _Next_:
+    *   Address high-priority items from the latest code review for `lit-bit-core/src/core/mod.rs`, focusing on:
+        *   Refining the `retain` predicate for `next_active_leaf_states` in `Runtime::send()` for parallel regions (Review Item 1).
+        *   Returning `Result` from `compute_ordered_exit_set` and propagating errors (Review Item 1).
+        *   Changing `is_proper_ancestor` to return `Result` and updating callers (Review Item 2).
+        *   Ensuring critical `push` operations in `collect_states_for_exit_post_order` panic in all builds (Review Item 3).
+        *   Changing `enter_state_recursive_logic` to return `Result` (Review Item 4).
+    *   Update `PROGRESS.md` to consolidate previous entries and fix typos as per review.
+
+---
+
 ## 2025-05-17 · _Session Start (Runtime & Test Refinements)_
 *   _Author_: @Gemini (via @user)
 *   _Phase_: 03-parallel-states (Runtime Refinement)

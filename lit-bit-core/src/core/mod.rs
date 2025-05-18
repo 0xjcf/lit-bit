@@ -127,6 +127,20 @@ pub const MAX_ACTIVE_REGIONS: usize = 4; // Max parallel regions/active states w
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)] // Added for PathTooLongError
 pub struct PathTooLongError;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum EntryErrorKind {
+    CycleDetected,
+    CapacityExceeded,
+    StateNotFound, // Added for the case where get_state_node returns None
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct EntryError {
+    pub kind: EntryErrorKind,
+    // Potentially add offending StateType here if needed for better error reporting
+    // pub state_id: Option<StateType>
+}
+
 /// Runtime instance of a state machine.
 ///
 /// Generic Parameters:
@@ -162,42 +176,34 @@ fn enter_state_recursive_logic<StateType, EventType, ContextType>(
     state_id_to_enter: StateType,
     accumulator: &mut heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
     visited_during_entry: &mut heapless::Vec<StateType, { MAX_ACTIVE_REGIONS * 2 }>, // Max theoretical active states + some buffer for path
-) where
+) -> Result<(), EntryError>
+// Changed return type
+where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     EventType: Copy + Clone + PartialEq + Eq + core::hash::Hash + 'static,
     ContextType: Clone + 'static,
 {
-    // Perform cycle detection check
-    // In debug mode, this will panic if a cycle is detected.
-    // In release mode, this compiles away to nothing.
-    if visited_during_entry.contains(&state_id_to_enter) {
-        if cfg!(debug_assertions) {
-            panic!(
-                "Cycle detected during enter_state_recursive_logic for state: {state_id_to_enter:?}"
-            );
-        } else {
-            return; // Return in release if cycle detected
-        }
+    let is_cycle = visited_during_entry.contains(&state_id_to_enter);
+    debug_assert!(
+        !is_cycle,
+        "Cycle detected during enter_state_recursive_logic for state: {state_id_to_enter:?}"
+    );
+    if is_cycle {
+        return Err(EntryError {
+            kind: EntryErrorKind::CycleDetected,
+        });
     }
 
-    // In release mode, if a cycle is detected, return to prevent an infinite loop.
-    // This check is redundant in debug mode if debug_assert panics, but necessary for release control flow.
-    #[cfg(not(debug_assertions))]
-    if visited_during_entry.contains(&state_id_to_enter) {
-        return;
-    }
-
-    // Use push and check Result for capacity with heapless::Vec
-    if visited_during_entry.push(state_id_to_enter).is_err() {
-        if cfg!(debug_assertions) {
-            panic!(
-                "Visited entry path too long (capacity {}) for state: {:?}",
-                visited_during_entry.capacity(),
-                state_id_to_enter
-            );
-        } else {
-            return; // Return in release if capacity exceeded
-        }
+    let push_failed = visited_during_entry.push(state_id_to_enter).is_err();
+    debug_assert!(
+        !push_failed,
+        "Visited entry path too long (capacity {}) for state: {state_id_to_enter:?}",
+        visited_during_entry.capacity()
+    );
+    if push_failed {
+        return Err(EntryError {
+            kind: EntryErrorKind::CapacityExceeded,
+        });
     }
 
     if let Some(node) = machine_def.get_state_node(state_id_to_enter) {
@@ -206,22 +212,19 @@ fn enter_state_recursive_logic<StateType, EventType, ContextType>(
         }
 
         if node.is_parallel {
-            // TODO: Optimize child lookup for parallel states (currently O(N) scan).
-            //       Refactor `MachineDefinition` (and the macro creating it) to store children more efficiently,
-            //       e.g., by adding a `child_region_ids: heapless::Vec<StateType, MAX_ACTIVE_REGIONS>` to `StateNode`
-            //       populated by the macro, or a map in `MachineDefinition` from parent ID to its direct children's IDs.
-            //       Then, this loop would iterate over `node.child_region_ids` or use the map lookup.
             for s_node_in_def in machine_def.states {
                 if s_node_in_def.parent == Some(state_id_to_enter) {
+                    // Propagate error using ? operator
                     enter_state_recursive_logic(
                         machine_def,
                         context,
                         s_node_in_def.id,
                         accumulator,
-                        visited_during_entry, // Pass visited set along
-                    );
+                        visited_during_entry,
+                    )?;
                 }
             }
+        // Collapsed else if here
         } else if let Some(initial_child_id) = node.initial_child {
             enter_state_recursive_logic(
                 machine_def,
@@ -229,20 +232,30 @@ fn enter_state_recursive_logic<StateType, EventType, ContextType>(
                 initial_child_id,
                 accumulator,
                 visited_during_entry,
+            )?;
+        // This is the accumulator push for leaf states. If it fails, it's a critical sizing error.
+        } else if accumulator.push(state_id_to_enter).is_err() {
+            // Unconditional panic as this indicates MAX_ACTIVE_REGIONS is too small.
+            panic!(
+                "MAX_ACTIVE_REGIONS ({}) exceeded while accumulating leaf states for {:?}.",
+                accumulator.capacity(),
+                state_id_to_enter
             );
-        } else {
-            accumulator
-                .push(state_id_to_enter)
-                .expect("MAX_ACTIVE_REGIONS exceeded while accumulating leaf states.");
         }
     } else {
-        #[cfg(debug_assertions)]
-        panic!(
-            "enter_state_recursive_logic: State ID ({state_id_to_enter:?}) not found in MachineDefinition."
-        );
+        // State not found
+        if cfg!(debug_assertions) {
+            panic!(
+                "enter_state_recursive_logic: State ID ({state_id_to_enter:?}) not found in MachineDefinition."
+            );
+        } else {
+            return Err(EntryError {
+                kind: EntryErrorKind::StateNotFound,
+            });
+        }
     }
-    // Pop after processing children (or if it's a leaf)
     let _ = visited_during_entry.pop();
+    Ok(())
 }
 
 // Define PotentialTransition struct at the module level
@@ -288,17 +301,20 @@ where
 
         let top_level_initial_state_id = machine_def.initial_leaf_state;
 
-        enter_state_recursive_logic(
+        // Handle Result from enter_state_recursive_logic
+        if let Err(entry_error) = enter_state_recursive_logic(
             &machine_def,
             &mut mutable_context,
             top_level_initial_state_id,
             &mut active_states_vec,
             &mut visited_for_initial_entry,
-        );
+        ) {
+            panic!("Failed to initialize state machine due to entry error: {entry_error:?}");
+        }
 
         assert!(
             !active_states_vec.is_empty(),
-            "Initial state ID specified in MachineDefinition not found in STATES array, or initial state setup resulted in no active states."
+            "Initial state ID specified in MachineDefinition not found in STATES array, or initial state setup resulted in no active states (after successful entry logic completion implies this should not happen)."
         );
 
         Runtime {
@@ -376,23 +392,19 @@ where
         &self,
         ancestor_candidate_id: StateType,
         descendant_candidate_id: StateType,
-    ) -> bool {
+    ) -> Result<bool, PathTooLongError> {
+        // Changed return type
         if ancestor_candidate_id == descendant_candidate_id {
-            return false;
+            return Ok(false);
         }
-        if let Ok(path_from_descendant) = self.get_path_to_root(descendant_candidate_id) {
-            path_from_descendant
+        match self.get_path_to_root(descendant_candidate_id) {
+            Ok(path_from_descendant) => Ok(path_from_descendant
                 .iter()
                 .skip(1)
-                .any(|&p_state| p_state == ancestor_candidate_id)
-        } else {
-            // This is the Err case from the if-let pattern change for get_path_to_root
-            if cfg!(debug_assertions) {
-                panic!(
-                    "PathTooLongError in is_proper_ancestor, cannot determine ancestry reliably."
-                );
-            } else {
-                false // Removed needless return
+                .any(|&p_state| p_state == ancestor_candidate_id)),
+            Err(e) => {
+                // Propagate PathTooLongError
+                Err(e)
             }
         }
     }
@@ -404,7 +416,8 @@ where
                 continue;
             }
 
-            match self.get_path_to_root(leaf_id) {
+            let path_result = self.get_path_to_root(leaf_id);
+            match path_result {
                 Ok(path_from_leaf_to_root) => {
                     for i in 1..path_from_leaf_to_root.len() {
                         if path_from_leaf_to_root[i] == parent_id {
@@ -413,11 +426,11 @@ where
                     }
                 }
                 Err(PathTooLongError) => {
-                    // Changed from Err(_) to Err(PathTooLongError)
-                    #[cfg(debug_assertions)]
-                    panic!(
+                    debug_assert!(
+                        false,
                         "PathTooLongError in get_active_child_of for leaf {leaf_id:?}. This may indicate M is too small."
                     );
+                    // In release, we can't determine the child via this path, so continue to the next leaf.
                 }
             }
         }
@@ -429,7 +442,7 @@ where
         &self,
         leaf_state_id_being_exited: StateType,
         lca_id: Option<StateType>,
-    ) -> heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION> {
+    ) -> Result<heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>, PathTooLongError> {
         // Return type uses new name
 
         let mut states_to_potentially_exit: heapless::Vec<StateType, M> = heapless::Vec::new();
@@ -442,9 +455,11 @@ where
             if lca_id == Some(id) {
                 break;
             }
-            states_to_potentially_exit.push(id).unwrap_or_else(|_| {
-                panic!("Exit path too long for states_to_potentially_exit vec")
-            });
+            // Check capacity before pushing to states_to_potentially_exit
+            if states_to_potentially_exit.push(id).is_err() {
+                // This implies M is too small for the hierarchy depth of this branch.
+                return Err(PathTooLongError);
+            }
             current_id_on_path = self.machine_def.get_parent_of(id);
         }
         // states_to_potentially_exit is now [leaf, p1, p2, ..., child_of_lca]
@@ -465,7 +480,7 @@ where
                 &mut recursion_guard_vec, // Pass the new guard
             );
         }
-        collected_for_exit
+        Ok(collected_for_exit)
     }
 
     // Recursive helper for compute_ordered_exit_set
@@ -481,24 +496,23 @@ where
             return;
         }
 
-        if recursion_guard.contains(&current_state_id) {
-            if cfg!(debug_assertions) {
-                panic!(
-                    "Cycle detected during collect_states_for_exit_post_order for state: {current_state_id:?}"
-                );
-            } else {
-                return; // Prevent infinite recursion in release
-            }
+        let is_cycle_in_exit = recursion_guard.contains(&current_state_id);
+        debug_assert!(
+            !is_cycle_in_exit,
+            "Cycle detected during collect_states_for_exit_post_order for state: {current_state_id:?}"
+        );
+        if is_cycle_in_exit {
+            return;
         }
-        if recursion_guard.push(current_state_id).is_err() {
-            if cfg!(debug_assertions) {
-                panic!(
-                    "Recursion depth exceeded in collect_states_for_exit_post_order (capacity {}) for state: {current_state_id:?}",
-                    recursion_guard.capacity()
-                );
-            } else {
-                return; // Stop if capacity exceeded in release
-            }
+
+        let push_guard_failed = recursion_guard.push(current_state_id).is_err();
+        debug_assert!(
+            !push_guard_failed,
+            "Recursion depth exceeded in collect_states_for_exit_post_order (capacity {}) for state: {current_state_id:?}",
+            recursion_guard.capacity()
+        );
+        if push_guard_failed {
+            return;
         }
 
         let Some(current_node) = self.machine_def.get_state_node(current_state_id) else {
@@ -560,28 +574,34 @@ where
 
         // Add current_state_id to the list *after* its children have been processed and added.
         if !already_added.contains(&current_state_id) {
-            // Ensure it's added only once
-            debug_assert!(
-                ordered_exit_list.push(current_state_id).is_ok(),
-                "Exit list (ordered_exit_list) overflow, capacity {}",
-                ordered_exit_list.capacity()
+            // Ensure it's added only once. If these critical lists overflow, it's a fatal error.
+            ordered_exit_list.push(current_state_id).expect(
+                "Exit list (ordered_exit_list) overflow due to MAX_NODES_FOR_COMPUTATION too small",
             );
-            // In release, if push fails, it's silently ignored here. This might be problematic.
-            // Consider if release builds should also handle this error, e.g., by returning early.
 
-            debug_assert!(
-                already_added.push(current_state_id).is_ok(),
-                "Exit list (already_added) overflow, capacity {}",
-                already_added.capacity()
+            already_added.push(current_state_id).expect(
+                "Exit list (already_added) overflow due to MAX_NODES_FOR_COMPUTATION too small",
             );
-            // Similar release consideration for already_added.
         }
         let _ = recursion_guard.pop(); // Pop after processing this node and its children
     }
 
     // is_descendant_or_self method from before
     fn is_descendant_or_self(&self, candidate_id: StateType, ancestor_id: StateType) -> bool {
-        candidate_id == ancestor_id || self.is_proper_ancestor(ancestor_id, candidate_id)
+        if candidate_id == ancestor_id {
+            return true;
+        }
+        match self.is_proper_ancestor(ancestor_id, candidate_id) {
+            Ok(is_proper) => is_proper,
+            Err(_) => {
+                if cfg!(debug_assertions) {
+                    panic!("PathTooLongError in is_descendant_or_self, cannot determine reliably.");
+                } else {
+                    // Default to false if ancestry check had an error in release.
+                    false
+                }
+            }
+        }
     }
 
     /// Executes entry actions from a state (typically child of LCA) down to a target leaf state.
@@ -597,14 +617,13 @@ where
         let mut visited_for_current_entry: heapless::Vec<StateType, { MAX_ACTIVE_REGIONS * 2 }> =
             heapless::Vec::new();
 
-        let Ok(mut path_to_target) = self.get_path_to_root(target_state_id) else {
-            if cfg!(debug_assertions) {
-                panic!(
-                    "PathTooLongError encountered when trying to get path for target_state_id in execute_entry_actions_from_lca"
-                );
-            } else {
-                return new_active_leaf_states; // Return empty vec in release if path error
-            }
+        let path_to_target_result = self.get_path_to_root(target_state_id);
+        let Ok(mut path_to_target) = path_to_target_result else {
+            debug_assert!(
+                path_to_target_result.is_ok(),
+                "PathTooLongError encountered when trying to get path for target_state_id in execute_entry_actions_from_lca"
+            );
+            return new_active_leaf_states;
         };
         path_to_target.reverse();
 
@@ -617,13 +636,25 @@ where
 
         if start_entering_idx >= path_to_target.len() {
             if self.machine_def.get_state_node(target_state_id).is_some() {
-                enter_state_recursive_logic(
+                let result = enter_state_recursive_logic(
                     &self.machine_def,
                     &mut self.context,
                     target_state_id,
                     &mut new_active_leaf_states,
                     &mut visited_for_current_entry,
                 );
+                #[cfg(debug_assertions)]
+                {
+                    if let Err(e) = result {
+                        panic!(
+                            "Entry error during execute_entry_actions_from_lca (direct target): {e:?}"
+                        );
+                    }
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    let _ = result; // Suppress unused_variable warning in release
+                }
             }
             return new_active_leaf_states;
         }
@@ -632,24 +663,48 @@ where
             let state_on_path_id = path_to_target[i];
 
             if state_on_path_id == target_state_id {
-                enter_state_recursive_logic(
+                let result = enter_state_recursive_logic(
                     &self.machine_def,
                     &mut self.context,
                     state_on_path_id,
                     &mut new_active_leaf_states,
                     &mut visited_for_current_entry,
                 );
+                #[cfg(debug_assertions)]
+                {
+                    if let Err(e) = result {
+                        panic!(
+                            "Entry error during execute_entry_actions_from_lca (target on path): {e:?}"
+                        );
+                    }
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    let _ = result; // Suppress unused_variable warning in release
+                }
                 break;
             }
             if let Some(node) = self.machine_def.get_state_node(state_on_path_id) {
                 if node.is_parallel {
-                    enter_state_recursive_logic(
+                    let result = enter_state_recursive_logic(
                         &self.machine_def,
                         &mut self.context,
                         state_on_path_id,
                         &mut new_active_leaf_states,
                         &mut visited_for_current_entry,
                     );
+                    #[cfg(debug_assertions)]
+                    {
+                        if let Err(e) = result {
+                            panic!(
+                                "Entry error during execute_entry_actions_from_lca (parallel on path): {e:?}"
+                            );
+                        }
+                    }
+                    #[cfg(not(debug_assertions))]
+                    {
+                        let _ = result; // Suppress unused_variable warning in release
+                    }
                     break;
                 }
                 if let Some(entry_fn) = node.entry_action {
@@ -727,47 +782,34 @@ where
                 if core::ptr::eq(pt_candidate, other_pt) {
                     continue;
                 }
-                // If another transition's source is an ancestor of this candidate's source, this candidate is more specific.
-                // If this candidate's source is an ancestor of another's source, this candidate is less specific, so skip it.
-                if self.is_proper_ancestor(
-                    pt_candidate.transition_from_state_id, // ancestor_candidate
-                    other_pt.transition_from_state_id,     // descendant_candidate
+
+                // Attempt to check ancestry. If error, treat as inconclusive (don't skip pt_candidate on this basis).
+                match self.is_proper_ancestor(
+                    pt_candidate.transition_from_state_id,
+                    other_pt.transition_from_state_id,
                 ) {
-                    // pt_candidate is an ancestor of other_pt's source state. So other_pt is more specific.
-                    // This means pt_candidate (the current one) should be skipped if other_pt is chosen.
-                    // The current logic means: if a transition exists from a child, we prefer that over parent.
-                    // So, if `other_pt.transition_from_state_id` is a descendant of `pt_candidate.transition_from_state_id`,
-                    // then pt_candidate should NOT be added.
-                } else if self.is_proper_ancestor(
-                    other_pt.transition_from_state_id,     // ancestor_candidate
-                    pt_candidate.transition_from_state_id, // descendant_candidate
-                ) {
-                    // other_pt is an ancestor of pt_candidate. pt_candidate is more specific.
-                    // But the original rule was: if other_pt.from is ancestor of pt.from, pt is more specific, so *other_pt* is skipped.
-                    // This means `pt_candidate` (which is more specific) makes `other_pt` (its ancestor) invalid.
-                    // The loop structure means we are deciding whether to *add* pt_candidate.
-                    // If any *other* transition `other_pt` is from a descendant of `pt_candidate`'s source, then `pt_candidate` is less specific and should be ignored.
-                    // No, this is wrong. If `pt_candidate.from_state` is an ancestor of `other_pt.from_state`, then `other_pt` is more specific.
-                    // The original logic:
-                    // if self.is_proper_ancestor(other_pt.transition_from_state_id, pt_candidate.transition_from_state_id)
-                    // This means `other_pt.from` is an ancestor of `pt_candidate.from`. So `pt_candidate` is deeper/more specific.
-                    // In this case, the `other_pt` (ancestor transition) would be eliminated if `pt_candidate` is chosen.
-                    // The loop adds `pt_candidate` unless a *more specific one that would conflict* is found.
-                    // The current arbitration seems to keep the *deepest* one along any given path.
-                    // If S1->S2 and S1_Child->S3, and S1_Child is active, S1_Child->S3 wins.
-                    // This seems correct for SCXML semantics (deepest transition in active configuration).
-                    // What if `pt_candidate` is from `S1` and `other_pt` is from `S1_Child` (descendant)?
-                    // `is_proper_ancestor(S1, S1_Child)` is true. `pt_candidate` is from S1. `other_pt` from S1_Child.
-                    // This means `other_pt` is more specific. `pt_candidate` should be skipped.
-                    if self.is_proper_ancestor(
-                        pt_candidate.transition_from_state_id,
-                        other_pt.transition_from_state_id,
-                    ) {
-                        // pt_candidate's source is an ancestor of other_pt's source.
-                        // This means other_pt is more specific. So, pt_candidate should be skipped.
-                        continue 'candidate_loop;
+                    Ok(is_ancestor) => {
+                        if is_ancestor {
+                            // pt_candidate's source is an ancestor of other_pt's source.
+                            // This means other_pt is more specific. So, pt_candidate should be skipped.
+                            continue 'candidate_loop;
+                        }
+                    }
+                    Err(_) => {
+                        // PathTooLongError: Cannot determine ancestry. Conservatively don't skip pt_candidate.
+                        // This might lead to less optimal arbitration if paths are too long for M,
+                        // but avoids panic and ensures forward progress if possible.
+                        // Removed eprintln! for no_std compatibility.
+                        #[cfg(debug_assertions)]
+                        {
+                            // Consider a less disruptive debug output if needed, or just let it pass silently.
+                            // For now, no specific debug output here for release builds.
+                        }
                     }
                 }
+                // No need for the other is_proper_ancestor check, as the roles are swapped.
+                // The goal is: if pt_candidate is an ancestor of other_pt, pt_candidate is skipped.
+                // If other_pt is an ancestor of pt_candidate, pt_candidate is NOT skipped by this check (other_pt would be skipped when it's the candidate).
             }
             let push_result = arbitrated_transitions.push(pt_candidate.clone());
             #[cfg(debug_assertions)]
@@ -840,8 +882,17 @@ where
             } else {
                 // General LCA path (external transition or self-transition on composite state)
                 let lca_id = self.find_lca(active_leaf_for_this_trans, target_state_id);
-                let states_to_exit_for_branch =
+                // Handle Result from compute_ordered_exit_set
+                let states_to_exit_for_branch_result =
                     self.compute_ordered_exit_set(active_leaf_for_this_trans, lca_id);
+                let Ok(states_to_exit_for_branch) = states_to_exit_for_branch_result else {
+                    debug_assert!(
+                        false,
+                        "PathTooLongError from compute_ordered_exit_set for leaf {active_leaf_for_this_trans:?}"
+                    );
+                    // In release, skip this transition if its exit set can't be computed.
+                    continue;
+                };
 
                 for &state_to_exit_id in &states_to_exit_for_branch {
                     if !states_exited_this_step.contains(&state_to_exit_id) {
