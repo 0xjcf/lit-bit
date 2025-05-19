@@ -3,13 +3,18 @@
 #[cfg(test)]
 pub mod basic_machine_integration_test {
     use core::convert::TryFrom;
+    use heapless::String;
     use lit_bit_core::StateMachine;
     use lit_bit_macro::statechart;
-    // heapless::Vec might be used by tests if they assert on machine.state()
-    // For this module, the existing assertions use .as_slice() which doesn't directly require Vec in this scope
 
     const ACTION_LOG_CAPACITY: usize = 20;
     const ACTION_STRING_CAPACITY: usize = 32;
+
+    macro_rules! hstr {
+        ($s:expr) => {
+            String::<ACTION_STRING_CAPACITY>::try_from($s).expect("Failed to create test string")
+        };
+    }
 
     #[derive(Debug, Clone, PartialEq)]
     #[allow(clippy::struct_excessive_bools)]
@@ -88,10 +93,7 @@ pub mod basic_machine_integration_test {
     fn test_basic_state_machine_transitions_and_actions() {
         let mut machine = TestMachine::new(TestContext::default());
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        let expected_log_init: [heapless::String<ACTION_STRING_CAPACITY>; 1] = [
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
-                .expect("Log string create failed"),
-        ];
+        let expected_log_init: [String<ACTION_STRING_CAPACITY>; 1] = [hstr!("entry_s1")];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_init);
 
         machine.context_mut().clear_log();
@@ -101,22 +103,15 @@ pub mod basic_machine_integration_test {
             "Expected a transition for first Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        let expected_log_inc1: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("exit_s1")
-                .expect("Log string create failed"),
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("action_increment")
-                .expect("Log string create failed"),
-        ];
+        let expected_log_inc1: [String<ACTION_STRING_CAPACITY>; 2] =
+            [hstr!("exit_s1"), hstr!("action_increment")];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc1);
 
         machine.context_mut().clear_log();
         let transition_occurred_reset = machine.send(TestEvent::Reset);
         assert!(transition_occurred_reset, "Expected a transition for Reset");
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        let expected_log_reset1: [heapless::String<ACTION_STRING_CAPACITY>; 1] = [
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
-                .expect("Log string create failed"),
-        ];
+        let expected_log_reset1: [String<ACTION_STRING_CAPACITY>; 1] = [hstr!("entry_s1")];
         assert_eq!(
             machine.context().action_log.as_slice(),
             &expected_log_reset1
@@ -129,12 +124,8 @@ pub mod basic_machine_integration_test {
             "Expected a transition for second Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
-        let expected_log_inc2: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("exit_s1")
-                .expect("Log string create failed"),
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("action_increment")
-                .expect("Log string create failed"),
-        ];
+        let expected_log_inc2: [String<ACTION_STRING_CAPACITY>; 2] =
+            [hstr!("exit_s1"), hstr!("action_increment")];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc2);
 
         machine.context_mut().clear_log();
@@ -144,10 +135,7 @@ pub mod basic_machine_integration_test {
             "Expected a transition for second Reset"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        let expected_log_reset2: [heapless::String<ACTION_STRING_CAPACITY>; 1] = [
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
-                .expect("Log string create failed"),
-        ];
+        let expected_log_reset2: [String<ACTION_STRING_CAPACITY>; 1] = [hstr!("entry_s1")];
         assert_eq!(
             machine.context().action_log.as_slice(),
             &expected_log_reset2
@@ -178,12 +166,8 @@ pub mod basic_machine_integration_test {
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
 
-        let expected_decrement_log: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("exit_s1")
-                .expect("Failed to create string for expected log"),
-            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
-                .expect("Failed to create string for expected log"),
-        ];
+        let expected_decrement_log: [String<ACTION_STRING_CAPACITY>; 2] =
+            [hstr!("exit_s1"), hstr!("entry_s1")];
         assert_eq!(
             machine.context().action_log.as_slice(),
             &expected_decrement_log,

@@ -4,59 +4,46 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ---
 
-## 2025-05-18 · _Session Start (Code Review Follow-up & Final Lint Fixes)_
+## 2025-05-18 · _Session End (Code Review Follow-up Part 2)_
 *   _Author_: @Gemini (via @user)
 *   _Phase_: 03-parallel-states (Runtime Refinement & Polish)
 *   _Work_:
-    *   Addressed a new round of code review suggestions, primarily focusing on `lit-bit-core/src/core/mod.rs` and `lit-bit-macro/src/lib.rs`.
+    *   Addressed a second batch of code review suggestions following initial lint/test fixes:
     *   Core Runtime (`lit-bit-core/src/core/mod.rs`):
-        *   Modified `compute_ordered_exit_set` to return `Result` and updated `send` to handle this, aborting the `send` on error by returning `false`.
-        *   Changed `find_lca` to return `Result` and updated `send` to handle this, aborting `send` on error by returning `false`.
-        *   Refined `#[cfg(debug_assertions)] panic!` patterns with explicit `else { /* release path code */ }` blocks to resolve `unreachable_code` and `manual_assert` linter warnings.
-        *   Corrected `uninlined_format_args` in `panic!` messages.
-        *   Addressed `clippy::manual_let_else` and `clippy::single_match_else` for `Result` handling.
+        *   Changed `Runtime::new` to accept `&'static MachineDefinition` (API change).
+        *   Updated `compute_ordered_exit_set` to return `Result` and `send()` to abort on error.
+        *   Updated `find_lca` to return `Result` and `send()` to abort on error.
+        *   Ensured `visited_during_entry` in `enter_state_recursive_logic` uses capacity `M`.
+        *   Updated `is_descendant_or_self` to return `Result` and updated callers in `send()`.
+        *   Modified `enter_state_recursive_logic` to return `Result<(), EntryError>` and updated callers to handle/panic.
+        *   Ensured `potential_transitions.push()` errors in `send()` lead to `return false`.
+        *   Implemented `Display` and `std::error::Error` for `PathTooLongError` and `EntryError`.
+        *   Added doc comment to `get_active_child_of`.
     *   Macro (`lit-bit-macro/src/lib.rs`):
-        *   Ensured tests correctly handle `Result` returned by `generate_state_id_logic` by using `.expect()`.
-        *   Updated test assertions for `generate_state_id_logic` to include generated doc comments for `from_str_path`.
-        *   Corrected `SynError::new` usage (from `new_spanned`) in `generate_state_id_logic`.
-        *   Added doc comment for `from_str_path` regarding case sensitivity.
+        *   Updated macro to pass `&MACHINE_DEF_CONST` to `Runtime::new`.
+        *   Refactored loop for finding colliding variant names in `generate_state_id_logic`.
+        *   Changed `max_nodes_for_computation_val` to use `quote!{ M_VAL * lit_bit_core::core::MAX_ACTIVE_REGIONS }` and ensured it's used as `{ expr }` in generic arguments.
     *   Tests (`lit-bit-core/tests/basic_machine_integration_test.rs`):
-        *   Corrected `heapless::String` array initializations for log assertions, resolving type inference issues.
-        *   Fixed `uninlined_format_args` in test assertion messages.
+        *   Updated tests to use `static MachineDefinition`s for `&'static` lifetime compliance.
+        *   Increased `ACTION_LOG_CAPACITY` and implemented `hstr!` macro for test ergonomics.
     *   Examples (`lit-bit-core/examples/`):
-        *   Updated `traffic_light.rs` and `traffic_light_cortex_m.rs` to use renamed const generic `MAX_NODES_FOR_COMPUTATION_VAL` and added `#[allow(dead_code)]` where necessary.
-    *   All linter checks and all tests are now passing. The codebase is prepared for another round of review.
+        *   Updated examples (`traffic_light.rs`, `traffic_light_cortex_m.rs`) for `Runtime::new` taking `&'static MachineDefinition`.
+        *   Re-exported `MAX_ACTIVE_REGIONS` from `lit-bit-core` crate root.
+        *   Added type alias for `Runtime` in `traffic_light.rs`.
+        *   Renamed/optimized `M` and related consts in `traffic_light_cortex_m.rs` and updated comments.
+    *   The typo in the previous PROGRESS.md entry was fixed implicitly by creating this new entry structure.
+    *   Addressed an unclosed delimiter error in `core/mod.rs` test section caused by previous model edits.
 *   _Next_:
-    *   Submit current changes for code review.
-    *   Await feedback and address any new items.
-    *   Continue with previously deferred high-priority items for `lit-bit-core/src/core/mod.rs` runtime logic, such as refining the `retain` predicate in `send()` for parallel regions and optimizing child lookups.
+    *   Submit current changes for a new code review.
+    *   Focus on critical deferred items: 
+        *   `retain` predicate logic in `send()` for parallel composite self-transitions.
+        *   Optimization of child lookup for parallel states (macro & core).
+        *   Optimization of the arbitration loop in `send()`.
+    *   Consider other deferred items like further error propagation (e.g. from `execute_entry_actions_from_lca`).
 
 ---
 
 ## 2025-05-17 · _Session End (Linter & Runtime Refinements)_
-*   _Author_: @Gemini (via @user)
-*   _Phase_: 03-parallel-states (Runtime Refinement)
-*   _Work_:
-    *   Addressed a comprehensive set of new Clippy linter warnings in `lit-bit-core/src/core/mod.rs` that arose from previous refactorings. This involved:
-        *   Refining `#[cfg(debug_assertions)] panic!` patterns to better satisfy `unreachable_code` and `manual_assert` lints (e.g., using explicit `else { /* release path code */ }`).
-        *   Applying `let...else` and `if let...else` for `manual_let_else` and `single_match_else`.
-        *   Correcting `uninlined_format_args` in `panic!` messages.
-        *   Fixing `needless_return`, `used_underscore_binding`, and `match_wild_err_arm`.
-    *   Resolved linter warnings in `lit-bit-core/tests/basic_machine_integration_test.rs` related to format arguments in assertions and correct `heapless::String` array initialization for comparisons.
-    *   Addressed linter warnings (`cmp_owned`, `assigning_clones`) in `lit-bit-macro/src/lib.rs`.
-    *   All linter checks and tests are now passing. `size-check-cortex-m` and `run-rv` examples are functional.
-*   _Next_:
-    *   Address high-priority items from the latest code review for `lit-bit-core/src/core/mod.rs`, focusing on:
-        *   Refining the `retain` predicate for `next_active_leaf_states` in `Runtime::send()` for parallel regions (Review Item 1).
-        *   Returning `Result` from `compute_ordered_exit_set` and propagating errors (Review Item 1).
-        *   Changing `is_proper_ancestor` to return `Result` and updating callers (Review Item 2).
-        *   Ensuring critical `push` operations in `collect_states_for_exit_post_order` panic in all builds (Review Item 3).
-        *   Changing `enter_state_recursive_logic` to return `Result` (Review Item 4).
-    *   Update `PROGRESS.md` to consolidate previous entries and fix typos as per review.
-
----
-
-## 2025-05-17 · _Session Start (Runtime & Test Refinements)_
 *   _Author_: @Gemini (via @user)
 *   _Phase_: 03-parallel-states (Runtime Refinement)
 *   _Work_:
@@ -65,10 +52,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
     *   Corrected state definitions in the `traffic_light.rs` (RISC-V) example to resolve a runtime hang.
     *   Refactored test assertions in `basic_machine_integration_test.rs` for clarity and correctness.
 *   _Next_:
-    *   Continue with outstanding high-priority items from the latest code review for `lit-bit-core/src/core/mod.rs`, particularly:
-        *   Refining the `retain` predicate for `next_active_leaf_states` in `Runtime::send()` to correctly handle parallel regions during composite self-transitions.
-        *   Implementing safeguards (cycle/capacity checks) in `collect_states_for_exit_post_order`.
-    *   Address major deferred refactoring tasks like optimizing child lookup for parallel states.
+    *   (This was the start of the session that just ended, the work above effectively replaces these next steps as they were completed or superseded by the new review).
 
 ---
 

@@ -124,21 +124,59 @@ where
 // Make MAX_ACTIVE_REGIONS public so it can be accessed by lib.rs
 pub const MAX_ACTIVE_REGIONS: usize = 4; // Max parallel regions/active states we can track
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)] // Added for PathTooLongError
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct PathTooLongError;
+
+impl core::fmt::Display for PathTooLongError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "Maximum hierarchy path depth exceeded during path calculation."
+        )
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for PathTooLongError {}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum EntryErrorKind {
     CycleDetected,
-    CapacityExceeded,
-    StateNotFound, // Added for the case where get_state_node returns None
+    CapacityExceeded, // For visited_during_entry vector
+    StateNotFound,
+    // AccumulatorFull, // If we decide to make accumulator push return an error
+}
+
+impl core::fmt::Display for EntryErrorKind {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EntryErrorKind::CycleDetected => write!(f, "State entry cycle detected."),
+            EntryErrorKind::CapacityExceeded => write!(
+                f,
+                "Capacity exceeded during state entry (e.g., visited path too long)."
+            ),
+            EntryErrorKind::StateNotFound => write!(f, "State not found during entry process."),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct EntryError {
     pub kind: EntryErrorKind,
-    // Potentially add offending StateType here if needed for better error reporting
-    // pub state_id: Option<StateType>
+    // pub state_id: Option<StateType> // Could add this later if specific state context is needed for errors
+}
+
+impl core::fmt::Display for EntryError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Entry Error: {}", self.kind)
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for EntryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        None // No underlying source error for these simple error types
+    }
 }
 
 /// Runtime instance of a state machine.
@@ -163,21 +201,25 @@ pub struct Runtime<
     EventType: Copy + Clone + PartialEq + Eq + core::hash::Hash + 'static,
     ContextType: Clone + 'static,
 {
-    machine_def: MachineDefinition<StateType, EventType, ContextType>,
+    machine_def: &'static MachineDefinition<StateType, EventType, ContextType>,
     active_leaf_states: heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
     context: ContextType,
 }
 
 // Helper function, can be outside impl Runtime or a static method if preferred.
 // Making it a free function for now to ensure no `self` issues initially.
-fn enter_state_recursive_logic<StateType, EventType, ContextType>(
+fn enter_state_recursive_logic<
+    StateType,
+    EventType,
+    ContextType,
+    const M: usize, // Added M here, removed VISITED_CAP
+>(
     machine_def: &MachineDefinition<StateType, EventType, ContextType>,
     context: &mut ContextType,
     state_id_to_enter: StateType,
     accumulator: &mut heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
-    visited_during_entry: &mut heapless::Vec<StateType, { MAX_ACTIVE_REGIONS * 2 }>, // Max theoretical active states + some buffer for path
+    visited_during_entry: &mut heapless::Vec<StateType, M>, // Use M directly
 ) -> Result<(), EntryError>
-// Changed return type
 where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     EventType: Copy + Clone + PartialEq + Eq + core::hash::Hash + 'static,
@@ -215,7 +257,7 @@ where
             for s_node_in_def in machine_def.states {
                 if s_node_in_def.parent == Some(state_id_to_enter) {
                     // Propagate error using ? operator
-                    enter_state_recursive_logic(
+                    enter_state_recursive_logic::<_, _, _, M>(
                         machine_def,
                         context,
                         s_node_in_def.id,
@@ -226,7 +268,7 @@ where
             }
         // Collapsed else if here
         } else if let Some(initial_child_id) = node.initial_child {
-            enter_state_recursive_logic(
+            enter_state_recursive_logic::<_, _, _, M>(
                 machine_def,
                 context,
                 initial_child_id,
@@ -291,19 +333,18 @@ where
     /// - If `MAX_ACTIVE_REGIONS` is exceeded while trying to push initial leaf states (e.g. for a parallel initial state).
     /// - If `M` (formerly `MAX_HIERARCHY_DEPTH`) is exceeded during internal path calculations (via `expect` calls).
     pub fn new(
-        machine_def: MachineDefinition<StateType, EventType, ContextType>,
+        machine_def: &'static MachineDefinition<StateType, EventType, ContextType>,
         initial_context: ContextType,
     ) -> Self {
         let mut mutable_context = initial_context;
         let mut active_states_vec = heapless::Vec::new();
-        let mut visited_for_initial_entry: heapless::Vec<StateType, { MAX_ACTIVE_REGIONS * 2 }> =
-            heapless::Vec::new();
+        let mut visited_for_initial_entry: heapless::Vec<StateType, M> = heapless::Vec::new();
 
         let top_level_initial_state_id = machine_def.initial_leaf_state;
 
-        // Handle Result from enter_state_recursive_logic
-        if let Err(entry_error) = enter_state_recursive_logic(
-            &machine_def,
+        // Pass M explicitly if needed, or let it be inferred from the type of visited_for_initial_entry
+        if let Err(entry_error) = enter_state_recursive_logic::<_, _, _, M>(
+            machine_def,
             &mut mutable_context,
             top_level_initial_state_id,
             &mut active_states_vec,
@@ -318,9 +359,9 @@ where
         );
 
         Runtime {
-            machine_def,
+            machine_def, // Assign the reference
             active_leaf_states: active_states_vec,
-            context: mutable_context, // context is moved here
+            context: mutable_context,
         }
     }
 
@@ -608,8 +649,7 @@ where
         // This function's error handling for path needs thought
         let mut new_active_leaf_states: heapless::Vec<StateType, MAX_ACTIVE_REGIONS> =
             heapless::Vec::new();
-        let mut visited_for_current_entry: heapless::Vec<StateType, { MAX_ACTIVE_REGIONS * 2 }> =
-            heapless::Vec::new();
+        let mut visited_for_current_entry: heapless::Vec<StateType, M> = heapless::Vec::new();
 
         let path_to_target_result = self.get_path_to_root(target_state_id);
         let Ok(mut path_to_target) = path_to_target_result else {
@@ -630,8 +670,8 @@ where
 
         if start_entering_idx >= path_to_target.len() {
             if self.machine_def.get_state_node(target_state_id).is_some() {
-                let result = enter_state_recursive_logic(
-                    &self.machine_def,
+                let result = enter_state_recursive_logic::<_, _, _, M>(
+                    self.machine_def, // Removed & as self.machine_def is already a reference
                     &mut self.context,
                     target_state_id,
                     &mut new_active_leaf_states,
@@ -657,8 +697,8 @@ where
             let state_on_path_id = path_to_target[i];
 
             if state_on_path_id == target_state_id {
-                let result = enter_state_recursive_logic(
-                    &self.machine_def,
+                let result = enter_state_recursive_logic::<_, _, _, M>(
+                    self.machine_def, // Removed &
                     &mut self.context,
                     state_on_path_id,
                     &mut new_active_leaf_states,
@@ -680,8 +720,8 @@ where
             }
             if let Some(node) = self.machine_def.get_state_node(state_on_path_id) {
                 if node.is_parallel {
-                    let result = enter_state_recursive_logic(
-                        &self.machine_def,
+                    let result = enter_state_recursive_logic::<_, _, _, M>(
+                        self.machine_def, // Removed &
                         &mut self.context,
                         state_on_path_id,
                         &mut new_active_leaf_states,
@@ -1340,7 +1380,11 @@ mod tests {
 
     #[test]
     fn hierarchical_machine_starts_in_correct_initial_leaf_with_entry_actions() {
-        let machine_def = MachineDefinition::new(
+        static MACHINE_DEF: MachineDefinition<
+            TestHierarchyState,
+            TestHierarchyEvent,
+            HierarchicalActionLogContext,
+        > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
             TEST_HIERARCHY_TRANSITIONS,
             TestHierarchyState::ParentOne, // Top-level initial state for the machine definition
@@ -1349,7 +1393,7 @@ mod tests {
         let initial_context = HierarchicalActionLogContext::default();
         let runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def,
+                &MACHINE_DEF,
                 initial_context,
             );
 
@@ -1378,17 +1422,22 @@ mod tests {
 
     #[test]
     fn test_sibling_transition_with_lca() {
-        let machine_def = MachineDefinition::new(
+        static SIBLING_LCA_MACHINE_DEF: MachineDefinition<
+            TestHierarchyState,
+            TestHierarchyEvent,
+            HierarchicalActionLogContext,
+        > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
             TEST_HIERARCHY_TRANSITIONS,
-            TestHierarchyState::ParentOne, // Initial state path will lead to GrandchildOneAlphaXray
+            TestHierarchyState::ParentOne,
         );
 
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def,
+                &SIBLING_LCA_MACHINE_DEF, // <--- Uses the static definition
                 HierarchicalActionLogContext::default(),
             );
+
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::GrandchildOneAlphaXray]
@@ -1401,17 +1450,11 @@ mod tests {
             "Event EventTriggerToSibling should have been processed"
         );
 
-        // Expected final state: ChildOneBravo
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::ChildOneBravo]
         );
 
-        // Expected actions:
-        // 1. Exit GrandchildOneAlphaXray
-        // 2. Exit ChildOneAlpha
-        // 3. TransitionAction (defined on ChildOneAlpha -> ChildOneBravo transition)
-        // 4. Enter ChildOneBravo
         let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
             heapless::Vec::new();
         expected_log
@@ -1442,7 +1485,7 @@ mod tests {
         let initial_context = DefaultContext::default();
         let runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                TEST_MACHINE_DEF,
+                &TEST_MACHINE_DEF,
                 initial_context,
             );
         assert_eq!(runtime.state().as_slice(), &[TestState::S0]);
@@ -1468,7 +1511,7 @@ mod tests {
         let initial_context = CounterContext { count: 0 };
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                TEST_MACHINE_DEF,
+                &TEST_MACHINE_DEF,
                 initial_context,
             );
 
@@ -1496,7 +1539,7 @@ mod tests {
 
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                TEST_MACHINE_DEF,
+                &TEST_MACHINE_DEF,
                 CounterContext { count: 1 },
             ); // count is not 0
         assert!(!runtime.send(TestEvent::E0)); // Guard should fail
@@ -1505,7 +1548,7 @@ mod tests {
 
         let mut runtime_pass =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                TEST_MACHINE_DEF,
+                &TEST_MACHINE_DEF,
                 CounterContext { count: 0 },
             ); // count is 0
         assert!(runtime_pass.send(TestEvent::E0)); // Guard should pass
@@ -1526,7 +1569,7 @@ mod tests {
         let initial_context = CounterContext { count: 42 };
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                TEST_MACHINE_DEF,
+                &TEST_MACHINE_DEF,
                 initial_context,
             );
 
@@ -1552,7 +1595,7 @@ mod tests {
             );
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                TEST_MACHINE_DEF,
+                &TEST_MACHINE_DEF,
                 DefaultContext::default(),
             );
         assert!(!runtime.send(TestEvent::E1)); // Different event
@@ -1561,39 +1604,51 @@ mod tests {
 
     #[test]
     fn no_transition_if_state_does_not_match() {
-        const TEST_TRANSITIONS: &[Transition<TestState, TestEvent, TestContextForEmpty>] =
-            &[Transition {
-                from_state: TestState::S0,
-                event: TestEvent::E0,
-                to_state: TestState::S1,
-                action: None,
-                guard: None,
-            }];
-        const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContextForEmpty> =
-            MachineDefinition::new(
-                TEST_STATENODES_EMPTY_CTX_POPULATED,
-                TEST_TRANSITIONS,
-                TestState::S1,
-            ); // Start in S1
+        const TEST_TRANSITIONS_ST_MATCH: &[Transition<
+            TestState,
+            TestEvent,
+            TestContextForEmpty,
+        >] = &[Transition {
+            from_state: TestState::S0,
+            event: TestEvent::E0,
+            to_state: TestState::S1,
+            action: None,
+            guard: None,
+        }];
+        // This MachineDefinition is a const, so a reference to it is &'static
+        const TEST_MACHINE_DEF_ST_MATCH: MachineDefinition<
+            TestState,
+            TestEvent,
+            TestContextForEmpty,
+        > = MachineDefinition::new(
+            TEST_STATENODES_EMPTY_CTX_POPULATED,
+            TEST_TRANSITIONS_ST_MATCH, // Use the locally defined const name
+            TestState::S1,
+        );
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                TEST_MACHINE_DEF,
+                &TEST_MACHINE_DEF_ST_MATCH, // Pass by reference
                 DefaultContext::default(),
             );
-        assert!(!runtime.send(TestEvent::E0)); // Event E0 is for S0
+        assert!(!runtime.send(TestEvent::E0));
         assert_eq!(runtime.state().as_slice(), &[TestState::S1]);
     }
 
     #[test]
     fn test_child_to_parent_transition() {
-        let machine_def = MachineDefinition::new(
+        static CHILD_TO_PARENT_MACHINE_DEF: MachineDefinition<
+            TestHierarchyState,
+            TestHierarchyEvent,
+            HierarchicalActionLogContext,
+        > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
             TEST_HIERARCHY_TRANSITIONS,
-            TestHierarchyState::ParentOne, // Initial: GrandchildOneAlphaXray
+            TestHierarchyState::ParentOne,
         );
+
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def,
+                &CHILD_TO_PARENT_MACHINE_DEF,
                 HierarchicalActionLogContext::default(),
             );
         assert_eq!(
@@ -1608,28 +1663,16 @@ mod tests {
             "Event EventTriggerToParent should have been processed"
         );
 
-        // Expected final state: GrandchildOneAlphaXray (due to re-entry into ChildOneAlpha's initial)
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::GrandchildOneAlphaXray]
         );
 
-        // Expected actions for child-to-parent (GrandchildOneAlphaXray to ChildOneAlpha):
-        // 1. Exit GrandchildOneAlphaXray
-        // 2. TransitionAction (defined on GC1AX -> C1A transition)
-        // 3. Enter ChildOneAlpha (target of transition)
-        // 4. Enter GrandchildOneAlphaXray (initial child of ChildOneAlpha)
         let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
             heapless::Vec::new();
         expected_log
             .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
             .expect("Log full");
-        // ChildOneAlpha should NOT be exited if it's the target of the transition.
-        // The previous diff incorrectly showed this line being re-added by the model.
-        // It should remain commented out or removed as per the reasoning.
-        // expected_log
-        //     .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
-        //     .expect("Log full");
         expected_log
             .push(heapless::String::try_from("TransitionAction").unwrap())
             .expect("Log full");
@@ -1644,40 +1687,34 @@ mod tests {
 
     #[test]
     fn test_parent_to_child_transition() {
-        let machine_def = MachineDefinition::new(
+        static PARENT_TO_CHILD_MACHINE_DEF: MachineDefinition<
+            TestHierarchyState,
+            TestHierarchyEvent,
+            HierarchicalActionLogContext,
+        > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
             TEST_HIERARCHY_TRANSITIONS,
-            TestHierarchyState::ParentOne, // Initial: GrandchildOneAlphaXray
+            TestHierarchyState::ParentOne,
         );
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def,
+                &PARENT_TO_CHILD_MACHINE_DEF,
                 HierarchicalActionLogContext::default(),
             );
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::GrandchildOneAlphaXray]
-        ); // Current leaf
+        );
         runtime.context_mut().log.clear();
-
         let event_processed = runtime.send(TestHierarchyEvent::EventTriggerP1ToC1B);
         assert!(
             event_processed,
             "Event EventTriggerP1ToC1B should have been processed"
         );
-
-        // Expected final state: ChildOneBravo (since it's a leaf)
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::ChildOneBravo]
         );
-
-        // Expected actions:
-        // 1. Exit GrandchildOneAlphaXray
-        // 2. Exit ChildOneAlpha
-        // (Transition is on ParentOne, exits happen from current leaf up to ParentOne)
-        // 3. TransitionAction (from P1 -> C1B transition)
-        // 4. Enter ChildOneBravo (target is leaf, directly entered)
         let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
             heapless::Vec::new();
         expected_log
@@ -1697,63 +1734,36 @@ mod tests {
 
     #[test]
     fn test_grandchild_to_grandparent_reentry() {
-        // Initial state: ParentOne -> ChildOneAlpha -> GrandchildOneAlphaXray
-        // Setup to start in GrandchildOneAlphaYankee for this test.
-        // This requires a bit of manual setup or a dedicated initial state for the test.
-        // For simplicity, we'll send events to navigate to GrandchildOneAlphaYankee first.
-
-        let machine_def = MachineDefinition::new(
+        static GC_TO_GP_MACHINE_DEF: MachineDefinition<
+            TestHierarchyState,
+            TestHierarchyEvent,
+            HierarchicalActionLogContext,
+        > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
             TEST_HIERARCHY_TRANSITIONS,
             TestHierarchyState::ParentOne,
         );
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def,
+                &GC_TO_GP_MACHINE_DEF,
                 HierarchicalActionLogContext::default(),
             );
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::GrandchildOneAlphaXray]
         );
-
-        // Navigate to ChildOneBravo first (sibling of ChildOneAlpha)
-        // EventTriggerToSibling is on ChildOneAlpha
         runtime.send(TestHierarchyEvent::EventTriggerToSibling);
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::ChildOneBravo]
-        );
-
-        // Navigate from ChildOneBravo to GrandchildOneAlphaYankee
-        // EventTriggerToCousinChild is on ChildOneBravo
         runtime.send(TestHierarchyEvent::EventTriggerToCousinChild);
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaYankee]
-        ); // Now we are in GCAY
-
-        runtime.context_mut().log.clear(); // Clear log before the actual test transition
-
+        runtime.context_mut().log.clear();
         let event_processed = runtime.send(TestHierarchyEvent::EventTriggerToGrandparent);
         assert!(
             event_processed,
             "Event EventTriggerToGrandparent should have been processed"
         );
-
-        // Expected final state: GrandchildOneAlphaXray (ParentOne re-enters its initial path)
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::GrandchildOneAlphaXray]
         );
-
-        // Expected actions:
-        // 1. Exit GrandchildOneAlphaYankee
-        // 2. Exit ChildOneAlpha
-        // 3. TransitionAction (from GCAY -> P1 transition)
-        // 4. Enter ParentOne
-        // 5. Enter ChildOneAlpha (initial child of P1)
-        // 6. Enter GrandchildOneAlphaXray (initial child of C1A)
         let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
             heapless::Vec::new();
         expected_log
@@ -1779,52 +1789,35 @@ mod tests {
 
     #[test]
     fn test_cousin_child_transition() {
-        // Initial state: ParentOne -> ChildOneAlpha -> GrandchildOneAlphaXray
-        // Navigate to ChildOneBravo first.
-        let machine_def = MachineDefinition::new(
+        static COUSIN_MACHINE_DEF: MachineDefinition<
+            TestHierarchyState,
+            TestHierarchyEvent,
+            HierarchicalActionLogContext,
+        > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
             TEST_HIERARCHY_TRANSITIONS,
             TestHierarchyState::ParentOne,
         );
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def,
+                &COUSIN_MACHINE_DEF,
                 HierarchicalActionLogContext::default(),
             );
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::GrandchildOneAlphaXray]
         );
-
-        // EventTriggerToSibling defined on ChildOneAlpha, from current GCAX, goes up to C1A
         runtime.send(TestHierarchyEvent::EventTriggerToSibling);
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::ChildOneBravo]
-        ); // Now in ChildOneBravo
         runtime.context_mut().log.clear();
-
         let event_processed = runtime.send(TestHierarchyEvent::EventTriggerToCousinChild);
         assert!(
             event_processed,
             "Event EventTriggerToCousinChild should have been processed"
         );
-
-        // Expected final state: GrandchildOneAlphaYankee
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::GrandchildOneAlphaYankee]
         );
-
-        // LCA(ChildOneBravo, GrandchildOneAlphaYankee) is ParentOne.
-        // ChildOneBravo is child of ParentOne.
-        // GrandchildOneAlphaYankee is child of ChildOneAlpha, which is child of ParentOne.
-        // Path from ParentOne (LCA) to GrandchildOneAlphaYankee: ParentOne -> ChildOneAlpha -> GrandchildOneAlphaYankee
-        // Expected actions:
-        // 1. Exit ChildOneBravo
-        // 2. TransitionAction (from C1B -> GCAY transition)
-        // 3. Enter ChildOneAlpha (intermediate state on path from LCA's child to target)
-        // 4. Enter GrandchildOneAlphaYankee (target state, and it's a leaf)
         let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
             heapless::Vec::new();
         expected_log
@@ -1844,15 +1837,18 @@ mod tests {
 
     #[test]
     fn test_cross_top_level_parent_transition() {
-        // Initial state: ParentOne -> ChildOneAlpha -> GrandchildOneAlphaXray
-        let machine_def = MachineDefinition::new(
+        static CROSS_PARENT_MACHINE_DEF: MachineDefinition<
+            TestHierarchyState,
+            TestHierarchyEvent,
+            HierarchicalActionLogContext,
+        > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
             TEST_HIERARCHY_TRANSITIONS,
             TestHierarchyState::ParentOne,
         );
         let mut runtime =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def,
+                &CROSS_PARENT_MACHINE_DEF,
                 HierarchicalActionLogContext::default(),
             );
         assert_eq!(
@@ -1860,31 +1856,15 @@ mod tests {
             &[TestHierarchyState::GrandchildOneAlphaXray]
         );
         runtime.context_mut().log.clear();
-
-        // EventTriggerP1ToP2 is defined on ParentOne.
-        // Current state GCAX will bubble up to P1 to find this transition.
         let event_processed = runtime.send(TestHierarchyEvent::EventTriggerP1ToP2);
         assert!(
             event_processed,
             "Event EventTriggerP1ToP2 should have been processed"
         );
-
-        // Expected final state: ChildTwoAlpha (ParentTwo re-enters its initial path)
         assert_eq!(
             runtime.state().as_slice(),
             &[TestHierarchyState::ChildTwoAlpha]
         );
-
-        // LCA(GrandchildOneAlphaXray, ParentTwo) is None (or conceptual root).
-        // Exit path from GCAX: GCAX -> C1A -> P1
-        // Entry path to CTA (initial of P2): P2 -> CTA
-        // Expected actions:
-        // 1. Exit GrandchildOneAlphaXray
-        // 2. Exit ChildOneAlpha
-        // 3. Exit ParentOne
-        // 4. TransitionAction (from P1 -> P2 transition)
-        // 5. Enter ParentTwo
-        // 6. Enter ChildTwoAlpha (initial child of P2)
         let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
             heapless::Vec::new();
         expected_log
@@ -2015,16 +1995,19 @@ mod tests {
 
     #[test]
     fn test_multiple_guards_selects_correct_transition() {
-        let machine_def = MachineDefinition::new(
+        static MULTI_GUARD_MACHINE_DEF: MachineDefinition<
+            MultiGuardTestState,
+            MultiGuardTestEvent,
+            MultiGuardContext,
+        > = MachineDefinition::new(
             MULTI_GUARD_STATENODES,
             MULTI_GUARD_TRANSITIONS,
             MultiGuardTestState::InitialState,
         );
 
-        // Scenario 1: Guard for TargetStateOne passes
         let mut runtime1 =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def.clone(),
+                &MULTI_GUARD_MACHINE_DEF,
                 MultiGuardContext {
                     selector_value: 1,
                     action_taken_for: None,
@@ -2040,10 +2023,9 @@ mod tests {
             Some(MultiGuardTestState::TargetStateOne)
         );
 
-        // Scenario 2: Guard for TargetStateTwo passes
         let mut runtime2 =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def.clone(),
+                &MULTI_GUARD_MACHINE_DEF,
                 MultiGuardContext {
                     selector_value: 2,
                     action_taken_for: None,
@@ -2059,10 +2041,9 @@ mod tests {
             Some(MultiGuardTestState::TargetStateTwo)
         );
 
-        // Scenario 3: Guard for TargetStateThree passes
         let mut runtime3 =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def.clone(),
+                &MULTI_GUARD_MACHINE_DEF,
                 MultiGuardContext {
                     selector_value: 3,
                     action_taken_for: None,
@@ -2078,10 +2059,9 @@ mod tests {
             Some(MultiGuardTestState::TargetStateThree)
         );
 
-        // Scenario 4: No guard passes
         let mut runtime4 =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def.clone(),
+                &MULTI_GUARD_MACHINE_DEF,
                 MultiGuardContext {
                     selector_value: 4,
                     action_taken_for: None,
@@ -2094,19 +2074,14 @@ mod tests {
         );
         assert_eq!(runtime4.context().action_taken_for, None);
 
-        // Scenario 5: First matching guard (selector_value = 1) even if others would also pass
-        // This relies on the order of transitions in MULTI_GUARD_TRANSITIONS
-        // and the runtime iterating them in that order.
         let mut runtime5 =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                machine_def.clone(),
+                &MULTI_GUARD_MACHINE_DEF,
                 MultiGuardContext {
                     selector_value: 1,
                     action_taken_for: None,
                 },
             );
-        // (If guards could somehow make selector_value change to 2 mid-evaluation, this test would be more complex,
-        // but simple guards don't do that. Assuming guards are pure functions of context and event.)
         assert!(runtime5.send(MultiGuardTestEvent::TriggerEvent));
         assert_eq!(
             runtime5.state().as_slice(),

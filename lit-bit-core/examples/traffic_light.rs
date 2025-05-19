@@ -142,9 +142,12 @@ mod riscv_logic {
         TrafficLightState::Red, // Initial state
     );
 
-    // Define M and MAX_NODES_FOR_COMPUTATION for the Runtime instantiation
-    const M_VAL: usize = 8; // Max hierarchy depth for this simple machine (1 would also work)
-    const MAX_NODES_FOR_COMPUTATION_VAL: usize = M_VAL * MAX_ACTIVE_REGIONS; // Renamed from MTMAR_VAL
+    const M: usize = 2; // Max hierarchy depth for this simple machine (flat = 1, 2 is safe)
+    const MAX_NODES_CALC: usize = M * MAX_ACTIVE_REGIONS;
+
+    // Type alias for this specific Runtime configuration
+    type TrafficLightRuntime =
+        Runtime<TrafficLightState, TrafficLightEvent, TrafficLightContext, M, MAX_NODES_CALC>;
 
     #[entry]
     fn main_riscv_entry() -> ! {
@@ -158,14 +161,9 @@ mod riscv_logic {
         }
 
         let initial_context = TrafficLightContext { cycle_count: 0 };
-        // Provide the const generic arguments for Runtime
-        let mut runtime: Runtime<
-            TrafficLightState,
-            TrafficLightEvent,
-            TrafficLightContext,
-            M_VAL,
-            MAX_NODES_FOR_COMPUTATION_VAL, // Use renamed const
-        > = Runtime::new(TRAFFIC_LIGHT_MACHINE_DEF.clone(), initial_context);
+        // Use the type alias
+        let mut runtime: TrafficLightRuntime =
+            Runtime::new(&TRAFFIC_LIGHT_MACHINE_DEF, initial_context);
 
         unsafe {
             uart_print_str("UART: SM created.\n");

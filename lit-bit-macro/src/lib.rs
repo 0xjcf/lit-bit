@@ -888,23 +888,24 @@ pub(crate) mod code_generator {
 
             if !used_variant_strings.insert(variant_ident_str.clone()) {
                 // Collision detected! Two different full_path_names resulted in the same PascalCase variant identifier.
-                // Find the other state that caused this collision for a better error message.
-                let mut colliding_full_path = "<unknown>".to_string();
-                for (fp, vi) in &full_path_to_variant_map {
-                    // Compare as &str to satisfy clippy::cmp_owned
-                    if vi.to_string().as_str() == variant_ident_str.as_str() {
-                        // Use clone_from to satisfy clippy::assigning_clones
-                        colliding_full_path.clone_from(fp);
-                        break;
-                    }
-                }
-                // This should be a compile_error! but that's hard to return from here directly.
-                // For now, let it panic during macro expansion. This is a development-time error.
-                // Ideally, TmpStateTreeBuilder would detect this semantic error earlier.
-                return Err(SynError::new(tmp_state.name_span,
+                let colliding_full_path_str: &str = full_path_to_variant_map
+                    .iter()
+                    // Changed from &ref existing_vi_ident to existing_vi_ident
+                    .find(|(_, existing_vi_ident)| {
+                        // existing_vi_ident is &Ident, variant_ident_str is String
+                        // Compare as &str to satisfy clippy::cmp_owned and avoid String allocation if possible
+                        existing_vi_ident.to_string().as_str() == variant_ident_str.as_str()
+                    })
+                    .map_or(
+                        "<unknown_original_path>",
+                        |(original_full_path_string, _)| original_full_path_string.as_str(),
+                    );
+
+                return Err(SynError::new(
+                    tmp_state.name_span, // Ensure no trailing whitespace here
                     format!(
-                        "State name collision: Full path '{}' (and '{}') generate conflicting PascalCase enum variant '{}'. Ensure state names produce unique variants.", 
-                        tmp_state.full_path_name, colliding_full_path, variant_ident_str
+                        "State name collision: Full path '{}' (and previously '{}') both generate the PascalCase enum variant identifier '{}'. Please ensure state names produce unique variants.", 
+                        tmp_state.full_path_name, colliding_full_path_str, variant_ident_str
                     )
                 ));
             }
@@ -1216,7 +1217,9 @@ pub(crate) mod code_generator {
             impl #machine_name {
                 pub fn new(context: #context_type_path) -> Self {
                     Self {
-                        runtime: lit_bit_core::core::Runtime::new(#machine_definition_const_ident.clone(), context),
+                        // Pass by reference, and since #machine_definition_const_ident is a const,
+                        // taking a reference to it will have a 'static lifetime.
+                        runtime: lit_bit_core::core::Runtime::new(&#machine_definition_const_ident, context),
                     }
                 }
             }

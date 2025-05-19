@@ -24,25 +24,39 @@
 
 pub mod core;
 
+// Re-export key types/traits for easier use by consumers of the crate.
+pub use core::DefaultContext;
+pub use core::MAX_ACTIVE_REGIONS;
+pub use core::MachineDefinition; // If users need to construct this manually
+pub use core::Runtime; // If users need to construct this manually
+pub use core::StateNode; // If users need to construct this manually
+pub use core::Transition; // If users need to construct this manually // Re-export this const
+
 pub mod prelude {
     // pub use crate::StateMachine;
 }
 
 pub trait StateMachine {
-    #[cfg(not(feature = "std"))]
-    type State: Copy + Clone + PartialEq + ::core::fmt::Debug;
-    #[cfg(feature = "std")]
-    type State: Copy + Clone + PartialEq + std::fmt::Debug;
+    type State: Copy
+        + Clone
+        + PartialEq
+        + Eq
+        + ::core::hash::Hash
+        + ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
+        + 'static;
 
-    #[cfg(not(feature = "std"))]
-    type Event: Copy + Clone + PartialEq + ::core::fmt::Debug;
-    #[cfg(feature = "std")]
-    type Event: Copy + Clone + PartialEq + std::fmt::Debug;
+    type Event: Copy
+        + Clone
+        + PartialEq
+        + Eq
+        + ::core::hash::Hash
+        + ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
+        + 'static;
 
-    type Context;
+    type Context: Clone + 'static;
 
     fn send(&mut self, event: Self::Event) -> bool;
-    fn state(&self) -> heapless::Vec<Self::State, 4>;
+    fn state(&self) -> heapless::Vec<Self::State, MAX_ACTIVE_REGIONS>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;
 }
