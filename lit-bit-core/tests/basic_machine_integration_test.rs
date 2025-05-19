@@ -8,7 +8,7 @@ pub mod basic_machine_integration_test {
     // heapless::Vec might be used by tests if they assert on machine.state()
     // For this module, the existing assertions use .as_slice() which doesn't directly require Vec in this scope
 
-    const ACTION_LOG_CAPACITY: usize = 10;
+    const ACTION_LOG_CAPACITY: usize = 20;
     const ACTION_STRING_CAPACITY: usize = 32;
 
     #[derive(Debug, Clone, PartialEq)]
@@ -31,7 +31,11 @@ pub mod basic_machine_integration_test {
         fn record(&mut self, action_name: &str) {
             let s = heapless::String::try_from(action_name)
                 .expect("Failed to create heapless string for action log");
-            self.action_log.push(s).expect("Action log full");
+            self.action_log.push(s).unwrap_or_else(|val| {
+                panic!(
+                    "Action log overflow (capacity {ACTION_LOG_CAPACITY}). Could not log: {val:?}"
+                )
+            });
         }
         fn clear_log(&mut self) {
             self.action_log.clear();
@@ -84,8 +88,10 @@ pub mod basic_machine_integration_test {
     fn test_basic_state_machine_transitions_and_actions() {
         let mut machine = TestMachine::new(TestContext::default());
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        let expected_log_init: [heapless::String<ACTION_STRING_CAPACITY>; 1] =
-            [heapless::String::try_from("entry_s1").expect("Log string create failed")];
+        let expected_log_init: [heapless::String<ACTION_STRING_CAPACITY>; 1] = [
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
+                .expect("Log string create failed"),
+        ];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_init);
 
         machine.context_mut().clear_log();
@@ -96,8 +102,10 @@ pub mod basic_machine_integration_test {
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
         let expected_log_inc1: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
-            heapless::String::try_from("exit_s1").expect("Log string create failed"),
-            heapless::String::try_from("action_increment").expect("Log string create failed"),
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("exit_s1")
+                .expect("Log string create failed"),
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("action_increment")
+                .expect("Log string create failed"),
         ];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc1);
 
@@ -105,8 +113,10 @@ pub mod basic_machine_integration_test {
         let transition_occurred_reset = machine.send(TestEvent::Reset);
         assert!(transition_occurred_reset, "Expected a transition for Reset");
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        let expected_log_reset1: [heapless::String<ACTION_STRING_CAPACITY>; 1] =
-            [heapless::String::try_from("entry_s1").expect("Log string create failed")];
+        let expected_log_reset1: [heapless::String<ACTION_STRING_CAPACITY>; 1] = [
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
+                .expect("Log string create failed"),
+        ];
         assert_eq!(
             machine.context().action_log.as_slice(),
             &expected_log_reset1
@@ -120,8 +130,10 @@ pub mod basic_machine_integration_test {
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
         let expected_log_inc2: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
-            heapless::String::try_from("exit_s1").expect("Log string create failed"),
-            heapless::String::try_from("action_increment").expect("Log string create failed"),
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("exit_s1")
+                .expect("Log string create failed"),
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("action_increment")
+                .expect("Log string create failed"),
         ];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc2);
 
@@ -132,8 +144,10 @@ pub mod basic_machine_integration_test {
             "Expected a transition for second Reset"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
-        let expected_log_reset2: [heapless::String<ACTION_STRING_CAPACITY>; 1] =
-            [heapless::String::try_from("entry_s1").expect("Log string create failed")];
+        let expected_log_reset2: [heapless::String<ACTION_STRING_CAPACITY>; 1] = [
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
+                .expect("Log string create failed"),
+        ];
         assert_eq!(
             machine.context().action_log.as_slice(),
             &expected_log_reset2
@@ -165,9 +179,9 @@ pub mod basic_machine_integration_test {
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
 
         let expected_decrement_log: [heapless::String<ACTION_STRING_CAPACITY>; 2] = [
-            heapless::String::try_from("exit_s1")
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("exit_s1")
                 .expect("Failed to create string for expected log"),
-            heapless::String::try_from("entry_s1")
+            heapless::String::<ACTION_STRING_CAPACITY>::try_from("entry_s1")
                 .expect("Failed to create string for expected log"),
         ];
         assert_eq!(
@@ -195,10 +209,13 @@ mod parallel_initial_state_test {
     impl ParallelInitContext {
         fn record(&mut self, entry: &str) {
             let s = heapless::String::try_from(entry)
-                .expect("Failed to create heapless string for log entry");
-            self.log
-                .push(s)
-                .expect("Log vec full in ParallelInitContext");
+                .expect("Failed to create heapless string for ParallelInitContext log");
+            self.log.push(s).unwrap_or_else(|val| {
+                panic!(
+                    "ParallelInitContext log overflow (capacity {}). Could not log: {val:?}",
+                    10
+                )
+            });
         }
     }
 

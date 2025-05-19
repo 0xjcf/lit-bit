@@ -870,7 +870,8 @@ pub(crate) mod code_generator {
     pub(crate) fn generate_state_id_logic(
         builder: &TmpStateTreeBuilder,
         machine_name: &Ident,
-    ) -> GeneratedStateIds {
+    ) -> Result<GeneratedStateIds, SynError> {
+        // Changed return type
         let enum_name_str = format!("{machine_name}StateId");
         let state_id_enum_name = format_ident!("{}", enum_name_str);
 
@@ -900,10 +901,12 @@ pub(crate) mod code_generator {
                 // This should be a compile_error! but that's hard to return from here directly.
                 // For now, let it panic during macro expansion. This is a development-time error.
                 // Ideally, TmpStateTreeBuilder would detect this semantic error earlier.
-                panic!(
-                    "State name collision: Full path '{}' and '{}' both generate the PascalCase enum variant identifier '{}'. Please ensure state names produce unique variants.", 
-                    tmp_state.full_path_name, colliding_full_path, variant_ident_str
-                );
+                return Err(SynError::new(tmp_state.name_span,
+                    format!(
+                        "State name collision: Full path '{}' (and '{}') generate conflicting PascalCase enum variant '{}'. Ensure state names produce unique variants.", 
+                        tmp_state.full_path_name, colliding_full_path, variant_ident_str
+                    )
+                ));
             }
 
             full_path_to_variant_map.insert(
@@ -933,7 +936,10 @@ pub(crate) mod code_generator {
             }
 
             impl #state_id_enum_name {
-                // Reverted from const fn due to E0015: cannot match on `str` in constant functions
+                /// Converts a string slice representing the full, underscore-separated path
+                /// of a state (e.g., "Parent_Child_Grandchild") to the corresponding state ID enum variant.
+                ///
+                /// The matching is case-sensitive and expects paths as generated internally (typically PascalCase segments joined by underscores).
                 pub fn from_str_path(path_str: &str) -> Option<Self> {
                     match path_str {
                         #(#match_arms)*
@@ -943,11 +949,11 @@ pub(crate) mod code_generator {
             }
         };
 
-        GeneratedStateIds {
+        Ok(GeneratedStateIds {
             enum_definition_tokens,
             state_id_enum_name,
             full_path_to_variant_ident: full_path_to_variant_map, // Return the map
-        }
+        })
     }
 
     #[allow(dead_code)]
@@ -1255,8 +1261,12 @@ pub fn statechart(input: TokenStream) -> TokenStream {
     let context_type_path = &parsed_ast.context_type;
     let event_type_path = &parsed_ast.event_type;
 
+    // Handle Result from generate_state_id_logic
     let generated_ids_info =
-        crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
+        match crate::code_generator::generate_state_id_logic(&builder, machine_name_ident) {
+            Ok(info) => info,
+            Err(err) => return err.to_compile_error().into(),
+        };
 
     // Pass Paths to generator functions
     let states_array_ts = match crate::code_generator::generate_states_array(
@@ -2043,9 +2053,10 @@ mod tests {
         let mut builder = TmpStateTreeBuilder::new();
         builder.build_from_ast(&ast).expect("Builder failed");
         let machine_name_ident = &ast.name;
-        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
+        // Unwrap the Result for test usage
+        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident)
+            .expect("generate_state_id_logic failed in generate_simple_state_id_enum_updated");
 
-        // Expected output now includes the impl block for from_str_path
         let expected_enum_str = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
             pub enum TestSimpleStateId {
@@ -2054,6 +2065,10 @@ mod tests {
             }
 
             impl TestSimpleStateId {
+                #[doc = r" Converts a string slice representing the full, underscore-separated path"]
+                #[doc = r#" of a state (e.g., "Parent_Child_Grandchild") to the corresponding state ID enum variant."#]
+                #[doc = r""]
+                #[doc = r" The matching is case-sensitive and expects paths as generated internally (typically PascalCase segments joined by underscores)."]
                 pub fn from_str_path(path_str: &str) -> Option<Self> {
                     match path_str {
                         "S1" => Some(Self::S1),
@@ -2114,9 +2129,10 @@ mod tests {
             .build_from_ast(&ast)
             .expect("Builder failed for nested state_id_enum test ");
         let machine_name_ident = &ast.name;
-        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
+        // Unwrap the Result for test usage
+        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident)
+            .expect("generate_state_id_logic failed in generate_nested_state_id_enum_updated");
 
-        // Expected output now includes the impl block for from_str_path
         let expected_enum_str = quote! {
             #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
             pub enum TestNestedStateId {
@@ -2129,6 +2145,10 @@ mod tests {
             }
 
             impl TestNestedStateId {
+                #[doc = r" Converts a string slice representing the full, underscore-separated path"]
+                #[doc = r#" of a state (e.g., "Parent_Child_Grandchild") to the corresponding state ID enum variant."#]
+                #[doc = r""]
+                #[doc = r" The matching is case-sensitive and expects paths as generated internally (typically PascalCase segments joined by underscores)."]
                 pub fn from_str_path(path_str: &str) -> Option<Self> {
                     match path_str {
                         "P1" => Some(Self::P1),
@@ -2216,7 +2236,8 @@ mod tests {
         builder.build_from_ast(&ast).expect("Builder failed ");
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
-        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
+        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident)
+            .expect("generate_state_id_logic failed");
         let states_array_tokens =
             crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
                 .expect("generate_states_array failed ");
@@ -2267,7 +2288,8 @@ mod tests {
         builder.build_from_ast(&ast).expect("Builder failed ");
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
-        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident);
+        let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident)
+            .expect("generate_state_id_logic failed");
         let states_array_tokens =
             crate::code_generator::generate_states_array(&builder, &ids_info, context_type_ast)
                 .expect("generate_states_array failed ");
@@ -2310,7 +2332,6 @@ mod tests {
     // Test for TRANSITIONS Array Generation (re-adding with updated DSL)
     #[test]
     fn generate_transitions_array_simple() {
-        // ... (DSL string with event: Ev,) ...
         let dsl = concat!(
             "name: TestMachine, ",
             "context: Ctx, ",
@@ -2324,20 +2345,21 @@ mod tests {
             "    on E3 => S1 [action a1]; ",
             "}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed "); // Added space
+        builder.build_from_ast(&ast).expect("Builder failed ");
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
         let event_type_ast = &ast.event_type;
-        let ids_info = generate_state_id_logic(&builder, machine_name_ident);
+        let ids_info = generate_state_id_logic(&builder, machine_name_ident)
+            .expect("generate_state_id_logic failed");
         let transitions_array_tokens = crate::code_generator::generate_transitions_array(
             &builder,
             &ids_info,
             event_type_ast,
             context_type_ast,
         )
-        .expect("generate_transitions_array failed "); // Added space
+        .expect("generate_transitions_array failed ");
         let expected_str = quote! {
             const TRANSITIONS: &[Transition<TestMachineStateId, Ev, Ctx>] = &[
                 Transition {
@@ -2373,7 +2395,6 @@ mod tests {
 
     #[test]
     fn generate_transitions_array_hierarchical() {
-        // ... (DSL string with event: RootEv,) ...
         let dsl = concat!(
             "name: TestHierarchicalMachine, ",
             "context: RootCtx, ",
@@ -2396,13 +2417,14 @@ mod tests {
             "} ",
             "state P2 {}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed "); // Added space
+        builder.build_from_ast(&ast).expect("Builder failed ");
         let machine_name_ident = &ast.name;
         let context_type_ast = &ast.context_type;
         let event_type_ast = &ast.event_type;
-        let ids_info = generate_state_id_logic(&builder, machine_name_ident);
+        let ids_info = generate_state_id_logic(&builder, machine_name_ident)
+            .expect("generate_state_id_logic failed");
 
         let transitions_array_tokens = crate::code_generator::generate_transitions_array(
             &builder,
@@ -2410,7 +2432,7 @@ mod tests {
             event_type_ast,
             context_type_ast,
         )
-        .expect("generate_transitions_array failed "); // Added space
+        .expect("generate_transitions_array failed ");
 
         let expected_str = quote! {
             const TRANSITIONS: &[Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
@@ -2455,7 +2477,6 @@ mod tests {
 
     #[test]
     fn determine_initial_leaf_state_simple() {
-        // ... (DSL string with event: Ev,) ...
         let dsl = concat!(
             "name: TestMachine, ",
             "context: Ctx, ",
@@ -2464,14 +2485,15 @@ mod tests {
             "state S1 {}",
             "state S2 {}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed "); // Added space
-        let ids_info = generate_state_id_logic(&builder, &ast.name);
+        builder.build_from_ast(&ast).expect("Builder failed ");
+        let ids_info =
+            generate_state_id_logic(&builder, &ast.name).expect("generate_state_id_logic failed");
 
         let initial_leaf_id_ts =
             crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast)
-                .expect("determine_initial_leaf_state_id failed "); // Added space
+                .expect("determine_initial_leaf_state_id failed ");
 
         let expected_ts_str = quote! { TestMachineStateId::S1 }.to_string();
         assert_eq!(initial_leaf_id_ts.to_string(), expected_ts_str);
@@ -2479,7 +2501,6 @@ mod tests {
 
     #[test]
     fn determine_initial_leaf_state_nested() {
-        // ... (DSL string with event: Ev,) ...
         let dsl = concat!(
             "name: TestNested, ",
             "context: Ctx, ",
@@ -2496,14 +2517,15 @@ mod tests {
             "} ",
             "state P2 {}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed "); // Added space
-        let ids_info = generate_state_id_logic(&builder, &ast.name);
+        builder.build_from_ast(&ast).expect("Builder failed ");
+        let ids_info =
+            generate_state_id_logic(&builder, &ast.name).expect("generate_state_id_logic failed");
 
         let initial_leaf_id_ts =
             crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast)
-                .expect("determine_initial_leaf_state_id failed "); // Added space
+                .expect("determine_initial_leaf_state_id failed ");
 
         // Expected leaf: P1 -> C1 -> GC1. StateId: TestNestedStateId::P1C1GC1
         let expected_ts_str = quote! { TestNestedStateId::P1C1GC1 }.to_string();
@@ -2512,20 +2534,20 @@ mod tests {
 
     #[test]
     fn determine_initial_leaf_state_target_not_top_level_error() {
-        // ... (DSL string with event: Ev,) ...
         let dsl = concat!(
             "name: TestMachine, ",
             "context: Ctx, ",
             "event: Ev, ",
-            "initial: S1_S1_Child, ", // Target a nested state
-            "state S1 { initial: S1_Child; state S1_Child {} }"  // S1 is valid, S1_S1_Child exists
+            "initial: S1_S1_Child, ",
+            "state S1 { initial: S1_Child; state S1_Child {} }"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
         builder
             .build_from_ast(&ast)
-            .expect("Builder should succeed with this valid AST "); // Builder should pass
-        let ids_info = generate_state_id_logic(&builder, &ast.name);
+            .expect("Builder should succeed with this valid AST ");
+        let ids_info =
+            generate_state_id_logic(&builder, &ast.name).expect("generate_state_id_logic failed");
 
         let result =
             crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast);
@@ -2545,7 +2567,6 @@ mod tests {
 
     #[test]
     fn determine_initial_leaf_state_non_existent_error() {
-        // ... (DSL string with event: Ev,) ...
         let dsl = concat!(
             "name: TestMachine, ",
             "context: Ctx, ",
@@ -2553,12 +2574,13 @@ mod tests {
             "initial: NonExistentState, ",
             "state S1 {}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed "); // Added space
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
         builder
             .build_from_ast(&ast)
-            .expect("Builder should succeed initially "); // Added space
-        let ids_info = generate_state_id_logic(&builder, &ast.name);
+            .expect("Builder should succeed initially ");
+        let ids_info =
+            generate_state_id_logic(&builder, &ast.name).expect("generate_state_id_logic failed");
 
         let result =
             crate::code_generator::determine_initial_leaf_state_id(&builder, &ids_info, &ast);
@@ -2742,7 +2764,10 @@ mod tests {
         );
 
         // Check code generation parts (simple checks, not full output validation)
-        let ids_info = generate_state_id_logic(&builder, &ast.name);
+        // Unwrap ids_info for code generation checks
+        let ids_info = generate_state_id_logic(&builder, &ast.name)
+            .expect("generate_state_id_logic failed for showcase example");
+
         assert_eq!(ids_info.state_id_enum_name.to_string(), "AgentStateId");
         assert_eq!(ids_info.full_path_to_variant_ident.len(), 4);
         assert_eq!(

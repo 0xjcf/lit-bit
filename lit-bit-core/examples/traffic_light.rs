@@ -101,7 +101,8 @@ mod riscv_logic {
         },
     ];
 
-    // Define the states
+    // Define the states (even if simple, the definition needs an array)
+    #[allow(dead_code)] // Suppress dead code warning as it's used via TRAFFIC_LIGHT_MACHINE_DEF
     const TRAFFIC_LIGHT_STATENODES: &[StateNode<TrafficLightState, TrafficLightContext>] = &[
         StateNode {
             id: TrafficLightState::Red,
@@ -141,9 +142,9 @@ mod riscv_logic {
         TrafficLightState::Red, // Initial state
     );
 
-    // Define M and MTMAR for the Runtime instantiation
-    const M_VAL: usize = 8; // Max hierarchy depth
-    const MTMAR_VAL: usize = M_VAL * MAX_ACTIVE_REGIONS; // M * MAX_ACTIVE_REGIONS (e.g. 8 * 4 = 32)
+    // Define M and MAX_NODES_FOR_COMPUTATION for the Runtime instantiation
+    const M_VAL: usize = 8; // Max hierarchy depth for this simple machine (1 would also work)
+    const MAX_NODES_FOR_COMPUTATION_VAL: usize = M_VAL * MAX_ACTIVE_REGIONS; // Renamed from MTMAR_VAL
 
     #[entry]
     fn main_riscv_entry() -> ! {
@@ -163,7 +164,7 @@ mod riscv_logic {
             TrafficLightEvent,
             TrafficLightContext,
             M_VAL,
-            MTMAR_VAL,
+            MAX_NODES_FOR_COMPUTATION_VAL, // Use renamed const
         > = Runtime::new(TRAFFIC_LIGHT_MACHINE_DEF.clone(), initial_context);
 
         unsafe {

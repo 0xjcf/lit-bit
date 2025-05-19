@@ -356,36 +356,30 @@ where
     }
 
     /// Finds the Least Common Ancestor (LCA) of two states.
-    fn find_lca(&self, state1_id: StateType, state2_id: StateType) -> Option<StateType> {
+    fn find_lca(
+        &self,
+        state1_id: StateType,
+        state2_id: StateType,
+    ) -> Result<Option<StateType>, PathTooLongError> {
         if state1_id == state2_id {
-            return Some(state1_id);
+            return Ok(Some(state1_id));
         }
 
-        let Ok(path1) = self.get_path_to_root(state1_id) else {
-            // #[cfg(debug_assertions)]
-            // eprintln!("PathTooLongError for state1_id in find_lca"); // Removed eprintln!
-            return None;
-        };
-        let Ok(path2) = self.get_path_to_root(state2_id) else {
-            // #[cfg(debug_assertions)]
-            // eprintln!("PathTooLongError for state2_id in find_lca"); // Removed eprintln!
-            return None;
-        };
+        let path1 = self.get_path_to_root(state1_id)?; // Propagate error
+        let path2 = self.get_path_to_root(state2_id)?; // Propagate error
 
         if path1.contains(&state2_id) {
-            return Some(state2_id);
+            return Ok(Some(state2_id));
         }
         if path2.contains(&state1_id) {
-            return Some(state1_id);
+            return Ok(Some(state1_id));
         }
 
-        // General case: find the first common ancestor by checking path1's ancestors (root down) against path2
-        // path1.iter().rev() iterates from root towards leaf1
-        path1
+        Ok(path1
             .iter()
             .rev()
             .find(|&&ancestor1_from_path1| path2.contains(&ancestor1_from_path1))
-            .copied()
+            .copied())
     }
 
     fn is_proper_ancestor(
@@ -881,17 +875,32 @@ where
                     .expect("entry_execution_list overflow for simple self-trans");
             } else {
                 // General LCA path (external transition or self-transition on composite state)
-                let lca_id = self.find_lca(active_leaf_for_this_trans, target_state_id);
-                // Handle Result from compute_ordered_exit_set
+                let lca_id_result = self.find_lca(active_leaf_for_this_trans, target_state_id);
+                let lca_id = match lca_id_result {
+                    Ok(l) => l,
+                    Err(_path_too_long_error) => {
+                        if cfg!(debug_assertions) {
+                            panic!(
+                                "PathTooLongError from find_lca for states {active_leaf_for_this_trans:?}, {target_state_id:?}"
+                            );
+                        } else {
+                            // If LCA computation fails, abort the entire send operation for safety.
+                            return false;
+                        }
+                    }
+                };
+
                 let states_to_exit_for_branch_result =
                     self.compute_ordered_exit_set(active_leaf_for_this_trans, lca_id);
                 let Ok(states_to_exit_for_branch) = states_to_exit_for_branch_result else {
-                    debug_assert!(
-                        false,
-                        "PathTooLongError from compute_ordered_exit_set for leaf {active_leaf_for_this_trans:?}"
-                    );
-                    // In release, skip this transition if its exit set can't be computed.
-                    continue;
+                    if cfg!(debug_assertions) {
+                        panic!(
+                            "PathTooLongError from compute_ordered_exit_set for leaf {active_leaf_for_this_trans:?}"
+                        );
+                    } else {
+                        // If exit set computation fails, abort the entire send operation for safety.
+                        return false;
+                    }
                 };
 
                 for &state_to_exit_id in &states_to_exit_for_branch {
