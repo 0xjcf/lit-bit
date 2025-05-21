@@ -47,28 +47,31 @@ pub mod basic_machine_integration_test {
         }
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     pub enum TestEvent {
+        #[default]
         Increment,
         Decrement,
         Reset,
         Forbidden,
     }
 
-    fn entry_s1(context: &mut TestContext) {
+    fn entry_s1(context: &mut TestContext, _event: &TestEvent) {
         context.record("entry_s1");
     }
 
-    fn exit_s1(context: &mut TestContext) {
+    fn exit_s1(context: &mut TestContext, _event: &TestEvent) {
         context.record("exit_s1");
     }
 
-    fn transition_action_for_increment(context: &mut TestContext) {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn transition_action_for_increment(context: &mut TestContext, _event: &TestEvent) {
         context.count += 1;
         context.record("action_increment");
     }
 
-    fn guard_for_increment(context: &TestContext, _event: TestEvent) -> bool {
+    #[allow(clippy::trivially_copy_pass_by_ref)]
+    fn guard_for_increment(context: &TestContext, _event: &TestEvent) -> bool {
         context.count < 2
     }
 
@@ -97,7 +100,7 @@ pub mod basic_machine_integration_test {
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_init);
 
         machine.context_mut().clear_log();
-        let transition_occurred_1 = machine.send(TestEvent::Increment);
+        let transition_occurred_1 = machine.send(&TestEvent::Increment);
         assert!(
             transition_occurred_1,
             "Expected a transition for first Increment"
@@ -108,7 +111,7 @@ pub mod basic_machine_integration_test {
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc1);
 
         machine.context_mut().clear_log();
-        let transition_occurred_reset = machine.send(TestEvent::Reset);
+        let transition_occurred_reset = machine.send(&TestEvent::Reset);
         assert!(transition_occurred_reset, "Expected a transition for Reset");
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         let expected_log_reset1: [String<ACTION_STRING_CAPACITY>; 1] = [hstr!("entry_s1")];
@@ -118,7 +121,7 @@ pub mod basic_machine_integration_test {
         );
 
         machine.context_mut().clear_log();
-        let transition_occurred_inc2 = machine.send(TestEvent::Increment);
+        let transition_occurred_inc2 = machine.send(&TestEvent::Increment);
         assert!(
             transition_occurred_inc2,
             "Expected a transition for second Increment"
@@ -129,7 +132,7 @@ pub mod basic_machine_integration_test {
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc2);
 
         machine.context_mut().clear_log();
-        let transition_occurred_reset_2 = machine.send(TestEvent::Reset);
+        let transition_occurred_reset_2 = machine.send(&TestEvent::Reset);
         assert!(
             transition_occurred_reset_2,
             "Expected a transition for second Reset"
@@ -142,7 +145,7 @@ pub mod basic_machine_integration_test {
         );
 
         machine.context_mut().clear_log();
-        let transition_occurred_blocked = machine.send(TestEvent::Increment);
+        let transition_occurred_blocked = machine.send(&TestEvent::Increment);
         assert!(
             !transition_occurred_blocked,
             "Expected no transition for blocked Increment"
@@ -159,7 +162,7 @@ pub mod basic_machine_integration_test {
         );
 
         machine.context_mut().clear_log();
-        let transition_occurred_decrement = machine.send(TestEvent::Decrement);
+        let transition_occurred_decrement = machine.send(&TestEvent::Decrement);
         assert!(
             transition_occurred_decrement,
             "Expected a transition for Decrement"
@@ -203,20 +206,20 @@ mod parallel_initial_state_test {
         }
     }
 
-    fn entry_p(ctx: &mut ParallelInitContext) {
-        ctx.record("EnterP");
+    fn entry_p(ctx: &mut ParallelInitContext, _event: &TestEvent) {
+        ctx.record("entry_p");
     }
-    fn entry_r1(ctx: &mut ParallelInitContext) {
-        ctx.record("EnterR1");
+    fn entry_r1(ctx: &mut ParallelInitContext, _event: &TestEvent) {
+        ctx.record("entry_r1");
     }
-    fn entry_r1a(ctx: &mut ParallelInitContext) {
-        ctx.record("EnterR1A");
+    fn entry_r1a(ctx: &mut ParallelInitContext, _event: &TestEvent) {
+        ctx.record("entry_r1a");
     }
-    fn entry_r2(ctx: &mut ParallelInitContext) {
-        ctx.record("EnterR2");
+    fn entry_r2(ctx: &mut ParallelInitContext, _event: &TestEvent) {
+        ctx.record("entry_r2");
     }
-    fn entry_r2x(ctx: &mut ParallelInitContext) {
-        ctx.record("EnterR2X");
+    fn entry_r2x(ctx: &mut ParallelInitContext, _event: &TestEvent) {
+        ctx.record("entry_r2x");
     }
 
     statechart! {

@@ -45,8 +45,7 @@ pub trait StateMachine {
         + ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
         + 'static;
 
-    type Event: Copy
-        + Clone
+    type Event: Clone
         + PartialEq
         + Eq
         + ::core::hash::Hash
@@ -55,7 +54,7 @@ pub trait StateMachine {
 
     type Context: Clone + 'static;
 
-    fn send(&mut self, event: Self::Event) -> bool;
+    fn send(&mut self, event: &Self::Event) -> bool;
     fn state(&self) -> heapless::Vec<Self::State, MAX_ACTIVE_REGIONS>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;

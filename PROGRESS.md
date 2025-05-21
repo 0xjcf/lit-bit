@@ -2,6 +2,22 @@
 
 Reverse-chronological log of daily coding sessions.  Keep entries **concise** and link to PRs / issues for full detail.
 
+## 2024-05-19 · _Session Start_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Enhancement: Macro Event Pattern Matching)
+*   _Work_:
+    *   Pivoting to implement pattern matching for events with associated data directly within the `statechart!` macro (e.g., `on Event::Variant { field } => ...`).
+    *   Modified `TransitionDefinitionAst` and `Parse` impl to use `event_pattern: syn::Pat` (via `Pat::parse_single`).
+    *   Updated `TmpTransition` to hold `event_pattern: &'ast syn::Pat`.
+    *   Updated `code_generator::generate_machine_struct_and_impl` to generate a `send()` method with `match event { ... }` structure using these patterns. Placeholder for full transition logic.
+    *   Temporarily used `compile_error!` for `Transition.event` field in `generate_transitions_array` to handle type mismatch during refactor.
+*   _Next_:
+    *   Fix linter errors in `lit-bit-macro` tests related to `event_name` vs `event_pattern`.
+    *   Update `GuardFn` type in `lit-bit-core` to take `&EventType`.
+    *   Update macro code generation for guards to pass `&event`.
+    *   Implement and test the actual transition logic (LCA, entry/exit actions) within the generated `send()` method.
+    *   Verify full functionality with `media_player.rs` example, including events with data and guards.
+
 ---
 
 ## 2024-05-19 · _Session End_

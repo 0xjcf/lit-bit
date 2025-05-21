@@ -1,0 +1,253 @@
+#[allow(dead_code)] // It is used by the main statechart macro
+pub(crate) fn generate_machine_struct_and_impl(
+    machine_name: &Ident,
+    state_id_enum_name: &Ident,
+    event_type_path: &syn::Path,
+    context_type_path: &syn::Path,
+    machine_definition_const_ident: &Ident,
+    builder: &TmpStateTreeBuilder,
+    generated_ids: &GeneratedStateIds,
+) -> TokenStream {
+    let m_val = proc_macro2::Literal::usize_unsuffixed(8);
+    // MAX_NODES_FOR_COMPUTATION = M * MAX_ACTIVE_REGIONS.
+    // lit_bit_core::core::MAX_ACTIVE_REGIONS is fixed at 4.
+    // Compute this value at macro expansion time.
+    let max_nodes_for_computation_val = proc_macro2::Literal::usize_unsuffixed(8 * 4); // M * 4
+
+    // Generate the new inherent send method
+    let inherent_send_method =
+        generate_send_method(event_type_path, state_id_enum_name, builder, generated_ids);
+
+    // The StateMachine trait send method will call the inherent one.
+    let trait_send_method_impl_tokens = quote! {
+        fn send(&mut self, event: &Self::Event) -> bool {
+            // Ensure this calls the inherent `send` method of the struct,
+            // not the trait method itself recursively.
+            Self::send(self, event)
+        }
+    };
+
+    let machine_struct_ts = quote! {
+        #[derive(Debug)]
+        pub struct #machine_name {
+            runtime: lit_bit_core::core::Runtime<
+                #state_id_enum_name,
+                #event_type_path,
+                #context_type_path,
+                #m_val, // M const generic for Runtime
+                #max_nodes_for_computation_val // MAX_NODES_FOR_COMPUTATION const generic for Runtime
+            >,
+        }
+        impl #machine_name {
+            pub fn new(context: #context_type_path) -> Self {
+                Self {
+                    // Ensure the MachineDefinition referred to by machine_definition_const_ident
+                    // is compatible with a Runtime that might not use its transitions array as heavily.
+                    // The initial_event for Runtime::new needs to be handled; perhaps pass a default event or None.
+                    // For now, assuming Runtime::new can be called with just def and context,
+                    // or the main macro passes a default initial event.
+                    // The user's provided generate_send_method doesn't show how Runtime::new is called.
+                    // For now, I will assume the existing Runtime::new call is okay, but it might need adjustment
+                    // if it relies on a fully populated TRANSITIONS array for initial state setup that the new model bypasses.
+                    // The `initial_leaf_state` in `MachineDefinition` is still used by `Runtime::new`.
+                    runtime: lit_bit_core::core::Runtime::new(&#machine_definition_const_ident, context, &#event_type_path::default()),
+                }
+            }
+            // Place the generated inherent send method here
+            #inherent_send_method
+        }
+        impl lit_bit_core::StateMachine for #machine_name {
+            type State = #state_id_enum_name;
+            type Event = #event_type_path;
+            type Context = #context_type_path;
+            #trait_send_method_impl_tokens // Use the updated trait send method
+            fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::core::MAX_ACTIVE_REGIONS}> {
+                self.runtime.state()
+            }
+            fn context(&self) -> &Self::Context {
+                self.runtime.context()
+            }
+            fn context_mut(&mut self) -> &mut Self::Context {
+                self.runtime.context_mut()
+            }
+        }
+    };
+    machine_struct_ts
+}
+
+pub(crate) fn generate_states_array<'ast>(
+    builder: &'ast TmpStateTreeBuilder<'ast>,
+    generated_ids: &GeneratedStateIds,
+    context_type_path: &'ast syn::Path,
+    event_type_path: &'ast syn::Path,
+) -> SynResult<TokenStream> {
+    let state_id_enum_name = &generated_ids.state_id_enum_name;
+    let mut state_node_initializers = Vec::new();
+    for tmp_state in &builder.all_states {
+        // ... existing id, parent_id, initial_child_id ...
+        let current_state_id_variant = generated_ids
+            .full_path_to_variant_ident
+            .get(&tmp_state.full_path_name)
+            .ok_or_else(|| {
+                SynError::new(
+                    tmp_state.name_span,
+                    "Internal error: TmpState full_path_name not found in generated IDs map",
+                )
+            })?;
+        let parent_id_expr = tmp_state
+            .parent_full_path_name
+            .as_ref()
+            .and_then(|parent_fpn| {
+                generated_ids
+                    .full_path_to_variant_ident
+                    .get(parent_fpn)
+                    .map(|pi| quote! { Some(#state_id_enum_name::#pi) })
+            })
+            .unwrap_or_else(|| quote! { None });
+        let initial_child_id_expr = tmp_state
+            .initial_child_idx
+            .and_then(|child_idx| {
+                builder
+                    .all_states
+                    .get(child_idx)
+                    .and_then(|child_tmp_state| {
+                        generated_ids
+                            .full_path_to_variant_ident
+                            .get(&child_tmp_state.full_path_name)
+                            .map(|ci| quote! { Some(#state_id_enum_name::#ci) })
+                    })
+            })
+            .unwrap_or_else(|| quote! { None });
+
+        let entry_action_expr = tmp_state.entry_handler.map_or_else(
+            || quote! { None },
+            |p_expr| quote! { Some(#p_expr as EntryExitActionFn<#context_type_path, #event_type_path>) },
+        );
+        let exit_action_expr = tmp_state.exit_handler.map_or_else(
+            || quote! { None },
+            |p_expr| quote! { Some(#p_expr as EntryExitActionFn<#context_type_path, #event_type_path>) },
+        );
+
+        let is_parallel_literal = tmp_state.is_parallel;
+
+        state_node_initializers.push(quote! {
+            StateNode {
+                id: #state_id_enum_name::#current_state_id_variant,
+                parent: #parent_id_expr,
+                initial_child: #initial_child_id_expr,
+                entry_action: #entry_action_expr,
+                exit_action: #exit_action_expr,
+                is_parallel: #is_parallel_literal,
+            }
+        });
+    }
+    let states_array_ts = quote! {
+        const STATES: &[StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+            #(#state_node_initializers),*
+        ];
+    };
+    Ok(states_array_ts)
+}
+
+pub(crate) fn generate_transitions_array<'ast>(
+    builder: &'ast TmpStateTreeBuilder<'ast>,
+    generated_ids: &GeneratedStateIds,
+    event_type_path: &'ast syn::Path,
+    context_type_path: &'ast syn::Path,
+) -> SynResult<TokenStream> {
+    let state_id_enum_name = &generated_ids.state_id_enum_name;
+    let transitions_array_ts = quote! {
+        const TRANSITIONS: &[Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[];
+    };
+    Ok(transitions_array_ts)
+}
+
+pub(crate) fn generate_send_method(
+    event_type_path: &syn::Path,
+    state_id_enum_name: &Ident,
+    builder: &TmpStateTreeBuilder,
+    generated_ids: &GeneratedStateIds,
+) -> proc_macro2::TokenStream {
+    let mut match_arms = Vec::new();
+
+    for state_node in &builder.all_states {
+        for t in &state_node.transitions {
+            let event_pat = &t.event_pattern;
+
+            let guard_check = if let Some(guard_expr) = &t.guard_handler {
+                quote! {
+                    if !(#guard_expr)(&self.context(), event) {
+                        return false;
+                    }
+                }
+            } else {
+                quote! {}
+            };
+
+            let action_call = if let Some(action_expr) = &t.action_handler {
+                quote! {
+                    (#action_expr)(&mut self.context_mut(), event);
+                }
+            } else {
+                quote! {}
+            };
+
+            let target_state_idx = t.target_state_idx.expect("Transition target not resolved");
+            let target_state = &builder.all_states[target_state_idx];
+            let target_variant = generated_ids
+                .full_path_to_variant_ident
+                .get(&target_state.full_path_name)
+                .expect("Missing variant for target state");
+
+            // Get the full path for the current state (where the transition is defined)
+            let from_state_variant = generated_ids
+                .full_path_to_variant_ident
+                .get(&state_node.full_path_name)
+                .expect("Missing variant for from state");
+
+            // This condition ensures the transition is only considered if the machine is currently in the `from_state`
+            // or one of its children (if it's a composite state).
+            // For simplicity in this direct-dispatch model, we'll assume active_leaf_states contains the direct state for now.
+            // A more robust check would involve checking ancestry if active_leaf_states can be children of from_state_variant.
+            // NOTE: The line below is a simplified active state check. The original `send_internal` handles hierarchy.
+            // This generated `send` needs to be compatible with how `self.runtime.active_leaf_states` is structured.
+            // The user's example for `transition` quote block only has `event_pat => { ... }`
+            // It does not include a check for `self.runtime.active_leaf_states.contains(...)` for the `from_state`
+            // This means the match will be on event type *only* initially. If multiple states handle the same event,
+            // the first one encountered in this loop structure will be chosen if its guard passes.
+            // This is a deviation from SCXML semantics where most specific handler (deepest state) should win.
+            // For now, following the user provided structure for `transition`.
+
+            let transition = quote! {
+                #event_pat => {
+                    // Placeholder for checking if this transition's `from_state` is active.
+                    // This is crucial for correct behavior and was implicitly handled by `send_internal` by iterating active states.
+                    // The new model must replicate this or have a different strategy.
+                    // For now, we are directly matching on event, which might not be correct if multiple states handle the same event.
+                    // A possible check: if self.runtime.active_leaf_states.iter().any(|s| *s == #state_id_enum_name::#from_state_variant) {
+                        #guard_check
+                        #action_call
+                        // TODO: This state update is too simplistic. It needs to handle entry/exit actions,
+                        // hierarchical entry (to initial children), and parallel regions.
+                        // It should delegate to Runtime methods like execute_entry_actions_from_lca, etc.
+                        self.runtime.active_leaf_states = heapless::Vec::from_slice(&[#state_id_enum_name::#target_variant]).unwrap();
+                        return true;
+                    // } else {
+                    //     return false; // Or continue to next match arm if this from_state is not active
+                    // }
+                }
+            };
+
+            match_arms.push(transition);
+        }
+    }
+
+    quote! {
+        pub fn send(&mut self, event: &#event_type_path) -> bool {
+            match event {
+                #(#match_arms),*,
+                _ => false, // If no event pattern matched
+            }
+        }
+    }
+}
