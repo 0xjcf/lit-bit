@@ -50,7 +50,7 @@ pub(crate) fn generate_machine_struct_and_impl(
                     // For now, I will assume the existing Runtime::new call is okay, but it might need adjustment
                     // if it relies on a fully populated TRANSITIONS array for initial state setup that the new model bypasses.
                     // The `initial_leaf_state` in `MachineDefinition` is still used by `Runtime::new`.
-                    runtime: lit_bit_core::core::Runtime::new(&#machine_definition_const_ident, context, &#event_type_path::default()),
+                    runtime: lit_bit_core::core::Runtime::new(&#machine_definition_const_ident, context),
                 }
             }
             // Place the generated inherent send method here
@@ -172,17 +172,7 @@ pub(crate) fn generate_send_method(
 
     for state_node in &builder.all_states {
         for t in &state_node.transitions {
-            let event_pat = &t.event_pattern;
-
-            let guard_check = if let Some(guard_expr) = &t.guard_handler {
-                quote! {
-                    if !(#guard_expr)(&self.context(), event) {
-                        return false;
-                    }
-                }
-            } else {
-                quote! {}
-            };
+            let event_pat = &t.event_pattern; // Use syn::Pat directly
 
             let action_call = if let Some(action_expr) = &t.action_handler {
                 quote! {
@@ -199,46 +189,40 @@ pub(crate) fn generate_send_method(
                 .get(&target_state.full_path_name)
                 .expect("Missing variant for target state");
 
-            // Get the full path for the current state (where the transition is defined)
-            let from_state_variant = generated_ids
-                .full_path_to_variant_ident
-                .get(&state_node.full_path_name)
-                .expect("Missing variant for from state");
-
-            // This condition ensures the transition is only considered if the machine is currently in the `from_state`
-            // or one of its children (if it's a composite state).
-            // For simplicity in this direct-dispatch model, we'll assume active_leaf_states contains the direct state for now.
-            // A more robust check would involve checking ancestry if active_leaf_states can be children of from_state_variant.
-            // NOTE: The line below is a simplified active state check. The original `send_internal` handles hierarchy.
-            // This generated `send` needs to be compatible with how `self.runtime.active_leaf_states` is structured.
-            // The user's example for `transition` quote block only has `event_pat => { ... }`
-            // It does not include a check for `self.runtime.active_leaf_states.contains(...)` for the `from_state`
-            // This means the match will be on event type *only* initially. If multiple states handle the same event,
-            // the first one encountered in this loop structure will be chosen if its guard passes.
-            // This is a deviation from SCXML semantics where most specific handler (deepest state) should win.
-            // For now, following the user provided structure for `transition`.
-
-            let transition = quote! {
-                #event_pat => {
-                    // Placeholder for checking if this transition's `from_state` is active.
-                    // This is crucial for correct behavior and was implicitly handled by `send_internal` by iterating active states.
-                    // The new model must replicate this or have a different strategy.
-                    // For now, we are directly matching on event, which might not be correct if multiple states handle the same event.
-                    // A possible check: if self.runtime.active_leaf_states.iter().any(|s| *s == #state_id_enum_name::#from_state_variant) {
-                        #guard_check
-                        #action_call
-                        // TODO: This state update is too simplistic. It needs to handle entry/exit actions,
-                        // hierarchical entry (to initial children), and parallel regions.
-                        // It should delegate to Runtime methods like execute_entry_actions_from_lca, etc.
-                        self.runtime.active_leaf_states = heapless::Vec::from_slice(&[#state_id_enum_name::#target_variant]).unwrap();
-                        return true;
-                    // } else {
-                    //     return false; // Or continue to next match arm if this from_state is not active
-                    // }
-                }
+            // state_transition_logic: Performs the actual state change.
+            // This is a simplified version. A real implementation would call runtime methods
+            // to handle entry/exit actions, hierarchical transitions, etc.
+            let state_transition_logic = quote! {
+                // TODO: This state update is too simplistic. It needs to handle entry/exit actions,
+                // hierarchical entry (to initial children), and parallel regions.
+                // It should delegate to Runtime methods like execute_entry_actions_from_lca, etc.
+                self.runtime.active_leaf_states = heapless::Vec::from_slice(&[#state_id_enum_name::#target_variant]).unwrap();
             };
 
-            match_arms.push(transition);
+            let arm = if let Some(guard_expr) = &t.guard_handler {
+                // With guard
+                quote! {
+                    #event_pat => {
+                        if (#guard_expr)(&self.context(), event) {
+                            #action_call
+                            #state_transition_logic
+                            return true;
+                        } else {
+                            return false; // Guard failed for this arm
+                        }
+                    }
+                }
+            } else {
+                // No guard
+                quote! {
+                    #event_pat => {
+                        #action_call
+                        #state_transition_logic
+                        return true;
+                    }
+                }
+            };
+            match_arms.push(arm);
         }
     }
 
@@ -246,7 +230,7 @@ pub(crate) fn generate_send_method(
         pub fn send(&mut self, event: &#event_type_path) -> bool {
             match event {
                 #(#match_arms),*,
-                _ => false, // If no event pattern matched
+                _ => false, // Default case if no other arm matches and returns true
             }
         }
     }
