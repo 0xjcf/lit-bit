@@ -410,6 +410,8 @@ impl Parse for TransitionActionAst {
     }
 }
 
+// ... (rest of the code remains unchanged)
+
 // --- Stage 2: Semantic Analysis & Intermediate Representation ---
 
 // This module will contain the logic for building a temporary tree representation
@@ -424,7 +426,6 @@ pub(crate) mod intermediate_tree {
     use syn::{Error as SynError, Expr, Ident, Path, Result as SynResult}; // Ensure Expr is imported // Keep for target_path_ast.to_token_stream()
 
     #[derive(Debug, Clone)]
-    #[allow(dead_code)]
     pub(crate) struct TmpTransition<'ast> {
         pub event_pattern: &'ast syn::Pat, // Changed from event_name: &'ast Ident
         pub target_state_path_ast: &'ast Path,
@@ -435,25 +436,25 @@ pub(crate) mod intermediate_tree {
     }
 
     #[derive(Debug)]
-    #[allow(dead_code)]
     pub(crate) struct TmpState<'ast> {
         pub local_name: &'ast Ident,
         pub full_path_name: String,
         pub parent_full_path_name: Option<String>,
+        #[allow(dead_code)]
         pub depth: usize,
         pub children_indices: Vec<usize>,
         pub initial_child_idx: Option<usize>,
-        pub entry_handler: Option<&'ast Expr>, // Changed from Path
-        pub exit_handler: Option<&'ast Expr>,  // Changed from Path
+        pub entry_handler: Option<&'ast Expr>,
+        pub exit_handler: Option<&'ast Expr>,
         pub transitions: Vec<TmpTransition<'ast>>,
-        pub is_parallel: bool, // New field
+        pub is_parallel: bool,
+        #[allow(dead_code)]
         pub state_keyword_span: Span,
         pub name_span: Span,
         pub declared_initial_child_expression: Option<&'ast Path>,
     }
 
     pub(crate) struct TmpStateTreeBuilder<'ast> {
-        #[allow(dead_code)]
         pub all_states: Vec<TmpState<'ast>>,
         pub defined_full_paths: HashSet<String>,
         pub state_full_path_to_idx_map: HashMap<String, usize>,
@@ -701,6 +702,7 @@ pub(crate) mod intermediate_tree {
             Ok(())
         }
 
+        // TODO: Refactor this function into smaller pieces.
         #[allow(clippy::too_many_lines)]
         fn process_state_declaration(
             &mut self,
@@ -873,115 +875,6 @@ pub(crate) mod code_generator {
         }
     }
 
-    // Helper to extract a leading/representative Ident and determine if fields are present (for {..} or (..))
-    fn analyse_event_pattern(pattern: &syn::Pat) -> (Option<&Ident>, bool /* has_fields */) {
-        match pattern {
-            Pat::Ident(pi) => (Some(&pi.ident), false),
-            Pat::Path(pp) => (pp.path.segments.last().map(|seg| &seg.ident), false),
-            Pat::Struct(ps) => (ps.path.segments.last().map(|seg| &seg.ident), true),
-            Pat::TupleStruct(pts) => (pts.path.segments.last().map(|seg| &seg.ident), true),
-            _ => (None, false),
-        }
-    }
-
-    pub fn generate_send_method(
-        event_type_path: &Path,
-        state_id_enum_name: &Ident,
-        builder: &TmpStateTreeBuilder,
-        generated_ids: &GeneratedStateIds,
-    ) -> proc_macro2::TokenStream {
-        let mut match_arms = Vec::new();
-
-        for state_node in &builder.all_states {
-            for t in &state_node.transitions {
-                let (_event_ident_opt, _has_fields) = analyse_event_pattern(t.event_pattern);
-
-                let pattern_to_match = match &t.event_pattern {
-                    Pat::Struct(_ps) => {
-                        let event_pat = &t.event_pattern;
-                        quote! { #event_pat }
-                    }
-                    Pat::TupleStruct(_pts) => {
-                        let event_pat = &t.event_pattern;
-                        quote! { #event_pat }
-                    }
-                    Pat::Ident(pi) => {
-                        let ident = &pi.ident;
-                        quote! { #event_type_path::#ident }
-                    }
-                    Pat::Path(_pp) => {
-                        let event_pat = &t.event_pattern;
-                        quote! { #event_pat }
-                    }
-                    _ => {
-                        // Wildcard arm for other syn::Pat variants
-                        let event_pat = &t.event_pattern;
-                        quote! { #event_pat }
-                    }
-                };
-
-                let action_call = if let Some(action_expr) = &t.action_handler {
-                    quote! { (#action_expr)(&mut self.context_mut(), event); }
-                } else {
-                    quote! {}
-                };
-
-                let target_state_idx = t
-                    .target_state_idx
-                    .expect("Transition target index not resolved");
-                let target_tmp_state = &builder.all_states[target_state_idx];
-                let target_state_variant_ident = generated_ids
-                    .full_path_to_variant_ident
-                    .get(&target_tmp_state.full_path_name)
-                    .expect("Target state variant not found");
-
-                let transition_logic_placeholder = quote! {
-                    println!(
-                        "Transitioning to State::{} due to event {:?}",
-                        stringify!(#target_state_variant_ident),
-                        event
-                    );
-                    self.runtime.active_leaf_states = heapless::Vec::from_slice(&[#state_id_enum_name::#target_state_variant_ident]).unwrap();
-                };
-
-                if let Some(guard_expr) = &t.guard_handler {
-                    match_arms.push(quote! {
-                        #pattern_to_match => {
-                            if (#guard_expr)(&self.context(), event) {
-                                #action_call
-                                #transition_logic_placeholder
-                                return true;
-                            }
-                            // If guard fails, this arm does nothing further;
-                            // match continues to the next arm or wildcard.
-                        }
-                    });
-                } else {
-                    // No guard
-                    match_arms.push(quote! {
-                        #pattern_to_match => {
-                            #action_call
-                            #transition_logic_placeholder
-                            return true;
-                        }
-                    });
-                }
-            }
-        }
-
-        quote! {
-            pub fn send(&mut self, event: &#event_type_path) -> bool {
-                match event {
-                    #(#match_arms)*
-                    _ => {
-                        return false; // No pattern matched or all guards failed
-                    }
-                }
-                // This part is unreachable if the wildcard always returns.
-            }
-        }
-    }
-
     #[allow(dead_code)]
     pub(crate) fn generate_machine_struct_and_impl(
         machine_name: &Ident,
@@ -989,18 +882,13 @@ pub(crate) mod code_generator {
         event_type_path: &syn::Path,
         context_type_path: &syn::Path,
         machine_definition_const_ident: &Ident,
-        builder: &TmpStateTreeBuilder,     // Added builder
-        generated_ids: &GeneratedStateIds, // Added generated_ids
+        _builder: &TmpStateTreeBuilder, // Added builder, mark as unused for now if send_method_tokens is removed
+        _generated_ids: &GeneratedStateIds, // Added generated_ids, mark as unused for now
     ) -> TokenStream {
         let m_val = proc_macro2::Literal::usize_unsuffixed(8);
         let max_nodes_for_computation_val = proc_macro2::Literal::usize_unsuffixed(8 * 4);
 
-        let send_method_tokens = generate_send_method(
-            event_type_path,
-            state_id_enum_name, // Use the more specific name
-            builder,
-            generated_ids,
-        );
+        // REMOVE: let send_method_tokens = generate_send_method(...)
 
         let machine_struct_ts = quote! {
             #[derive(Debug)]
@@ -1012,29 +900,29 @@ pub(crate) mod code_generator {
                     #m_val,
                     #max_nodes_for_computation_val
                 >,
-                // context: #context_type_path, // Store context directly if runtime doesn't hold it solely
             }
 
             impl #machine_name {
                 pub fn new(context: #context_type_path) -> Self {
+                    // The initial_event for Runtime::new needs to be handled.
+                    // The Runtime::new function expects an initial_event: &EventType.
+                    // We can use Default::default() for the event type if it derives Default.
                     let initial_event_value = #event_type_path::default();
                     Self {
                         runtime: lit_bit_core::core::Runtime::new(
                             &#machine_definition_const_ident,
-                            context, // Pass initial context to runtime
-                            &initial_event_value
+                            context,
+                            &initial_event_value // Pass a default event
                         ),
-                        // context, // Initialize direct context if stored here
                     }
                 }
 
-                #send_method_tokens // This is the pub fn send(&mut self, event: &EventType) -> bool { ... }
+                // Add inherent send method delegating to runtime
+                pub fn send(&mut self, event: &#event_type_path) -> bool {
+                    self.runtime.send_internal(event)
+                }
 
-                // Convenience methods to access context if it's now only in runtime
-                // These might not be needed if StateMachine trait context methods suffice
-                // and if actions/guards can take `&self` on the machine struct itself.
-                // For now, assume actions/guards are still free functions or methods on original context type.
-                pub fn context(&self) -> & #context_type_path {
+                pub fn context(&self) -> &#context_type_path {
                     self.runtime.context()
                 }
                 pub fn context_mut(&mut self) -> &mut #context_type_path {
@@ -1048,18 +936,14 @@ pub(crate) mod code_generator {
                 type Context = #context_type_path;
 
                 fn send(&mut self, event: &Self::Event) -> bool {
-                    // Delegate to the struct's own send method which contains the pattern matching logic
-                    self.send(event)
+                    // Delegate to the struct's inherent send method, which delegates to runtime
+                    // OR directly to self.runtime.send_internal(event)
+                    self.runtime.send_internal(event)
                 }
 
                 fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::core::MAX_ACTIVE_REGIONS}> {
                     self.runtime.state()
                 }
-
-                // The StateMachine trait's context() and context_mut() will now call the runtime's directly.
-                // No, they should call the struct's own context() and context_mut() which then call the runtime's,
-                // or the struct's methods should be removed if StateMachine trait methods are sufficient.
-                // For now, let them call the struct's methods.
                 fn context(&self) -> &Self::Context {
                     self.context() // Calls Self::context(&self)
                 }

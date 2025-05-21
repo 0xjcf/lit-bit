@@ -3,7 +3,6 @@
 // For now, it's a placeholder.
 
 #[allow(unused_imports)]
-// Allow as it's needed for type resolution even if clippy thinks it's unused directly
 use heapless::Vec;
 
 // Re-export the StateMachine trait for easier use if core types implement it.
@@ -757,8 +756,11 @@ where
     /// # Panics
     /// Contains `expect` and `panic` calls that might trigger if `MAX_ACTIVE_REGIONS` or
     /// `M` (formerly `MAX_HIERARCHY_DEPTH`) are too small, or if internal logic errors occur.
+    // TODO: Refactor this function into smaller pieces.
     #[allow(clippy::too_many_lines)]
     pub fn send_internal(&mut self, event: &EventType) -> bool {
+        // panic!("SEND_INTERNAL_ENTERED"); // Simplest possible panic -- REMOVED
+
         // Changed event: EventType to event: EventType
         let mut potential_transitions: heapless::Vec<
             PotentialTransition<StateType, EventType, ContextType>,
@@ -783,6 +785,14 @@ where
                                     continue;
                                 }
                             }
+                            #[cfg(feature = "std")]
+                            println!(
+                                "[TRACE] Potential transition FOUND: from={:?}, active_leaf={:?}, event={:?}, to={:?}",
+                                check_state_id,
+                                active_leaf_id,
+                                t_def.event,
+                                t_def.to_state // Corrected from t_def.to
+                            );
                             let pot_trans = PotentialTransition {
                                 source_leaf_id: active_leaf_id, // The leaf that sourced this potential path
                                 transition_from_state_id: check_state_id, // The actual state defining the transition
@@ -810,7 +820,19 @@ where
             if potential_transitions_overflow {
                 break; // Break outer loop if overflow occurred
             }
-        }
+        } // End of loop: for &active_leaf_id in &current_active_leaves_snapshot 
+
+        // DEBUG PANIC for any event, showing its debug format -- REMOVING
+        // Temporarily removing cfg for this panic to ensure it's tested
+        // #[cfg(all(debug_assertions, feature = "std"))]
+        // {
+        // panic!(
+        //     "[DEBUG] send_internal received event: {:?}. Potential Transitions count: {}",
+        //     event,
+        //     potential_transitions.len() // Avoid formatting the whole list if it's problematic
+        // );
+        // }
+        // END DEBUG PANIC -- REMOVING
 
         if potential_transitions_overflow {
             // If we overflowed the potential_transitions list, it means MAX_NODES_FOR_COMPUTATION might be too small.
@@ -940,6 +962,14 @@ where
         // Phase 1: Process exits and actions for all transitions first
         for trans_info in &final_transitions_to_execute {
             // Use de-duplicated list
+            #[cfg(feature = "std")]
+            println!(
+                "[TRACE] Arbitrated transition: from={:?} to={:?} due to event={:?}",
+                trans_info.transition_from_state_id,
+                trans_info.target_state_id,
+                trans_info.transition_ref.event
+            );
+
             let source_state_id = trans_info.transition_from_state_id;
             let target_state_id = trans_info.target_state_id;
             let active_leaf_for_this_trans = trans_info.source_leaf_id;
@@ -1064,6 +1094,8 @@ where
                         return false;
                     }
                 };
+                #[cfg(feature = "std")]
+                println!("[TRACE] States to exit: {states_to_exit_for_branch:?}");
 
                 for &state_to_exit_id in &states_to_exit_for_branch {
                     if !states_exited_this_step.contains(&state_to_exit_id) {
@@ -1173,6 +1205,10 @@ where
         // Phase 3: Process entries and add new leaves to next_active_leaf_states
         for (target_id, lca_id, _original_leaf_for_context) in entry_execution_list {
             let new_leaves_result = self.execute_entry_actions_from_lca(target_id, lca_id, event);
+            #[cfg(feature = "std")]
+            println!(
+                "[TRACE] Entry execution result: new leaves = {new_leaves_result:?}" // This will print Ok(leaves) or Err(PathTooLongError)
+            );
             match new_leaves_result {
                 Ok(new_leaves_from_this_entry) => {
                     for new_leaf in new_leaves_from_this_entry {
@@ -1197,6 +1233,28 @@ where
         }
 
         if overall_transition_occurred {
+            #[cfg(feature = "std")]
+            println!("[TRACE] Final active state before commit: {new_next_active_leaf_states:?}");
+
+            /* // Temporarily commented out debug panic
+            panic!(
+                "[DEBUG] overall_transition_occurred was true. new_next_active_leaf_states: {:?}, event: {:?}",
+                new_next_active_leaf_states,
+                event
+            );
+            */
+
+            // #[cfg(all(debug_assertions, feature = "std"))]
+            // {
+            //     let event_debug_str = format!("{:?}", event);
+            //     if event_debug_str.contains("EventTriggerP1ToC1B") {
+            //         panic!(
+            //             "[DEBUG] For EventTriggerP1ToC1B: new_next_active_leaf_states before commit: {:?}",
+            //             new_next_active_leaf_states
+            //         );
+            //     }
+            // }
+
             self.active_leaf_states = new_next_active_leaf_states;
         }
 
@@ -1244,7 +1302,6 @@ mod tests {
     const TEST_HIERARCHY_DEPTH_M: usize = 8;
     const TEST_MAX_NODES_FOR_COMPUTATION: usize = TEST_HIERARCHY_DEPTH_M * MAX_ACTIVE_REGIONS; // Renamed from TEST_MTMAR
 
-    #[allow(dead_code)] // Allow dead code for S2 variant and potentially others during dev
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     enum TestState {
         S0,
@@ -1771,28 +1828,30 @@ mod tests {
                 TestState::S0,
             );
 
-        let initial_context = TestContext { val: 4 };
+        // Test case 1: Guard should fail
+        let initial_context_guard_fails = TestContext { val: 5 }; // val is 5, so guard (val < 5) is false
         let initial_event_for_test = TestEvent::E0; // Example
-        let mut runtime =
+        let mut runtime_guard_fails =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
                 &TEST_MACHINE_DEF,
-                initial_context,
+                initial_context_guard_fails,
                 &initial_event_for_test,
-            ); // val is not < 5
-        assert!(!runtime.send(&TestEvent::E0)); // Guard should fail
-        assert_eq!(runtime.state().as_slice(), &[TestState::S0]);
-        assert_eq!(runtime.context().val, 4); // Action should not run
+            );
+        assert!(!runtime_guard_fails.send(&TestEvent::E0)); // Guard should fail, send returns false, !false is true.
+        assert_eq!(runtime_guard_fails.state().as_slice(), &[TestState::S0]);
+        assert_eq!(runtime_guard_fails.context().val, 5); // Action should not run
 
-        let initial_context = TestContext { val: 5 };
-        let mut runtime_pass =
+        // Test case 2: Guard should pass
+        let initial_context_guard_passes = TestContext { val: 4 }; // val is 4, so guard (val < 5) is true
+        let mut runtime_guard_passes =
             Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
                 &TEST_MACHINE_DEF,
-                initial_context,
+                initial_context_guard_passes,
                 &initial_event_for_test,
-            ); // val is 5
-        assert!(runtime_pass.send(&TestEvent::E0)); // Guard should pass
-        assert_eq!(runtime_pass.state().as_slice(), &[TestState::S1]);
-        assert_eq!(runtime_pass.context().val, 6); // Action should run
+            );
+        assert!(runtime_guard_passes.send(&TestEvent::E0)); // Guard should pass, send returns true.
+        assert_eq!(runtime_guard_passes.state().as_slice(), &[TestState::S1]);
+        assert_eq!(runtime_guard_passes.context().val, 5); // Action should run
     }
 
     #[test]

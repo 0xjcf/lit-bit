@@ -1,6 +1,7 @@
 // lit-bit-core/tests/basic_machine_integration_test.rs
 
 #[cfg(test)]
+#[allow(clippy::trivially_copy_pass_by_ref)]
 pub mod basic_machine_integration_test {
     use core::convert::TryFrom;
     use heapless::String;
@@ -17,7 +18,6 @@ pub mod basic_machine_integration_test {
     }
 
     #[derive(Debug, Clone, PartialEq)]
-    #[allow(clippy::struct_excessive_bools)]
     pub struct TestContext {
         count: i32,
         action_log: heapless::Vec<heapless::String<ACTION_STRING_CAPACITY>, ACTION_LOG_CAPACITY>,
@@ -181,6 +181,7 @@ pub mod basic_machine_integration_test {
 
 // --- Test for Parallel Initial State Activation ---
 #[cfg(test)]
+#[allow(clippy::trivially_copy_pass_by_ref)]
 mod parallel_initial_state_test {
     use core::convert::TryFrom;
     use lit_bit_core::StateMachine;
@@ -207,19 +208,19 @@ mod parallel_initial_state_test {
     }
 
     fn entry_p(ctx: &mut ParallelInitContext, _event: &TestEvent) {
-        ctx.record("entry_p");
+        ctx.record("EnterP");
     }
     fn entry_r1(ctx: &mut ParallelInitContext, _event: &TestEvent) {
-        ctx.record("entry_r1");
+        ctx.record("EnterR1");
     }
     fn entry_r1a(ctx: &mut ParallelInitContext, _event: &TestEvent) {
-        ctx.record("entry_r1a");
+        ctx.record("EnterR1A");
     }
     fn entry_r2(ctx: &mut ParallelInitContext, _event: &TestEvent) {
-        ctx.record("entry_r2");
+        ctx.record("EnterR2");
     }
     fn entry_r2x(ctx: &mut ParallelInitContext, _event: &TestEvent) {
-        ctx.record("entry_r2x");
+        ctx.record("EnterR2X");
     }
 
     statechart! {

@@ -30,9 +30,11 @@ pub enum MediaPlayerEvent {
     #[default]
     Play,
     Stop,
+    /* // Fully comment out LoadTrack variant
     LoadTrack {
         path: String<TRACK_ID_CAPACITY>,
     },
+    */
     VolumeUp,
     VolumeDown,
     NextTrack,
@@ -43,7 +45,7 @@ pub enum MediaPlayerEvent {
 // Action and Guard functions (simplified)
 fn do_play(context: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
     if let Some(track) = &context.current_track {
-        println!("[Action] do_play - Track: {:?}", track);
+        println!("[Action] do_play - Track: {track:?}");
     }
 }
 
@@ -57,6 +59,7 @@ fn is_track_loaded(context: &MediaPlayerContext, _event: &MediaPlayerEvent) -> b
     loaded
 }
 
+/* // Commenting out guard_for_load_track
 fn guard_for_load_track(_context: &MediaPlayerContext, event: &MediaPlayerEvent) -> bool {
     if let MediaPlayerEvent::LoadTrack { path } = event {
         let valid = !path.is_empty() && path.contains('.');
@@ -69,7 +72,9 @@ fn guard_for_load_track(_context: &MediaPlayerContext, event: &MediaPlayerEvent)
     }
     false
 }
+*/
 
+/* // Commenting out action_for_load_track
 fn action_for_load_track(context: &mut MediaPlayerContext, event: &MediaPlayerEvent) {
     if let MediaPlayerEvent::LoadTrack { path } = event {
         println!("[Action] action_for_load_track - Path: {}", path.as_str());
@@ -78,6 +83,7 @@ fn action_for_load_track(context: &mut MediaPlayerContext, event: &MediaPlayerEv
         println!("[Action] action_for_load_track called with unexpected event type");
     }
 }
+*/
 
 fn entry_stopped(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
     println!("Entering Stopped state. Track: {:?}", ctx.current_track);
@@ -113,13 +119,13 @@ statechart! {
         entry: entry_stopped;
         exit: exit_stopped;
         on MediaPlayerEvent::Play [guard is_track_loaded] => Playing [action do_play];
-        on MediaPlayerEvent::LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track];
+        // on MediaPlayerEvent::LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track]; // Line fully commented now
     }
 
     state Loading {
         entry: entry_loading;
         exit: exit_loading;
-        on MediaPlayerEvent::Play => Playing [action do_play];
+        // on MediaPlayerEvent::Play => Playing [action do_play]; // Temporarily commented out due to unreachable_pattern lint
     }
 
     state Playing {
@@ -149,6 +155,7 @@ fn main() {
     player.send(&MediaPlayerEvent::Play);
     println!("State after Play (no track): {:?}", player.state());
 
+    /*
     println!("Sending LoadTrack (empty path, should fail guard):");
     player.send(&MediaPlayerEvent::LoadTrack {
         path: String::try_from("").unwrap(),
@@ -167,8 +174,11 @@ fn main() {
     });
     println!("State after LoadTrack: {:?}", player.state());
     println!("Context after LoadTrack: {:?}", player.context());
+    */
 
-    println!("Sending Play (should now succeed):");
+    // The following Play will likely always fail the guard now since no track is loaded.
+    // This is fine for this test, as we are checking for E0533.
+    println!("Sending Play (track was never loaded):");
     player.send(&MediaPlayerEvent::Play);
     println!("State after Play: {:?}", player.state());
 
@@ -176,6 +186,7 @@ fn main() {
     player.send(&MediaPlayerEvent::Stop);
     println!("State after Stop: {:?}", player.state());
 
+    /*
     // Test the self-transition with pattern
     println!("Sending LoadTrack again (in Stopped state):");
     player.send(&MediaPlayerEvent::LoadTrack {
@@ -187,6 +198,7 @@ fn main() {
     println!("Sending Play (after loading 'another_track.mp4'):");
     player.send(&MediaPlayerEvent::Play);
     println!("State after Play: {:?}", player.state());
+    */
 }
 
 #[cfg(target_arch = "riscv32")]

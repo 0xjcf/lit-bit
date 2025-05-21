@@ -23,7 +23,8 @@ pub(crate) fn generate_machine_struct_and_impl(
         fn send(&mut self, event: &Self::Event) -> bool {
             // Ensure this calls the inherent `send` method of the struct,
             // not the trait method itself recursively.
-            Self::send(self, event)
+            // Use #machine_name::send to call the inherent method.
+            #machine_name::send(self, event)
         }
     };
 
@@ -65,10 +66,12 @@ pub(crate) fn generate_machine_struct_and_impl(
                 self.runtime.state()
             }
             fn context(&self) -> &Self::Context {
-                self.runtime.context()
+                // Call the inherent method
+                #machine_name::context(self)
             }
             fn context_mut(&mut self) -> &mut Self::Context {
-                self.runtime.context_mut()
+                // Call the inherent method
+                #machine_name::context_mut(self)
             }
         }
     };
@@ -150,31 +153,43 @@ pub(crate) fn generate_states_array<'ast>(
 }
 
 pub(crate) fn generate_transitions_array<'ast>(
-    builder: &'ast TmpStateTreeBuilder<'ast>,
-    generated_ids: &GeneratedStateIds,
+    _builder: &'ast TmpStateTreeBuilder<'ast>,
+    _generated_ids: &GeneratedStateIds,
     event_type_path: &'ast syn::Path,
     context_type_path: &'ast syn::Path,
 ) -> SynResult<TokenStream> {
-    let state_id_enum_name = &generated_ids.state_id_enum_name;
     let transitions_array_ts = quote! {
-        const TRANSITIONS: &[Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[];
+        const TRANSITIONS: &[lit_bit_core::core::Transition<
+            _, #event_type_path, #context_type_path
+        >] = &[];
     };
     Ok(transitions_array_ts)
 }
 
-pub(crate) fn generate_send_method(
+pub fn generate_send_method(
     event_type_path: &syn::Path,
     state_id_enum_name: &Ident,
     builder: &TmpStateTreeBuilder,
     generated_ids: &GeneratedStateIds,
 ) -> proc_macro2::TokenStream {
+    eprintln!("*** REBUILDING generate_send_method ***"); // DEBUG LINE ADDED
     let mut match_arms = Vec::new();
 
     for state_node in &builder.all_states {
         for t in &state_node.transitions {
-            let event_pat = &t.event_pattern; // Use syn::Pat directly
+            let event_pat = &t.event_pattern;
 
-            let action_call = if let Some(action_expr) = &t.action_handler {
+            let guard_block = if let Some(guard_expr) = &t.guard_handler {
+                quote! {
+                    (#guard_expr)(&self.context(), event)
+                }
+            } else {
+                quote! {
+                    true
+                }
+            };
+
+            let action_block = if let Some(action_expr) = &t.action_handler {
                 quote! {
                     (#action_expr)(&mut self.context_mut(), event);
                 }
@@ -182,47 +197,30 @@ pub(crate) fn generate_send_method(
                 quote! {}
             };
 
-            let target_state_idx = t.target_state_idx.expect("Transition target not resolved");
+            let target_state_idx = t.target_state_idx.expect("Missing target state");
             let target_state = &builder.all_states[target_state_idx];
             let target_variant = generated_ids
                 .full_path_to_variant_ident
                 .get(&target_state.full_path_name)
-                .expect("Missing variant for target state");
+                .expect("Missing target variant");
 
-            // state_transition_logic: Performs the actual state change.
-            // This is a simplified version. A real implementation would call runtime methods
-            // to handle entry/exit actions, hierarchical transitions, etc.
-            let state_transition_logic = quote! {
-                // TODO: This state update is too simplistic. It needs to handle entry/exit actions,
-                // hierarchical entry (to initial children), and parallel regions.
-                // It should delegate to Runtime methods like execute_entry_actions_from_lca, etc.
-                self.runtime.active_leaf_states = heapless::Vec::from_slice(&[#state_id_enum_name::#target_variant]).unwrap();
+            let perform_transition_and_update_state = quote! {
+                self.runtime.active_leaf_states = heapless::Vec::from_slice(
+                    &[#state_id_enum_name::#target_variant]
+                ).unwrap();
             };
 
-            let arm = if let Some(guard_expr) = &t.guard_handler {
-                // With guard
-                quote! {
-                    #event_pat => {
-                        if (#guard_expr)(&self.context(), event) {
-                            #action_call
-                            #state_transition_logic
-                            return true;
-                        } else {
-                            return false; // Guard failed for this arm
-                        }
-                    }
-                }
-            } else {
-                // No guard
-                quote! {
-                    #event_pat => {
-                        #action_call
-                        #state_transition_logic
+            match_arms.push(quote! {
+                #event_pat => {
+                    let passes_guard = #guard_block;
+                    if passes_guard {
+                        #action_block
+                        #perform_transition_and_update_state
                         return true;
                     }
+                    false
                 }
-            };
-            match_arms.push(arm);
+            });
         }
     }
 
@@ -230,7 +228,7 @@ pub(crate) fn generate_send_method(
         pub fn send(&mut self, event: &#event_type_path) -> bool {
             match event {
                 #(#match_arms),*,
-                _ => false, // Default case if no other arm matches and returns true
+                _ => false
             }
         }
     }
