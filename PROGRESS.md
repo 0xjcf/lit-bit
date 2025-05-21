@@ -4,6 +4,33 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ---
 
+## 2024-05-19 · _Session End_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Runtime Bugfixing & Test Completion)
+*   _Work_:
+    *   Successfully debugged and fixed all remaining failing unit and integration tests for hierarchical and parallel state transitions.
+    *   Key fixes involved multiple iterations on:
+        *   `find_lca` to correctly determine the lowest common ancestor.
+        *   `execute_entry_actions_from_lca` and `enter_state_recursive_logic` to ensure correct entry action sequencing, avoid duplicates, and properly handle region/child initialization (using `run_entry_action_for_this_state` flag and explicit entry for region containers).
+        *   De-duplication logic in `Runtime::send()` for `arbitrated_transitions` to prevent multiple executions of the same transition definition.
+    *   Refined test assertions for parallel state logs to be robust against valid interleaving of actions from orthogonal regions.
+    *   Addressed numerous Clippy lints in both `lit-bit-core/src/core/mod.rs` (tests module) and `lit-bit-core/tests/parallel_machine_integration_test.rs`.
+    *   Added several new integration tests for parallel state scenarios in `parallel_machine_integration_test.rs`.
+    *   All 28 `lit-bit-core` tests and 52 `lit-bit-macro` tests are now passing.
+*   _Next_:
+    *   Complete the final integration test for parallel states (event targeting a single region).
+    *   Proceed with Task 4.3 (media player example) and Task 5 (documentation).
+
+---
+
+## 2024-05-19 · _Session Start_
+*   _Author_: @Gemini (via @user)
+*   _Phase_: 03-parallel-states (Runtime Implementation)
+*   _Work_: Began session to implement parallel state event dispatch in `Runtime::send()`.
+*   _Next_: Focus on Task 3.2: Completing `Runtime::send()` for parallel states, then Task 4.1: Unit tests for this logic.
+
+---
+
 ## 2025-05-18 · _Session End (Code Review Follow-up Part 2)_
 *   _Author_: @Gemini (via @user)
 *   _Phase_: 03-parallel-states (Runtime Refinement & Polish)

@@ -36,10 +36,10 @@ pub mod basic_machine_integration_test {
         fn record(&mut self, action_name: &str) {
             let s = heapless::String::try_from(action_name)
                 .expect("Failed to create heapless string for action log");
-            self.action_log.push(s).unwrap_or_else(|val| {
+            self.action_log.push(s).unwrap_or_else(|_val_not_pushed| {
                 panic!(
-                    "Action log overflow (capacity {ACTION_LOG_CAPACITY}). Could not log: {val:?}"
-                )
+                    "Action log overflow (capacity {ACTION_LOG_CAPACITY}). Could not log: {action_name}"
+                );
             });
         }
         fn clear_log(&mut self) {
@@ -194,11 +194,11 @@ mod parallel_initial_state_test {
         fn record(&mut self, entry: &str) {
             let s = heapless::String::try_from(entry)
                 .expect("Failed to create heapless string for ParallelInitContext log");
-            self.log.push(s).unwrap_or_else(|val| {
+            let capacity = self.log.capacity(); // Get capacity before the move in push
+            self.log.push(s).unwrap_or_else(|_val_not_pushed| {
                 panic!(
-                    "ParallelInitContext log overflow (capacity {}). Could not log: {val:?}",
-                    10
-                )
+                    "ParallelInitContext log overflow (capacity {capacity}). Could not log: {entry}"
+                );
             });
         }
     }

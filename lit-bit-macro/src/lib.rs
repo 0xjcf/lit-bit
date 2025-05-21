@@ -53,7 +53,7 @@ impl Parse for StateAttributesInputAst {
 
         if attributes.is_empty() {
             return Err(syn::Error::new(
-                bracket_token.span.join(), // Reverted to .join() as DelimSpan::join() returns Span
+                bracket_token.span.join(), // Ensure this is .join()
                 "State attribute list cannot be empty if brackets are present. Expected at least one attribute like '[parallel]'.",
             ));
         }
@@ -882,6 +882,8 @@ pub(crate) mod code_generator {
         let mut sorted_states: Vec<_> = builder.all_states.iter().collect();
         sorted_states.sort_by_key(|s| &s.full_path_name);
 
+        let mut match_arms = Vec::new(); // Initialize match_arms before the loop
+
         for tmp_state in sorted_states {
             let variant_ident_pascal_case = to_pascal_case(&tmp_state.full_path_name); // This is an Ident
             let variant_ident_str = variant_ident_pascal_case.to_string();
@@ -914,19 +916,12 @@ pub(crate) mod code_generator {
                 tmp_state.full_path_name.clone(),
                 variant_ident_pascal_case.clone(),
             );
-            variants_code.push(variant_ident_pascal_case);
-        }
+            variants_code.push(variant_ident_pascal_case.clone()); // Clone for variants_code
 
-        let mut match_arms = Vec::new();
-        // Iterate over the same sorted full_path_names that determined variant order to build match arms
-        // This ensures the string literals in `from_str_path` correspond to the variants.
-        // We need to re-iterate based on a sorted list of keys from full_path_to_variant_map or re-use sorted_states approach.
-        let mut sorted_map_entries: Vec<_> = full_path_to_variant_map.iter().collect();
-        sorted_map_entries.sort_by_key(|(k, _v)| *k); // Sort by the string path
-
-        for (path_str, variant_ident) in sorted_map_entries {
+            // Build match arm directly here
+            let path_str_literal = &tmp_state.full_path_name;
             match_arms.push(quote! {
-                #path_str => Some(Self::#variant_ident),
+                #path_str_literal => Some(Self::#variant_ident_pascal_case),
             });
         }
 

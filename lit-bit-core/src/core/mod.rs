@@ -208,94 +208,103 @@ pub struct Runtime<
 
 // Helper function, can be outside impl Runtime or a static method if preferred.
 // Making it a free function for now to ensure no `self` issues initially.
-fn enter_state_recursive_logic<
-    StateType,
-    EventType,
-    ContextType,
-    const M: usize, // Added M here, removed VISITED_CAP
->(
+fn enter_state_recursive_logic<StateType, EventType, ContextType, const M: usize>(
     machine_def: &MachineDefinition<StateType, EventType, ContextType>,
     context: &mut ContextType,
     state_id_to_enter: StateType,
     accumulator: &mut heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
-    visited_during_entry: &mut heapless::Vec<StateType, M>, // Use M directly
+    visited_during_entry: &mut heapless::Vec<StateType, M>,
+    run_entry_action_for_this_state: bool, // New flag name for clarity
 ) -> Result<(), EntryError>
 where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     EventType: Copy + Clone + PartialEq + Eq + core::hash::Hash + 'static,
     ContextType: Clone + 'static,
 {
-    let is_cycle = visited_during_entry.contains(&state_id_to_enter);
-    debug_assert!(
-        !is_cycle,
-        "Cycle detected during enter_state_recursive_logic for state: {state_id_to_enter:?}"
-    );
-    if is_cycle {
+    if visited_during_entry.contains(&state_id_to_enter) {
+        debug_assert!(false, "Cycle detected for state: {state_id_to_enter:?}");
         return Err(EntryError {
             kind: EntryErrorKind::CycleDetected,
         });
     }
-
-    let push_failed = visited_during_entry.push(state_id_to_enter).is_err();
-    debug_assert!(
-        !push_failed,
-        "Visited entry path too long (capacity {}) for state: {state_id_to_enter:?}",
-        visited_during_entry.capacity()
-    );
-    if push_failed {
+    if visited_during_entry.push(state_id_to_enter).is_err() {
+        debug_assert!(
+            false,
+            "Visited entry path too long for state: {state_id_to_enter:?}"
+        );
         return Err(EntryError {
             kind: EntryErrorKind::CapacityExceeded,
         });
     }
 
-    if let Some(node) = machine_def.get_state_node(state_id_to_enter) {
+    let Some(node) = machine_def.get_state_node(state_id_to_enter) else {
+        assert!(
+            !cfg!(debug_assertions),
+            "State ID ({state_id_to_enter:?}) not found in MachineDefinition."
+        );
+        let _ = visited_during_entry.pop();
+        return Err(EntryError {
+            kind: EntryErrorKind::StateNotFound,
+        });
+    };
+
+    if run_entry_action_for_this_state {
         if let Some(entry_fn) = node.entry_action {
             entry_fn(context);
         }
-
-        if node.is_parallel {
-            for s_node_in_def in machine_def.states {
-                if s_node_in_def.parent == Some(state_id_to_enter) {
-                    // Propagate error using ? operator
-                    enter_state_recursive_logic::<_, _, _, M>(
-                        machine_def,
-                        context,
-                        s_node_in_def.id,
-                        accumulator,
-                        visited_during_entry,
-                    )?;
-                }
-            }
-        // Collapsed else if here
-        } else if let Some(initial_child_id) = node.initial_child {
-            enter_state_recursive_logic::<_, _, _, M>(
-                machine_def,
-                context,
-                initial_child_id,
-                accumulator,
-                visited_during_entry,
-            )?;
-        // This is the accumulator push for leaf states. If it fails, it's a critical sizing error.
-        } else if accumulator.push(state_id_to_enter).is_err() {
-            // Unconditional panic as this indicates MAX_ACTIVE_REGIONS is too small.
-            panic!(
-                "MAX_ACTIVE_REGIONS ({}) exceeded while accumulating leaf states for {:?}.",
-                accumulator.capacity(),
-                state_id_to_enter
-            );
-        }
-    } else {
-        // State not found
-        if cfg!(debug_assertions) {
-            panic!(
-                "enter_state_recursive_logic: State ID ({state_id_to_enter:?}) not found in MachineDefinition."
-            );
-        } else {
-            return Err(EntryError {
-                kind: EntryErrorKind::StateNotFound,
-            });
-        }
     }
+
+    if node.is_parallel {
+        for s_node_in_def in machine_def.states {
+            if s_node_in_def.parent == Some(state_id_to_enter) {
+                // s_node_in_def is a region container (e.g., R1, R2)
+                // 1. Execute entry action for the region container itself.
+                if let Some(region_entry_fn) = s_node_in_def.entry_action {
+                    region_entry_fn(context);
+                }
+
+                // 2. Find initial child of the region container s_node_in_def
+                let initial_child_of_region = s_node_in_def.initial_child.ok_or_else(|| {
+                    debug_assert!(
+                        false,
+                        "Parallel region {:?} is missing an initial child.",
+                        s_node_in_def.id
+                    );
+                    EntryError {
+                        kind: EntryErrorKind::StateNotFound,
+                    }
+                })?;
+
+                // 3. Recursively enter the initial child of the region.
+                enter_state_recursive_logic::<_, _, _, M>(
+                    machine_def,
+                    context,
+                    initial_child_of_region,
+                    accumulator,
+                    visited_during_entry,
+                    true, // Always run entry actions for children states during this recursion
+                )?;
+            }
+        }
+    } else if let Some(initial_child_id) = node.initial_child {
+        enter_state_recursive_logic::<_, _, _, M>(
+            machine_def,
+            context,
+            initial_child_id,
+            accumulator,
+            visited_during_entry,
+            true, // Always run entry actions for children states during this recursion
+        )?;
+    } else {
+        // Atomic state
+        assert!(
+            accumulator.push(state_id_to_enter).is_ok(),
+            "MAX_ACTIVE_REGIONS ({}) exceeded while accumulating leaf states for {:?}.",
+            accumulator.capacity(),
+            state_id_to_enter
+        );
+    }
+
     let _ = visited_during_entry.pop();
     Ok(())
 }
@@ -349,6 +358,7 @@ where
             top_level_initial_state_id,
             &mut active_states_vec,
             &mut visited_for_initial_entry,
+            true,
         ) {
             panic!("Failed to initialize state machine due to entry error: {entry_error:?}");
         }
@@ -406,21 +416,19 @@ where
             return Ok(Some(state1_id));
         }
 
-        let path1 = self.get_path_to_root(state1_id)?; // Propagate error
-        let path2 = self.get_path_to_root(state2_id)?; // Propagate error
+        let path1 = self.get_path_to_root(state1_id)?; // Path from state1 up to root
+        let path2 = self.get_path_to_root(state2_id)?; // Path from state2 up to root
 
-        if path1.contains(&state2_id) {
-            return Ok(Some(state2_id));
-        }
-        if path2.contains(&state1_id) {
-            return Ok(Some(state1_id));
+        // Iterate through path1 (from state1 towards root).
+        // The first element of path1 also found in path2 is the LCA.
+        for &id1_ancestor in &path1 {
+            if path2.contains(&id1_ancestor) {
+                return Ok(Some(id1_ancestor));
+            }
         }
 
-        Ok(path1
-            .iter()
-            .rev()
-            .find(|&&ancestor1_from_path1| path2.contains(&ancestor1_from_path1))
-            .copied())
+        Ok(None) // Should not happen if both states are in the same tree (i.e. have a common root)
+        // but as a fallback if they somehow aren't (e.g. disconnected components, though our model assumes one tree).
     }
 
     fn is_proper_ancestor(
@@ -513,7 +521,7 @@ where
                 &mut collected_for_exit,
                 &mut already_added_to_final_list,
                 &mut recursion_guard_vec, // Pass the new guard
-            );
+            )?; // Propagate error
         }
         Ok(collected_for_exit)
     }
@@ -526,9 +534,10 @@ where
         ordered_exit_list: &mut heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>,
         already_added: &mut heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>,
         recursion_guard: &mut heapless::Vec<StateType, M>, // M should be sufficient for path depth
-    ) {
+    ) -> Result<(), PathTooLongError> {
+        // Changed return type
         if Some(current_state_id) == lca_id || already_added.contains(&current_state_id) {
-            return;
+            return Ok(()); // Changed
         }
 
         let is_cycle_in_exit = recursion_guard.contains(&current_state_id);
@@ -537,22 +546,22 @@ where
             "Cycle detected during collect_states_for_exit_post_order for state: {current_state_id:?}"
         );
         if is_cycle_in_exit {
-            return;
+            return Ok(()); // Changed
         }
 
-        let push_guard_failed = recursion_guard.push(current_state_id).is_err();
-        debug_assert!(
-            !push_guard_failed,
-            "Recursion depth exceeded in collect_states_for_exit_post_order (capacity {}) for state: {current_state_id:?}",
-            recursion_guard.capacity()
-        );
-        if push_guard_failed {
-            return;
+        if recursion_guard.push(current_state_id).is_err() {
+            // Check push failure
+            debug_assert!(
+                false, // This assertion will now always fail if the push fails.
+                "Recursion depth exceeded in collect_states_for_exit_post_order (capacity {}) for state: {current_state_id:?}",
+                recursion_guard.capacity()
+            );
+            return Err(PathTooLongError); // Return error
         }
 
         let Some(current_node) = self.machine_def.get_state_node(current_state_id) else {
             let _ = recursion_guard.pop(); // Pop before returning if node not found
-            return;
+            return Ok(()); // Changed
         };
 
         // Mark as visited for *this specific traversal context* to avoid issues if it's an ancestor of another part of main path.
@@ -568,9 +577,15 @@ where
                 // Check if region is active (has a descendant in active_leaf_states)
                 let mut region_active_leaf: Option<StateType> = None;
                 for &leaf in &self.active_leaf_states {
-                    if self.is_descendant_or_self(leaf, region_node.id) {
-                        region_active_leaf = Some(leaf);
-                        break;
+                    match self.is_descendant_or_self(leaf, region_node.id) {
+                        // Handle Result
+                        Ok(is_desc) => {
+                            if is_desc {
+                                region_active_leaf = Some(leaf);
+                                break;
+                            }
+                        }
+                        Err(e) => return Err(e), // Propagate PathTooLongError
                     }
                 }
                 if let Some(active_leaf_in_region) = region_active_leaf {
@@ -581,7 +596,7 @@ where
                         ordered_exit_list,
                         already_added,
                         recursion_guard,
-                    );
+                    )?; // Propagate error
                 }
                 // After region's children, add region itself (if not already added)
                 if !already_added.contains(&region_node.id) {
@@ -591,7 +606,7 @@ where
                         ordered_exit_list,
                         already_added,
                         recursion_guard,
-                    );
+                    )?; // Propagate error
                 }
             }
         } else if current_node.initial_child.is_some() {
@@ -603,7 +618,7 @@ where
                     ordered_exit_list,
                     already_added,
                     recursion_guard,
-                );
+                )?; // Propagate error
             }
         }
 
@@ -619,24 +634,20 @@ where
             );
         }
         let _ = recursion_guard.pop(); // Pop after processing this node and its children
+        Ok(()) // Changed
     }
 
     // is_descendant_or_self method from before
-    fn is_descendant_or_self(&self, candidate_id: StateType, ancestor_id: StateType) -> bool {
+    fn is_descendant_or_self(
+        &self,
+        candidate_id: StateType,
+        ancestor_id: StateType,
+    ) -> Result<bool, PathTooLongError> {
+        // Changed return type
         if candidate_id == ancestor_id {
-            return true;
+            return Ok(true);
         }
-        match self.is_proper_ancestor(ancestor_id, candidate_id) {
-            Ok(is_proper) => is_proper,
-            Err(_) => {
-                if cfg!(debug_assertions) {
-                    panic!("PathTooLongError in is_descendant_or_self, cannot determine reliably.");
-                } else {
-                    // Default to false if ancestry check had an error in release.
-                    false
-                }
-            }
-        }
+        self.is_proper_ancestor(ancestor_id, candidate_id) // Propagate error
     }
 
     /// Executes entry actions from a state (typically child of LCA) down to a target leaf state.
@@ -645,108 +656,86 @@ where
         &mut self,
         target_state_id: StateType,
         lca_id: Option<StateType>,
-    ) -> heapless::Vec<StateType, MAX_ACTIVE_REGIONS> {
-        // This function's error handling for path needs thought
-        let mut new_active_leaf_states: heapless::Vec<StateType, MAX_ACTIVE_REGIONS> =
-            heapless::Vec::new();
-        let mut visited_for_current_entry: heapless::Vec<StateType, M> = heapless::Vec::new();
+    ) -> Result<heapless::Vec<StateType, MAX_ACTIVE_REGIONS>, PathTooLongError> {
+        let mut new_active_leaf_states = heapless::Vec::new();
+        let mut visited_for_final_recursion: heapless::Vec<StateType, M> = heapless::Vec::new();
 
-        let path_to_target_result = self.get_path_to_root(target_state_id);
-        let Ok(mut path_to_target) = path_to_target_result else {
-            debug_assert!(
-                path_to_target_result.is_ok(),
-                "PathTooLongError encountered when trying to get path for target_state_id in execute_entry_actions_from_lca"
-            );
-            return new_active_leaf_states;
-        };
-        path_to_target.reverse();
+        let path_from_target_to_root = self.get_path_to_root(target_state_id)?;
+        // path_is [Target, P(Target), P(P(Target)), ..., Root]
 
-        let mut start_entering_idx = 0;
-        if let Some(lca) = lca_id {
-            if let Some(pos) = path_to_target.iter().position(|&s| s == lca) {
-                start_entering_idx = pos + 1;
+        let mut entry_path_segment: heapless::Vec<StateType, M> = heapless::Vec::new();
+        let mut lca_passed = lca_id.is_none();
+
+        for i in (0..path_from_target_to_root.len()).rev() {
+            // Iterates [Root, ..., P(LCA), LCA, Child(LCA), ..., Target]
+            let state_on_path = path_from_target_to_root[i];
+            if lca_passed {
+                entry_path_segment
+                    .push(state_on_path)
+                    .map_err(|_| PathTooLongError)?;
+            }
+            if Some(state_on_path) == lca_id {
+                lca_passed = true;
             }
         }
+        // entry_path_segment is now [ChildOfLCA_or_Root, ..., TargetParent, Target]
 
-        if start_entering_idx >= path_to_target.len() {
-            if self.machine_def.get_state_node(target_state_id).is_some() {
-                let result = enter_state_recursive_logic::<_, _, _, M>(
-                    self.machine_def, // Removed & as self.machine_def is already a reference
-                    &mut self.context,
-                    target_state_id,
-                    &mut new_active_leaf_states,
-                    &mut visited_for_current_entry,
-                );
-                #[cfg(debug_assertions)]
-                {
-                    if let Err(e) = result {
-                        panic!(
-                            "Entry error during execute_entry_actions_from_lca (direct target): {e:?}"
-                        );
-                    }
-                }
-                #[cfg(not(debug_assertions))]
-                {
-                    let _ = result; // Suppress unused_variable warning in release
-                }
+        for &state_to_enter in &entry_path_segment {
+            let node = self
+                .machine_def
+                .get_state_node(state_to_enter)
+                .ok_or(PathTooLongError)?;
+
+            if let Some(entry_fn) = node.entry_action {
+                entry_fn(&mut self.context);
             }
-            return new_active_leaf_states;
-        }
 
-        for i in start_entering_idx..path_to_target.len() {
-            let state_on_path_id = path_to_target[i];
-
-            if state_on_path_id == target_state_id {
-                let result = enter_state_recursive_logic::<_, _, _, M>(
-                    self.machine_def, // Removed &
+            // If an intermediate state on this path is parallel (and not the final target of transition),
+            // it must be fully entered, and its leaves become the result of this entry sequence.
+            if node.is_parallel && state_to_enter != target_state_id {
+                // Its own entry action was just run. Now recursively enter its regions.
+                return enter_state_recursive_logic::<_, _, _, M>(
+                    self.machine_def,
                     &mut self.context,
-                    state_on_path_id,
+                    state_to_enter, // This intermediate parallel state
                     &mut new_active_leaf_states,
-                    &mut visited_for_current_entry,
-                );
-                #[cfg(debug_assertions)]
-                {
-                    if let Err(e) = result {
-                        panic!(
-                            "Entry error during execute_entry_actions_from_lca (target on path): {e:?}"
-                        );
-                    }
-                }
-                #[cfg(not(debug_assertions))]
-                {
-                    let _ = result; // Suppress unused_variable warning in release
-                }
-                break;
-            }
-            if let Some(node) = self.machine_def.get_state_node(state_on_path_id) {
-                if node.is_parallel {
-                    let result = enter_state_recursive_logic::<_, _, _, M>(
-                        self.machine_def, // Removed &
-                        &mut self.context,
-                        state_on_path_id,
-                        &mut new_active_leaf_states,
-                        &mut visited_for_current_entry,
+                    &mut visited_for_final_recursion,
+                    false, // false because its own entry action was just run by this loop
+                )
+                .map_err(|e| {
+                    assert!(
+                        !cfg!(debug_assertions),
+                        "EntryError from intermediate parallel state {state_to_enter:?}: {e:?}"
                     );
-                    #[cfg(debug_assertions)]
-                    {
-                        if let Err(e) = result {
-                            panic!(
-                                "Entry error during execute_entry_actions_from_lca (parallel on path): {e:?}"
-                            );
-                        }
-                    }
-                    #[cfg(not(debug_assertions))]
-                    {
-                        let _ = result; // Suppress unused_variable warning in release
-                    }
-                    break;
-                }
-                if let Some(entry_fn) = node.entry_action {
-                    entry_fn(&mut self.context);
-                }
+                    PathTooLongError
+                })
+                .map(|()| new_active_leaf_states);
             }
         }
-        new_active_leaf_states
+
+        // After all ancestors (and target itself if it was on path) have had their entry actions run,
+        // call enter_state_recursive_logic for the target_state_id.
+        // The `run_entry_action_for_this_state` flag should be `false` if target_state_id was in entry_path_segment (its entry action already ran),
+        // and `true` otherwise (e.g., if entry_path_segment was empty because target_state_id was the LCA).
+        let target_entry_action_already_run = entry_path_segment.contains(&target_state_id);
+
+        match enter_state_recursive_logic::<_, _, _, M>(
+            self.machine_def,
+            &mut self.context,
+            target_state_id,
+            &mut new_active_leaf_states,
+            &mut visited_for_final_recursion,
+            !target_entry_action_already_run, // Run entry if not already run by loop above
+        ) {
+            Ok(()) => Ok(new_active_leaf_states),
+            Err(entry_error) => {
+                assert!(
+                    !cfg!(debug_assertions),
+                    "EntryError from final enter_state_recursive_logic for {target_state_id:?}: {entry_error:?}"
+                );
+                Err(PathTooLongError)
+            }
+        }
     }
 
     /// Sends an event to the state machine for processing.
@@ -765,6 +754,7 @@ where
         > = heapless::Vec::new();
         let current_active_leaves_snapshot = self.active_leaf_states.clone();
 
+        let mut potential_transitions_overflow = false; // Flag to break outer loop
         for &active_leaf_id in &current_active_leaves_snapshot {
             let mut check_state_id_opt = Some(active_leaf_id);
             'hierarchy_search: while let Some(check_state_id) = check_state_id_opt {
@@ -790,7 +780,8 @@ where
                             );
                             if push_result.is_err() {
                                 // In release, if we can't store it, we can't consider it.
-                                break 'hierarchy_search;
+                                potential_transitions_overflow = true; // Set flag
+                                break 'hierarchy_search; // Break inner loop
                             }
                             // Found a transition for this level, break from hierarchy search for this active_leaf_id
                             break 'hierarchy_search;
@@ -799,6 +790,15 @@ where
                 }
                 check_state_id_opt = self.machine_def.get_parent_of(check_state_id);
             }
+            if potential_transitions_overflow {
+                break; // Break outer loop if overflow occurred
+            }
+        }
+
+        if potential_transitions_overflow {
+            // If we overflowed the potential_transitions list, it means MAX_NODES_FOR_COMPUTATION might be too small.
+            // The safest thing to do is to indicate no transition occurred, as we couldn't consider all possibilities.
+            return false;
         }
 
         if potential_transitions.is_empty() {
@@ -818,29 +818,27 @@ where
                 }
 
                 // Attempt to check ancestry. If error, treat as inconclusive (don't skip pt_candidate on this basis).
-                match self.is_proper_ancestor(
+                // However, if PathTooLongError occurs, we should probably abort the send.
+                if let Ok(is_ancestor) = self.is_proper_ancestor(
                     pt_candidate.transition_from_state_id,
                     other_pt.transition_from_state_id,
                 ) {
-                    Ok(is_ancestor) => {
-                        if is_ancestor {
-                            // pt_candidate's source is an ancestor of other_pt's source.
-                            // This means other_pt is more specific. So, pt_candidate should be skipped.
-                            continue 'candidate_loop;
-                        }
+                    if is_ancestor {
+                        // pt_candidate's source is an ancestor of other_pt's source.
+                        // This means other_pt is more specific. So, pt_candidate should be skipped.
+                        continue 'candidate_loop;
                     }
-                    Err(_) => {
-                        // PathTooLongError: Cannot determine ancestry. Conservatively don't skip pt_candidate.
-                        // This might lead to less optimal arbitration if paths are too long for M,
-                        // but avoids panic and ensures forward progress if possible.
-                        // Removed eprintln! for no_std compatibility.
-                        #[cfg(debug_assertions)]
-                        {
-                            // Consider a less disruptive debug output if needed, or just let it pass silently.
-                            // For now, no specific debug output here for release builds.
-                        }
-                    }
+                } else {
+                    // PathTooLongError: Cannot determine ancestry reliably. Abort send.
+                    assert!(
+                        !cfg!(debug_assertions),
+                        "PathTooLongError from is_proper_ancestor during arbitration. Candidate: {:?}, Other: {:?}",
+                        pt_candidate.transition_from_state_id,
+                        other_pt.transition_from_state_id
+                    );
+                    return false; // Abort send
                 }
+
                 // No need for the other is_proper_ancestor check, as the roles are swapped.
                 // The goal is: if pt_candidate is an ancestor of other_pt, pt_candidate is skipped.
                 // If other_pt is an ancestor of pt_candidate, pt_candidate is NOT skipped by this check (other_pt would be skipped when it's the candidate).
@@ -860,6 +858,58 @@ where
             return false;
         }
 
+        // --- De-duplicate arbitrated_transitions based on the actual transition definition ---
+        let mut final_transitions_to_execute: heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        > = heapless::Vec::new();
+        // Use a Vec to track seen transition definition pointers for no_std compatibility without extra features.
+        let mut processed_transition_pointers: heapless::Vec<
+            *const Transition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        > = heapless::Vec::new();
+
+        for trans_to_consider in &arbitrated_transitions {
+            // Iterate by reference
+            let current_ref_ptr = trans_to_consider.transition_ref as *const _;
+            let mut already_processed = false;
+            for &seen_ptr in &processed_transition_pointers {
+                if seen_ptr == current_ref_ptr {
+                    already_processed = true;
+                    break;
+                }
+            }
+
+            if !already_processed {
+                if final_transitions_to_execute
+                    .push(trans_to_consider.clone())
+                    .is_ok()
+                {
+                    // Clone here
+                    if processed_transition_pointers.push(current_ref_ptr).is_err() {
+                        // This should not happen if final_transitions_to_execute and processed_transition_pointers have same capacity
+                        // and we only push to processed_pointers if push to final_transitions was ok.
+                        assert!(
+                            !cfg!(debug_assertions),
+                            "Overflow in processed_transition_pointers after successful push to final_transitions_to_execute."
+                        );
+                        return false; // Should be unreachable if capacities match
+                    }
+                } else {
+                    assert!(
+                        !cfg!(debug_assertions),
+                        "Overflow while de-duplicating arbitrated transitions into final_transitions_to_execute."
+                    );
+                    return false;
+                }
+            }
+        }
+
+        if final_transitions_to_execute.is_empty() {
+            // Should not happen if arbitrated_transitions was not empty
+            return false;
+        }
+
         // --- Start of new logic for processing multiple transitions ---
         let mut overall_transition_occurred = false;
         let mut next_active_leaf_states = self.active_leaf_states.clone();
@@ -871,7 +921,8 @@ where
         > = heapless::Vec::new();
 
         // Phase 1: Process exits and actions for all transitions first
-        for trans_info in &arbitrated_transitions {
+        for trans_info in &final_transitions_to_execute {
+            // Use de-duplicated list
             let source_state_id = trans_info.transition_from_state_id;
             let target_state_id = trans_info.target_state_id;
             let active_leaf_for_this_trans = trans_info.source_leaf_id;
@@ -879,7 +930,10 @@ where
             overall_transition_occurred = true;
 
             let is_simple_leaf_self_transition = source_state_id == target_state_id
-                && self.is_descendant_or_self(active_leaf_for_this_trans, source_state_id)
+                && match self.is_descendant_or_self(active_leaf_for_this_trans, source_state_id) {
+                    Ok(is_desc) => is_desc,
+                    Err(_) => return false, // PathTooLongError, abort send
+                }
                 && self
                     .machine_def
                     .get_state_node(source_state_id)
@@ -900,44 +954,93 @@ where
                 if let Some(action_fn) = trans_info.transition_ref.action {
                     action_fn(&mut self.context);
                 }
-                // Entry action will be handled by execute_entry_actions_from_lca via entry_execution_list
-                // if let Some(node) = self.machine_def.get_state_node(source_state_id) {
-                //     if let Some(entry_fn) = node.entry_action {
-                //         entry_fn(&mut self.context);
-                //     }
-                // }
                 entry_execution_list
                     .push((
-                        source_state_id,
-                        Some(source_state_id),
+                        source_state_id,       // Target for entry is the source itself
+                        Some(source_state_id), // LCA is the state itself for leaf self-transition re-entry
                         active_leaf_for_this_trans,
                     ))
                     .expect("entry_execution_list overflow for simple self-trans");
+            } else if source_state_id == target_state_id {
+                // External self-transition on composite/parallel state
+                let node_being_self_transitioned =
+                    self.machine_def.get_state_node(source_state_id).unwrap(); // Should exist
+                // Exit all active children of source_state_id, then source_state_id itself
+                // We need a robust way to get all active descendants for exit.
+                // compute_ordered_exit_set called with lca_id = parent(source_state_id) would achieve this.
+                let parent_of_source = node_being_self_transitioned.parent;
+                // Iterate all current active leaves. If they are descendants of source_state_id, compute their exit path up to source_state_id's parent.
+                for &current_active_leaf in &current_active_leaves_snapshot {
+                    // Use snapshot before any state changes
+                    if self
+                        .is_descendant_or_self(current_active_leaf, source_state_id)
+                        .unwrap_or(false)
+                    {
+                        let Ok(states_to_exit_for_this_leaf_branch) =
+                            self.compute_ordered_exit_set(current_active_leaf, parent_of_source)
+                        else {
+                            return false;
+                        };
+                        for &state_to_exit_id in &states_to_exit_for_this_leaf_branch {
+                            if !states_exited_this_step.contains(&state_to_exit_id) {
+                                if let Some(node) =
+                                    self.machine_def.get_state_node(state_to_exit_id)
+                                {
+                                    if let Some(exit_fn) = node.exit_action {
+                                        exit_fn(&mut self.context);
+                                    }
+                                }
+                                states_exited_this_step.push(state_to_exit_id).expect(
+                                    "states_exited_this_step overflow for self-trans branch",
+                                );
+                            }
+                        }
+                    }
+                }
+                // Ensure source_state_id itself is exited if not already by compute_ordered_exit_set (it should be if parent_of_source was LCA)
+                if !states_exited_this_step.contains(&source_state_id) {
+                    if let Some(exit_fn) = node_being_self_transitioned.exit_action {
+                        exit_fn(&mut self.context);
+                    }
+                    states_exited_this_step
+                        .push(source_state_id)
+                        .expect("states_exited_this_step overflow for self-trans source");
+                }
+
+                if let Some(action_fn) = trans_info.transition_ref.action {
+                    action_fn(&mut self.context);
+                }
+                entry_execution_list
+                    .push((
+                        target_state_id,            // which is source_state_id
+                        parent_of_source,           // LCA for re-entry is parent
+                        active_leaf_for_this_trans, // This seems okay, it's just context for original trigger path
+                    ))
+                    .expect("entry_execution_list overflow for self-trans");
             } else {
-                // General LCA path (external transition or self-transition on composite state)
+                // General LCA path (external non-self-transition or self-transition on composite state)
                 let lca_id_result = self.find_lca(active_leaf_for_this_trans, target_state_id);
                 let lca_id = match lca_id_result {
                     Ok(l) => l,
                     Err(_path_too_long_error) => {
-                        if cfg!(debug_assertions) {
-                            panic!(
-                                "PathTooLongError from find_lca for states {active_leaf_for_this_trans:?}, {target_state_id:?}"
-                            );
-                        } else {
-                            // If LCA computation fails, abort the entire send operation for safety.
-                            return false;
-                        }
+                        assert!(
+                            !cfg!(debug_assertions),
+                            "PathTooLongError from find_lca for states {active_leaf_for_this_trans:?}, {target_state_id:?}"
+                        );
+                        // If LCA computation fails, abort the entire send operation for safety.
+                        return false;
                     }
                 };
 
-                let states_to_exit_for_branch_result =
-                    self.compute_ordered_exit_set(active_leaf_for_this_trans, lca_id);
-                let Ok(states_to_exit_for_branch) = states_to_exit_for_branch_result else {
-                    if cfg!(debug_assertions) {
-                        panic!(
+                let states_to_exit_for_branch = match self
+                    .compute_ordered_exit_set(active_leaf_for_this_trans, lca_id)
+                {
+                    Ok(s) => s,
+                    Err(_path_too_long_error) => {
+                        assert!(
+                            !cfg!(debug_assertions),
                             "PathTooLongError from compute_ordered_exit_set for leaf {active_leaf_for_this_trans:?}"
                         );
-                    } else {
                         // If exit set computation fails, abort the entire send operation for safety.
                         return false;
                     }
@@ -990,26 +1093,81 @@ where
                     .push((target_state_id, lca_id, active_leaf_for_this_trans))
                     .expect("entry_execution_list overflow");
             }
-        } // End loop over arbitrated_transitions
+        } // End loop over final_transitions_to_execute
 
         // Phase 2: Update active leaf states based on global exits collected in states_exited_this_step
         if overall_transition_occurred {
             // Only modify if any transition was processed
-            next_active_leaf_states.retain(|&leaf| {
-                !states_exited_this_step
-                    .iter()
-                    .any(|&exited_state| self.is_descendant_or_self(leaf, exited_state))
-            });
+            let mut new_next_active_leaf_states = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+            let mut path_error_during_retain = false;
+
+            for &leaf_candidate in &next_active_leaf_states {
+                let mut should_this_leaf_be_retained = true;
+                let mut error_for_this_leaf = false;
+
+                for &exited_state_id in &states_exited_this_step {
+                    if let Ok(is_descendant) =
+                        self.is_descendant_or_self(leaf_candidate, exited_state_id)
+                    {
+                        if is_descendant {
+                            should_this_leaf_be_retained = false;
+                            break;
+                        }
+                    } else {
+                        // Err case for is_descendant_or_self
+                        error_for_this_leaf = true;
+                        should_this_leaf_be_retained = false;
+                        break;
+                    }
+                }
+
+                if error_for_this_leaf {
+                    path_error_during_retain = true;
+                }
+
+                if should_this_leaf_be_retained
+                    && new_next_active_leaf_states.push(leaf_candidate).is_err()
+                {
+                    assert!(
+                        !cfg!(debug_assertions),
+                        "new_next_active_leaf_states overflow during retain phase. MAX_ACTIVE_REGIONS possibly too small."
+                    );
+                    path_error_during_retain = true;
+                    break;
+                }
+            }
+
+            if path_error_during_retain {
+                // If any path error occurred or we couldn't store retained leaves, the state is potentially inconsistent.
+                // Abort the entire send operation.
+                // Assert already happened for debug builds for overflow.
+                return false;
+            }
+            next_active_leaf_states = new_next_active_leaf_states; // Replace with the filtered list
         }
 
         // Phase 3: Process entries and add new leaves to next_active_leaf_states
         for (target_id, lca_id, _original_leaf_for_context) in entry_execution_list {
-            let new_leaves_from_this_entry = self.execute_entry_actions_from_lca(target_id, lca_id);
-            for new_leaf in new_leaves_from_this_entry {
-                if !next_active_leaf_states.contains(&new_leaf) {
-                    next_active_leaf_states
-                        .push(new_leaf)
-                        .expect("next_active_leaf_states overflow during entry");
+            let new_leaves_result = self.execute_entry_actions_from_lca(target_id, lca_id);
+            match new_leaves_result {
+                Ok(new_leaves_from_this_entry) => {
+                    for new_leaf in new_leaves_from_this_entry {
+                        if !next_active_leaf_states.contains(&new_leaf) {
+                            next_active_leaf_states
+                                .push(new_leaf)
+                                .expect("next_active_leaf_states overflow during entry");
+                        }
+                    }
+                }
+                Err(_path_too_long_error) => {
+                    assert!(
+                        !cfg!(debug_assertions),
+                        "PathTooLongError from execute_entry_actions_from_lca for target {target_id:?}"
+                    );
+                    // If entry actions fail due to path length, abort and indicate no transition.
+                    // Note: Side effects from exits and transition actions have already occurred.
+                    // This is a limitation of not having a full rollback mechanism.
+                    return false;
                 }
             }
         }
@@ -2093,4 +2251,662 @@ mod tests {
             Some(MultiGuardTestState::TargetStateOne)
         );
     }
+
+    // --- New Test Setup for Parallel State Transitions ---
+
+    const PARALLEL_LOG_ENTRIES: usize = 32;
+    const PARALLEL_LOG_STRING_LEN: usize = 64;
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    struct ParallelActionLogContext {
+        log: heapless::Vec<heapless::String<PARALLEL_LOG_STRING_LEN>, PARALLEL_LOG_ENTRIES>,
+    }
+
+    impl ParallelActionLogContext {
+        fn log_action(&mut self, action_description: &str) {
+            let mut s = heapless::String::<PARALLEL_LOG_STRING_LEN>::new();
+            s.push_str(action_description)
+                .expect("Log string too long for heapless::String in ParallelActionLogContext");
+            self.log.push(s).unwrap_or_else(|_val| {
+                panic!(
+                    "ParallelActionLogContext log overflow (capacity {PARALLEL_LOG_ENTRIES}). Could not log: {action_description}"
+                );
+            });
+        }
+        // Helper to create expected log Vec more easily in tests
+        #[allow(dead_code)] // May not be used by all tests initially
+        fn expected_log(
+            entries: &[&str],
+        ) -> heapless::Vec<heapless::String<PARALLEL_LOG_STRING_LEN>, PARALLEL_LOG_ENTRIES>
+        {
+            let mut v = heapless::Vec::new();
+            for entry in entries {
+                let mut s = heapless::String::<PARALLEL_LOG_STRING_LEN>::new();
+                s.push_str(entry).unwrap();
+                v.push(s).unwrap();
+            }
+            v
+        }
+    }
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    enum ParallelTestState {
+        P,
+        R1,
+        R1A,
+        R1B,
+        R2,
+        R2X,
+        R2Y,
+        SOuter,
+    }
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    enum ParallelTestEvent {
+        E1,
+        E2,
+        EventParallelSelf,    // Was E_P_Self
+        EventRegion1Self,     // Was E_R1_Self
+        EventRegion2Self,     // Was E_R2_Self
+        EventParallelToOuter, // Was E_P_To_SOuter
+        EventOuterToParallel, // Was E_SOuter_To_P
+        EventRegion1Only,     // Was E_R1_Only
+    }
+
+    // Action and Guard functions for parallel tests (renamed for clarity)
+    fn pt_log_enter_parallel(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterP");
+    }
+    fn pt_log_exit_parallel(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitP");
+    }
+    fn pt_log_event_parallel_self_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("P_SelfAction");
+    }
+
+    fn pt_log_enter_region1(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterR1");
+    }
+    fn pt_log_exit_region1(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitR1");
+    }
+    fn pt_log_enter_region1_state_a(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterR1A");
+    }
+    fn pt_log_exit_region1_state_a(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitR1A");
+    }
+    fn pt_log_region1_state_a_event_e1_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("R1A_E1_Action");
+    }
+    fn pt_log_region1_state_a_event_region1_self_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("R1A_SelfAction");
+    }
+    fn pt_log_enter_region1_state_b(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterR1B");
+    }
+    fn pt_log_exit_region1_state_b(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitR1B");
+    }
+    fn pt_log_region1_state_b_event_e2_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("R1B_E2_Action");
+    }
+    fn pt_log_region1_state_a_event_region1_only_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("R1A_E_R1_Only_Action");
+    }
+
+    fn pt_log_enter_region2(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterR2");
+    }
+    fn pt_log_exit_region2(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitR2");
+    }
+    fn pt_log_enter_region2_state_x(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterR2X");
+    }
+    fn pt_log_exit_region2_state_x(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitR2X");
+    }
+    fn pt_log_region2_state_x_event_e1_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("R2X_E1_Action");
+    }
+    fn pt_log_region2_state_x_event_region2_self_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("R2X_SelfAction");
+    }
+    fn pt_log_enter_region2_state_y(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterR2Y");
+    }
+    fn pt_log_exit_region2_state_y(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitR2Y");
+    }
+    fn pt_log_region2_state_y_event_e2_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("R2Y_E2_Action");
+    }
+
+    fn pt_log_enter_state_outer(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("EnterSOuter");
+    }
+    fn pt_log_exit_state_outer(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("ExitSOuter");
+    }
+    fn pt_log_event_parallel_to_outer_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("P_E2_SOuter_Action");
+    }
+    fn pt_log_event_outer_to_parallel_action(ctx: &mut ParallelActionLogContext) {
+        ctx.log_action("SOuter_E1_P_Action");
+    }
+
+    const PARALLEL_TEST_STATENODES: &[StateNode<ParallelTestState, ParallelActionLogContext>] = &[
+        StateNode {
+            id: ParallelTestState::P,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(pt_log_enter_parallel),
+            exit_action: Some(pt_log_exit_parallel),
+            is_parallel: true,
+        },
+        StateNode {
+            id: ParallelTestState::R1,
+            parent: Some(ParallelTestState::P),
+            initial_child: Some(ParallelTestState::R1A),
+            entry_action: Some(pt_log_enter_region1),
+            exit_action: Some(pt_log_exit_region1),
+            is_parallel: false,
+        },
+        StateNode {
+            id: ParallelTestState::R1A,
+            parent: Some(ParallelTestState::R1),
+            initial_child: None,
+            entry_action: Some(pt_log_enter_region1_state_a),
+            exit_action: Some(pt_log_exit_region1_state_a),
+            is_parallel: false,
+        },
+        StateNode {
+            id: ParallelTestState::R1B,
+            parent: Some(ParallelTestState::R1),
+            initial_child: None,
+            entry_action: Some(pt_log_enter_region1_state_b),
+            exit_action: Some(pt_log_exit_region1_state_b),
+            is_parallel: false,
+        },
+        StateNode {
+            id: ParallelTestState::R2,
+            parent: Some(ParallelTestState::P),
+            initial_child: Some(ParallelTestState::R2X),
+            entry_action: Some(pt_log_enter_region2),
+            exit_action: Some(pt_log_exit_region2),
+            is_parallel: false,
+        },
+        StateNode {
+            id: ParallelTestState::R2X,
+            parent: Some(ParallelTestState::R2),
+            initial_child: None,
+            entry_action: Some(pt_log_enter_region2_state_x),
+            exit_action: Some(pt_log_exit_region2_state_x),
+            is_parallel: false,
+        },
+        StateNode {
+            id: ParallelTestState::R2Y,
+            parent: Some(ParallelTestState::R2),
+            initial_child: None,
+            entry_action: Some(pt_log_enter_region2_state_y),
+            exit_action: Some(pt_log_exit_region2_state_y),
+            is_parallel: false,
+        },
+        StateNode {
+            id: ParallelTestState::SOuter,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(pt_log_enter_state_outer),
+            exit_action: Some(pt_log_exit_state_outer),
+            is_parallel: false,
+        },
+    ];
+
+    const PARALLEL_TEST_TRANSITIONS: &[Transition<
+        ParallelTestState,
+        ParallelTestEvent,
+        ParallelActionLogContext,
+    >] = &[
+        Transition {
+            from_state: ParallelTestState::P,
+            event: ParallelTestEvent::EventParallelSelf,
+            to_state: ParallelTestState::P,
+            action: Some(pt_log_event_parallel_self_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::P,
+            event: ParallelTestEvent::EventParallelToOuter,
+            to_state: ParallelTestState::SOuter,
+            action: Some(pt_log_event_parallel_to_outer_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::R1A,
+            event: ParallelTestEvent::E1,
+            to_state: ParallelTestState::R1B,
+            action: Some(pt_log_region1_state_a_event_e1_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::R1A,
+            event: ParallelTestEvent::EventRegion1Self,
+            to_state: ParallelTestState::R1A,
+            action: Some(pt_log_region1_state_a_event_region1_self_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::R1A,
+            event: ParallelTestEvent::EventRegion1Only,
+            to_state: ParallelTestState::R1B,
+            action: Some(pt_log_region1_state_a_event_region1_only_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::R1B,
+            event: ParallelTestEvent::E2,
+            to_state: ParallelTestState::R1A,
+            action: Some(pt_log_region1_state_b_event_e2_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::R2X,
+            event: ParallelTestEvent::E1,
+            to_state: ParallelTestState::R2Y,
+            action: Some(pt_log_region2_state_x_event_e1_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::R2X,
+            event: ParallelTestEvent::EventRegion2Self,
+            to_state: ParallelTestState::R2X,
+            action: Some(pt_log_region2_state_x_event_region2_self_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::R2Y,
+            event: ParallelTestEvent::E2,
+            to_state: ParallelTestState::R2X,
+            action: Some(pt_log_region2_state_y_event_e2_action),
+            guard: None,
+        },
+        Transition {
+            from_state: ParallelTestState::SOuter,
+            event: ParallelTestEvent::EventOuterToParallel,
+            to_state: ParallelTestState::P,
+            action: Some(pt_log_event_outer_to_parallel_action),
+            guard: None,
+        },
+    ];
+
+    static PARALLEL_MACHINE_DEF: MachineDefinition<
+        ParallelTestState,
+        ParallelTestEvent,
+        ParallelActionLogContext,
+    > = MachineDefinition::new(
+        PARALLEL_TEST_STATENODES,
+        PARALLEL_TEST_TRANSITIONS,
+        ParallelTestState::P,
+    );
+
+    // Helper function for checking subsequences in logs
+    fn check_subsequence(
+        log: &heapless::Vec<&str, PARALLEL_LOG_ENTRIES>,
+        expected_sub: &[&str],
+    ) -> bool {
+        if expected_sub.is_empty() {
+            return true;
+        }
+        let mut log_idx = 0;
+        let mut sub_idx = 0;
+        while log_idx < log.len() && sub_idx < expected_sub.len() {
+            if log[log_idx] == expected_sub[sub_idx] {
+                sub_idx += 1;
+            }
+            log_idx += 1;
+        }
+        sub_idx == expected_sub.len()
+    }
+
+    #[test]
+    fn test_parallel_initial_activation_and_entry_order() {
+        let initial_context = ParallelActionLogContext::default(); // unused_mut: removed mut
+        let runtime =
+            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
+                &PARALLEL_MACHINE_DEF,
+                initial_context,
+            );
+
+        let active_states = runtime.state();
+        let mut sorted_active_states = active_states
+            .into_iter()
+            .collect::<heapless::Vec<_, MAX_ACTIVE_REGIONS>>();
+        sorted_active_states.sort_unstable();
+
+        let mut expected_active_states = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+        expected_active_states.push(ParallelTestState::R1A).unwrap();
+        expected_active_states.push(ParallelTestState::R2X).unwrap();
+        expected_active_states.sort_unstable();
+
+        assert_eq!(
+            sorted_active_states, expected_active_states,
+            "Active states mismatch. Expected: {expected_active_states:?}, Got: {sorted_active_states:?}" // uninlined_format_args: fixed
+        );
+
+        let expected_log = ParallelActionLogContext::expected_log(&[
+            "EnterP", "EnterR1", "EnterR1A", "EnterR2", "EnterR2X",
+        ]);
+        assert_eq!(
+            runtime.context().log,
+            expected_log,
+            "Entry action log mismatch"
+        );
+    }
+
+    #[test]
+    fn test_parallel_independent_region_transitions() {
+        let initial_context = ParallelActionLogContext::default();
+        let mut runtime =
+            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
+                &PARALLEL_MACHINE_DEF,
+                initial_context,
+            );
+        runtime.context_mut().log.clear();
+
+        let event_processed = runtime.send(ParallelTestEvent::E1);
+        assert!(event_processed, "Event E1 should have been processed");
+
+        let active_states = runtime.state();
+        let mut sorted_active_states = active_states
+            .into_iter()
+            .collect::<heapless::Vec<_, MAX_ACTIVE_REGIONS>>();
+        sorted_active_states.sort_unstable();
+
+        let mut expected_active_states = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+        expected_active_states.push(ParallelTestState::R1B).unwrap();
+        expected_active_states.push(ParallelTestState::R2Y).unwrap();
+        expected_active_states.sort_unstable();
+
+        assert_eq!(
+            sorted_active_states, expected_active_states,
+            "Active states mismatch. Expected: {expected_active_states:?}, Got: {sorted_active_states:?}"
+        );
+
+        let actual_log = runtime.context().log.clone();
+        let actual_log_strs: heapless::Vec<&str, PARALLEL_LOG_ENTRIES> =
+            actual_log.iter().map(heapless::String::as_str).collect();
+
+        let r1_actions_expected_slice = &["ExitR1A", "R1A_E1_Action", "EnterR1B"];
+        let r2_actions_expected_slice = &["ExitR2X", "R2X_E1_Action", "EnterR2Y"];
+
+        assert!(
+            check_subsequence(&actual_log_strs, r1_actions_expected_slice),
+            "R1 action block {r1_actions_expected_slice:?} not found as a subsequence in log: {actual_log_strs:?}"
+        );
+        assert!(
+            check_subsequence(&actual_log_strs, r2_actions_expected_slice),
+            "R2 action block {r2_actions_expected_slice:?} not found as a subsequence in log: {actual_log_strs:?}"
+        );
+
+        // The sum of lengths of individual blocks should be the total log length if no other actions occurred.
+        assert_eq!(
+            actual_log_strs.len(),
+            r1_actions_expected_slice.len() + r2_actions_expected_slice.len(),
+            "Log has incorrect total number of entries. Expected {}, got {}. Log: {actual_log_strs:?}",
+            r1_actions_expected_slice.len() + r2_actions_expected_slice.len(),
+            actual_log_strs.len()
+        );
+    }
+
+    #[test]
+    fn test_parallel_transition_one_region_no_effect_on_other() {
+        let initial_context = ParallelActionLogContext::default();
+        let mut runtime =
+            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
+                &PARALLEL_MACHINE_DEF,
+                initial_context,
+            );
+        runtime.context_mut().log.clear();
+
+        let event_processed = runtime.send(ParallelTestEvent::EventRegion1Only);
+        assert!(
+            event_processed,
+            "Event EventRegion1Only should have been processed"
+        );
+
+        let active_states = runtime.state();
+        let mut sorted_active_states = active_states
+            .into_iter()
+            .collect::<heapless::Vec<_, MAX_ACTIVE_REGIONS>>();
+        sorted_active_states.sort_unstable();
+
+        let mut expected_active_states = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+        expected_active_states.push(ParallelTestState::R1B).unwrap();
+        expected_active_states.push(ParallelTestState::R2X).unwrap();
+        expected_active_states.sort_unstable();
+
+        assert_eq!(
+            sorted_active_states, expected_active_states,
+            "Active states mismatch. Expected: {expected_active_states:?}, Got: {sorted_active_states:?}" // uninlined_format_args: fixed
+        );
+
+        let expected_log = ParallelActionLogContext::expected_log(&[
+            "ExitR1A",
+            "R1A_E_R1_Only_Action",
+            "EnterR1B",
+        ]);
+        assert_eq!(
+            runtime.context().log,
+            expected_log,
+            "Action log mismatch for EventRegion1Only"
+        );
+    }
+
+    #[test]
+    fn test_parallel_self_transition_on_region_leaf() {
+        let initial_context = ParallelActionLogContext::default(); // Needs mut for clear()
+        let mut runtime =
+            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
+                &PARALLEL_MACHINE_DEF,
+                initial_context,
+            );
+        runtime.context_mut().log.clear();
+
+        let event_processed = runtime.send(ParallelTestEvent::EventRegion1Self);
+        assert!(
+            event_processed,
+            "Event EventRegion1Self should have been processed"
+        );
+
+        let active_states = runtime.state();
+        let mut sorted_active_states = active_states
+            .into_iter()
+            .collect::<heapless::Vec<_, MAX_ACTIVE_REGIONS>>();
+        sorted_active_states.sort_unstable();
+
+        let mut expected_active_states = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+        expected_active_states.push(ParallelTestState::R1A).unwrap();
+        expected_active_states.push(ParallelTestState::R2X).unwrap();
+        expected_active_states.sort_unstable();
+
+        assert_eq!(
+            sorted_active_states, expected_active_states,
+            "Active states mismatch. Expected: {expected_active_states:?}, Got: {sorted_active_states:?}" // uninlined_format_args: fixed
+        );
+
+        let expected_log =
+            ParallelActionLogContext::expected_log(&["ExitR1A", "R1A_SelfAction", "EnterR1A"]);
+        assert_eq!(
+            runtime.context().log,
+            expected_log,
+            "Action log mismatch for EventRegion1Self"
+        );
+    }
+
+    #[test]
+    fn test_parallel_self_transition_on_parallel_state_itself() {
+        let initial_context = ParallelActionLogContext::default();
+        let mut runtime =
+            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
+                &PARALLEL_MACHINE_DEF,
+                initial_context,
+            );
+        runtime.context_mut().log.clear();
+
+        let event_processed = runtime.send(ParallelTestEvent::EventParallelSelf);
+        assert!(
+            event_processed,
+            "Event EventParallelSelf should have been processed"
+        );
+
+        let active_states = runtime.state();
+        let mut sorted_active_states = active_states
+            .into_iter()
+            .collect::<heapless::Vec<_, MAX_ACTIVE_REGIONS>>();
+        sorted_active_states.sort_unstable();
+
+        let mut expected_active_states = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+        expected_active_states.push(ParallelTestState::R1A).unwrap();
+        expected_active_states.push(ParallelTestState::R2X).unwrap();
+        expected_active_states.sort_unstable();
+
+        assert_eq!(
+            sorted_active_states, expected_active_states,
+            "Active states mismatch after P self-transition. Expected: {expected_active_states:?}, Got: {sorted_active_states:?}" // uninlined_format_args: fixed
+        );
+
+        let actual_log = runtime.context().log.clone();
+        let log_str_refs: heapless::Vec<&str, PARALLEL_LOG_ENTRIES> =
+            actual_log.iter().map(heapless::String::as_str).collect(); // redundant_closure: fixed
+
+        let expected_log_sequence = [
+            "ExitR1A",
+            "ExitR1",
+            "ExitR2X",
+            "ExitR2",
+            "ExitP",
+            "P_SelfAction",
+            "EnterP",
+            "EnterR1",
+            "EnterR1A",
+            "EnterR2",
+            "EnterR2X",
+        ];
+        let expected_h_log = ParallelActionLogContext::expected_log(&expected_log_sequence);
+        assert_eq!(
+            actual_log, expected_h_log,
+            "Log for P self-transition mismatch. Log: {log_str_refs:?}"
+        ); // uninlined_format_args: fixed
+    }
+
+    #[test]
+    fn test_parallel_transition_from_parallel_to_outer() {
+        let initial_context = ParallelActionLogContext::default();
+        let mut runtime =
+            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
+                &PARALLEL_MACHINE_DEF,
+                initial_context,
+            );
+        runtime.context_mut().log.clear();
+
+        let event_processed = runtime.send(ParallelTestEvent::EventParallelToOuter);
+        assert!(
+            event_processed,
+            "Event EventParallelToOuter should have been processed"
+        );
+
+        let active_states = runtime.state();
+        assert_eq!(
+            active_states.len(),
+            1,
+            "Should have one active state after transitioning to SOuter"
+        );
+        assert_eq!(
+            active_states[0],
+            ParallelTestState::SOuter,
+            "Active state should be SOuter"
+        );
+
+        let expected_log_sequence = [
+            "ExitR1A",
+            "ExitR1",
+            "ExitR2X",
+            "ExitR2",
+            "ExitP",
+            "P_E2_SOuter_Action",
+            "EnterSOuter",
+        ];
+        let expected_h_log = ParallelActionLogContext::expected_log(&expected_log_sequence);
+        let actual_log = runtime.context().log.clone();
+        let log_str_refs: heapless::Vec<&str, PARALLEL_LOG_ENTRIES> =
+            actual_log.iter().map(heapless::String::as_str).collect(); // redundant_closure: fixed
+        assert_eq!(
+            actual_log, expected_h_log,
+            "Log for P to SOuter transition mismatch. Log: {log_str_refs:?}"
+        ); // uninlined_format_args: fixed
+    }
+
+    static PARALLEL_MACHINE_DEF_INIT_SOUTER: MachineDefinition<
+        ParallelTestState,
+        ParallelTestEvent,
+        ParallelActionLogContext,
+    > = MachineDefinition::new(
+        PARALLEL_TEST_STATENODES,
+        PARALLEL_TEST_TRANSITIONS,
+        ParallelTestState::SOuter,
+    );
+
+    #[test]
+    fn test_parallel_transition_from_outer_to_parallel() {
+        let initial_context = ParallelActionLogContext::default();
+        let mut runtime =
+            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
+                &PARALLEL_MACHINE_DEF_INIT_SOUTER,
+                initial_context,
+            );
+        runtime.context_mut().log.clear();
+
+        let event_processed = runtime.send(ParallelTestEvent::EventOuterToParallel);
+        assert!(
+            event_processed,
+            "Event EventOuterToParallel should have been processed"
+        );
+
+        let active_states = runtime.state();
+        let mut sorted_active_states = active_states
+            .into_iter()
+            .collect::<heapless::Vec<_, MAX_ACTIVE_REGIONS>>();
+        sorted_active_states.sort_unstable();
+
+        let mut expected_active_states = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+        expected_active_states.push(ParallelTestState::R1A).unwrap();
+        expected_active_states.push(ParallelTestState::R2X).unwrap();
+        expected_active_states.sort_unstable();
+
+        assert_eq!(
+            sorted_active_states, expected_active_states,
+            "Active states mismatch after SOuter to P. Expected: {expected_active_states:?}, Got: {sorted_active_states:?}" // uninlined_format_args: fixed
+        );
+
+        let expected_log_sequence = [
+            "ExitSOuter",
+            "SOuter_E1_P_Action",
+            "EnterP",
+            "EnterR1",
+            "EnterR1A",
+            "EnterR2",
+            "EnterR2X",
+        ];
+        let expected_h_log = ParallelActionLogContext::expected_log(&expected_log_sequence);
+        let actual_log = runtime.context().log.clone();
+        let log_str_refs: heapless::Vec<&str, PARALLEL_LOG_ENTRIES> =
+            actual_log.iter().map(heapless::String::as_str).collect(); // redundant_closure: fixed
+        assert_eq!(
+            actual_log, expected_h_log,
+            "Log for SOuter to P transition mismatch. Log: {log_str_refs:?}"
+        ); // uninlined_format_args: fixed
+    }
+
+    // ... existing tests ...
 }

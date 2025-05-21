@@ -6,10 +6,10 @@ It aims to provide a similar developer experience to XState but within the Rust 
 
 ## Current Status
 
-*   **Phase:** 02 - Hierarchy & Guards (In Progress)
-*   Core runtime for flat state machines is functional.
-*   Procedural macro (`statechart!`) for defining state machines is operational for flat structures.
-*   Hierarchical state machine logic is under active development.
+*   **Phase:** 03 - Parallel States (In Progress)
+*   Core runtime for flat and basic hierarchical state machines is functional.
+*   Procedural macro (`statechart!`) for defining state machines is operational for flat and hierarchical structures.
+*   Parallel state machine logic is under active development.
 *   Examples for RISC-V (QEMU) and Cortex-M (QEMU/hardware) are available.
 
 
@@ -18,7 +18,8 @@ It aims to provide a similar developer experience to XState but within the Rust 
 *   **`#![no_std]` by default:** Suitable for bare-metal embedded applications.
 *   **`statechart!` Macro:** Define complex state machines with a clear, XState-inspired syntax.
     *   States, events, transitions, entry/exit actions, initial states.
-    *   (Planned: Hierarchical states, parallel states, history states, guards, context/data management).
+    *   Hierarchical states.
+    *   (Planned: Parallel states, history states, guards, context/data management).
 *   **Compile-Time Safety:** Leverage Rust's type system to catch errors at compile time.
 *   **Minimal Footprint:** Designed to be lightweight in terms of code size and RAM usage for embedded targets.
 *   **Dual Target Examples:**
