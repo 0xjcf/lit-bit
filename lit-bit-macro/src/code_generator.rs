@@ -8,23 +8,71 @@ pub(crate) fn generate_machine_struct_and_impl(
     builder: &TmpStateTreeBuilder,
     generated_ids: &GeneratedStateIds,
 ) -> TokenStream {
-    let m_val = proc_macro2::Literal::usize_unsuffixed(8);
-    // MAX_NODES_FOR_COMPUTATION = M * MAX_ACTIVE_REGIONS.
-    // lit_bit_core::core::MAX_ACTIVE_REGIONS is fixed at 4.
-    // Compute this value at macro expansion time.
-    let max_nodes_for_computation_val = proc_macro2::Literal::usize_unsuffixed(8 * 4); // M * 4
+    let m_val = proc_macro2::Literal::usize_unsuffixed(builder.all_states.len());
+    let max_nodes_for_computation_val =
+        proc_macro2::Literal::usize_unsuffixed(builder.all_states.len() * 4); // M * 4
 
-    // Generate the new inherent send method
-    let inherent_send_method =
-        generate_send_method(event_type_path, state_id_enum_name, builder, generated_ids);
+    // --- Generate match-based send method ---
+    let mut match_arms = Vec::new();
+    for tmp_state in &builder.all_states {
+        let from_state_variant = generated_ids
+            .full_path_to_variant_ident
+            .get(&tmp_state.full_path_name)
+            .expect("State variant not found");
+        for trans in &tmp_state.transitions {
+            let event_pat = trans.event_pattern;
+            let target_state_idx = trans
+                .target_state_idx
+                .expect("Transition target idx not resolved");
+            let target_tmp_state = &builder.all_states[target_state_idx];
+            let to_state_variant = generated_ids
+                .full_path_to_variant_ident
+                .get(&target_tmp_state.full_path_name)
+                .expect("Target state variant not found");
+            let guard = trans.guard_handler;
+            let action = trans.action_handler;
+            // Build the match arm
+            let guard_check = if let Some(guard_expr) = guard {
+                quote! {
+                    lit_bit_core::core::trace!("[GUARD] Checking guard for {:?} → {:?} on {:?}", #from_state_variant, #to_state_variant, event);
+                    if !(#guard_expr(&self.context, event)) {
+                        lit_bit_core::core::trace!("[GUARD FAIL] {:?} → {:?} on {:?} blocked by guard", #from_state_variant, #to_state_variant, event);
+                        return lit_bit_core::core::SendResult::NoMatch;
+                    }
+                }
+            } else {
+                quote! {}
+            };
+            let action_call = if let Some(action_expr) = action {
+                quote! {
+                    lit_bit_core::core::trace!("[ACTION] Running action for {:?} → {:?} on {:?}", #from_state_variant, #to_state_variant, event);
+                    (#action_expr)(&mut self.context, event);
+                }
+            } else {
+                quote! {}
+            };
+            match_arms.push(quote! {
+                #event_pat => {
+                    lit_bit_core::core::trace!("[EVENT] {:?} received in state {:?}", event, #from_state_variant);
+                    lit_bit_core::core::trace!("[MATCH] From {:?} on {:?} → {:?}", #from_state_variant, event, #to_state_variant);
+                    #guard_check
+                    #action_call
+                    lit_bit_core::core::trace!("[TRANSITION] {:?} → {:?} via {:?}", #from_state_variant, #to_state_variant, event);
+                    self.runtime.transition_to(#state_id_enum_name::#to_state_variant);
+                    lit_bit_core::core::trace!("[STATE] Now in state {:?}", #to_state_variant);
+                    return lit_bit_core::core::SendResult::Transitioned;
+                }
+            });
+        }
+    }
+    // Fallback arm
+    match_arms.push(quote! { _ => lit_bit_core::core::SendResult::NoMatch });
 
-    // The StateMachine trait send method will call the inherent one.
-    let trait_send_method_impl_tokens = quote! {
-        fn send(&mut self, event: &Self::Event) -> bool {
-            // Ensure this calls the inherent `send` method of the struct,
-            // not the trait method itself recursively.
-            // Use #machine_name::send to call the inherent method.
-            #machine_name::send(self, event)
+    let inherent_send_method_body = quote! {
+        pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::core::SendResult {
+            match event {
+                #(#match_arms),*
+            }
         }
     };
 
@@ -40,38 +88,34 @@ pub(crate) fn generate_machine_struct_and_impl(
             >,
         }
         impl #machine_name {
-            pub fn new(context: #context_type_path) -> Self {
+            pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Self {
                 Self {
-                    // Ensure the MachineDefinition referred to by machine_definition_const_ident
-                    // is compatible with a Runtime that might not use its transitions array as heavily.
-                    // The initial_event for Runtime::new needs to be handled; perhaps pass a default event or None.
-                    // For now, assuming Runtime::new can be called with just def and context,
-                    // or the main macro passes a default initial event.
-                    // The user's provided generate_send_method doesn't show how Runtime::new is called.
-                    // For now, I will assume the existing Runtime::new call is okay, but it might need adjustment
-                    // if it relies on a fully populated TRANSITIONS array for initial state setup that the new model bypasses.
-                    // The `initial_leaf_state` in `MachineDefinition` is still used by `Runtime::new`.
-                    runtime: lit_bit_core::core::Runtime::new(&#machine_definition_const_ident, context),
+                    runtime: lit_bit_core::core::Runtime::new(&#machine_definition_const_ident, context, initial_event),
                 }
             }
-            // Place the generated inherent send method here
-            #inherent_send_method
+            #inherent_send_method_body
+            pub fn context(&self) -> &#context_type_path {
+                self.runtime.context()
+            }
+            pub fn context_mut(&mut self) -> &mut #context_type_path {
+                self.runtime.context_mut()
+            }
         }
         impl lit_bit_core::StateMachine for #machine_name {
             type State = #state_id_enum_name;
             type Event = #event_type_path;
             type Context = #context_type_path;
-            #trait_send_method_impl_tokens // Use the updated trait send method
+            fn send(&mut self, event: &Self::Event) -> lit_bit_core::core::SendResult {
+                #machine_name::send(self, event)
+            }
             fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::core::MAX_ACTIVE_REGIONS}> {
                 self.runtime.state()
             }
             fn context(&self) -> &Self::Context {
-                // Call the inherent method
-                #machine_name::context(self)
+                self.runtime.context()
             }
             fn context_mut(&mut self) -> &mut Self::Context {
-                // Call the inherent method
-                #machine_name::context_mut(self)
+                self.runtime.context_mut()
             }
         }
     };
@@ -124,17 +168,17 @@ pub(crate) fn generate_states_array<'ast>(
 
         let entry_action_expr = tmp_state.entry_handler.map_or_else(
             || quote! { None },
-            |p_expr| quote! { Some(#p_expr as EntryExitActionFn<#context_type_path, #event_type_path>) },
+            |p_expr| quote! { Some(#p_expr as lit_bit_core::core::EntryExitActionFn<#context_type_path, #event_type_path>) },
         );
         let exit_action_expr = tmp_state.exit_handler.map_or_else(
             || quote! { None },
-            |p_expr| quote! { Some(#p_expr as EntryExitActionFn<#context_type_path, #event_type_path>) },
+            |p_expr| quote! { Some(#p_expr as lit_bit_core::core::EntryExitActionFn<#context_type_path, #event_type_path>) },
         );
 
         let is_parallel_literal = tmp_state.is_parallel;
 
         state_node_initializers.push(quote! {
-            StateNode {
+            lit_bit_core::core::StateNode {
                 id: #state_id_enum_name::#current_state_id_variant,
                 parent: #parent_id_expr,
                 initial_child: #initial_child_id_expr,
@@ -145,7 +189,7 @@ pub(crate) fn generate_states_array<'ast>(
         });
     }
     let states_array_ts = quote! {
-        const STATES: &[StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+        const STATES: &[lit_bit_core::core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
             #(#state_node_initializers),*
         ];
     };
@@ -153,83 +197,95 @@ pub(crate) fn generate_states_array<'ast>(
 }
 
 pub(crate) fn generate_transitions_array<'ast>(
-    _builder: &'ast TmpStateTreeBuilder<'ast>,
-    _generated_ids: &GeneratedStateIds,
+    builder: &'ast TmpStateTreeBuilder<'ast>,
+    generated_ids: &GeneratedStateIds,
     event_type_path: &'ast syn::Path,
     context_type_path: &'ast syn::Path,
 ) -> SynResult<TokenStream> {
-    let transitions_array_ts = quote! {
-        const TRANSITIONS: &[lit_bit_core::core::Transition<
-            _, #event_type_path, #context_type_path
-        >] = &[];
-    };
-    Ok(transitions_array_ts)
-}
+    let state_id_enum_name = &generated_ids.state_id_enum_name;
+    let mut transition_initializers = Vec::new();
 
-pub fn generate_send_method(
-    event_type_path: &syn::Path,
-    state_id_enum_name: &Ident,
-    builder: &TmpStateTreeBuilder,
-    generated_ids: &GeneratedStateIds,
-) -> proc_macro2::TokenStream {
-    eprintln!("*** REBUILDING generate_send_method ***"); // DEBUG LINE ADDED
-    let mut match_arms = Vec::new();
+    for tmp_state_node in &builder.all_states {
+        let from_state_variant = generated_ids
+            .full_path_to_variant_ident
+            .get(&tmp_state_node.full_path_name)
+            .ok_or_else(|| {
+                SynError::new(
+                    tmp_state_node.name_span,
+                    "Internal error: TmpState full_path_name not found in generated IDs map for 'from_state'",
+                )
+            })?;
 
-    for state_node in &builder.all_states {
-        for t in &state_node.transitions {
-            let event_pat = &t.event_pattern;
-
-            let guard_block = if let Some(guard_expr) = &t.guard_handler {
-                quote! {
-                    (#guard_expr)(&self.context(), event)
-                }
-            } else {
-                quote! {
-                    true
-                }
-            };
-
-            let action_block = if let Some(action_expr) = &t.action_handler {
-                quote! {
-                    (#action_expr)(&mut self.context_mut(), event);
-                }
-            } else {
-                quote! {}
-            };
-
-            let target_state_idx = t.target_state_idx.expect("Missing target state");
-            let target_state = &builder.all_states[target_state_idx];
-            let target_variant = generated_ids
+        for trans_def_ast in &tmp_state_node.transitions {
+            let target_state_idx = trans_def_ast.target_state_idx.ok_or_else(|| {
+                SynError::new(
+                    trans_def_ast.target_state_path_ast.span(),
+                    "Internal error: Transition target_state_idx not resolved",
+                )
+            })?;
+            let target_tmp_state = builder.all_states.get(target_state_idx).ok_or_else(|| {
+                SynError::new(
+                    trans_def_ast.target_state_path_ast.span(),
+                    "Internal error: Transition target_state_idx refers to out-of-bounds state",
+                )
+            })?;
+            let to_state_variant = generated_ids
                 .full_path_to_variant_ident
-                .get(&target_state.full_path_name)
-                .expect("Missing target variant");
+                .get(&target_tmp_state.full_path_name)
+                .ok_or_else(|| {
+                    SynError::new(
+                        target_tmp_state.name_span,
+                        "Internal error: TmpState full_path_name not found for 'to_state'",
+                    )
+                })?;
 
-            let perform_transition_and_update_state = quote! {
-                self.runtime.active_leaf_states = heapless::Vec::from_slice(
-                    &[#state_id_enum_name::#target_variant]
-                ).unwrap();
+            // Event variant needs to be constructed based on event_pattern.
+            // This is tricky as event_pattern is syn::Pat, not just an Ident.
+            // For now, we assume simple `EventEnum::Variant` patterns.
+            // A more robust solution would analyze `syn::Pat` to extract the event discriminant.
+            // This part is NON-TRIVIAL and was the reason for the old generate_send_method approach.
+            // The Runtime must handle matching event: &EventType against pattern: &Pat
+            // The Transition struct in core takes `event: EventType`, not a pattern.
+            // This implies `Transition.event` field needs re-thinking or `Runtime` needs `Pat` matching.
+
+            // For now, let's use a temporary measure: if pattern is simple Ident, use it.
+            // This is INCOMPLETE for pattern matching like `Event::MyEvent { .. }`
+            let Some(event_expr) =
+                crate::extract_event_pattern_path_tokens(trans_def_ast.event_pattern)
+            else {
+                return Err(SynError::new(
+                    trans_def_ast.event_pattern.span(),
+                    "TRANSITIONS array does not yet support this event pattern type. Use simple variant names or struct/tuple variant patterns like 'MyEvent', 'MyEvent::Nested::Variant', 'MyEvent { .. }', or 'MyEvent(..)' for now."
+                ));
             };
 
-            match_arms.push(quote! {
-                #event_pat => {
-                    let passes_guard = #guard_block;
-                    if passes_guard {
-                        #action_block
-                        #perform_transition_and_update_state
-                        return true;
-                    }
-                    false
+            let action_expr = trans_def_ast.action_handler.map_or_else(
+                || quote! { None },
+                |handler_expr| quote! { Some(#handler_expr as lit_bit_core::core::ActionFn<#context_type_path, #event_type_path>) },
+            );
+            let guard_expr = trans_def_ast.guard_handler.map_or_else(
+                || quote! { None },
+                |handler_expr| quote! { Some(#handler_expr as lit_bit_core::core::GuardFn<#context_type_path, #event_type_path>) },
+            );
+
+            transition_initializers.push(quote! {
+                lit_bit_core::core::Transition {
+                    from_state: #state_id_enum_name::#from_state_variant,
+                    event: #event_expr,
+                    to_state: #state_id_enum_name::#to_state_variant,
+                    action: #action_expr,
+                    guard: #guard_expr,
                 }
             });
         }
     }
 
-    quote! {
-        pub fn send(&mut self, event: &#event_type_path) -> bool {
-            match event {
-                #(#match_arms),*,
-                _ => false
-            }
-        }
-    }
+    let transitions_array_ts = quote! {
+        const TRANSITIONS: &[lit_bit_core::core::Transition<
+            #state_id_enum_name, #event_type_path, #context_type_path
+        >] = &[
+            #(#transition_initializers),*
+        ];
+    };
+    Ok(transitions_array_ts)
 }

@@ -36,6 +36,8 @@ pub mod prelude {
     // pub use crate::StateMachine;
 }
 
+use crate::core::SendResult;
+
 pub trait StateMachine {
     type State: Copy
         + Clone
@@ -45,16 +47,12 @@ pub trait StateMachine {
         + ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
         + 'static;
 
-    type Event: Clone
-        + PartialEq
-        + Eq
-        + ::core::hash::Hash
-        + ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
-        + 'static;
+    type Event: ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
+        + 'static; // Removed Clone, PartialEq, Eq, Hash
 
     type Context: Clone + 'static;
 
-    fn send(&mut self, event: &Self::Event) -> bool;
+    fn send(&mut self, event: &Self::Event) -> SendResult;
     fn state(&self) -> heapless::Vec<Self::State, MAX_ACTIVE_REGIONS>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;

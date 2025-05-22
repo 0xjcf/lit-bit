@@ -45,16 +45,19 @@ pub enum MediaPlayerEvent {
 // Action and Guard functions (simplified)
 fn do_play(context: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
     if let Some(track) = &context.current_track {
+        #[cfg(not(target_arch = "riscv32"))]
         println!("[Action] do_play - Track: {track:?}");
     }
 }
 
 fn do_stop(_context: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    #[cfg(not(target_arch = "riscv32"))]
     println!("Stopping playback.");
 }
 
 fn is_track_loaded(context: &MediaPlayerContext, _event: &MediaPlayerEvent) -> bool {
     let loaded = context.current_track.is_some();
+    #[cfg(not(target_arch = "riscv32"))]
     println!("[Guard] is_track_loaded? {loaded}");
     loaded
 }
@@ -86,27 +89,45 @@ fn action_for_load_track(context: &mut MediaPlayerContext, event: &MediaPlayerEv
 */
 
 fn entry_stopped(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    #[cfg(not(target_arch = "riscv32"))]
     println!("Entering Stopped state. Track: {:?}", ctx.current_track);
 }
 
 fn exit_stopped(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    #[cfg(not(target_arch = "riscv32"))]
     println!("Exiting Stopped state. Track: {:?}", ctx.current_track);
 }
 
 fn entry_loading(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    #[cfg(not(target_arch = "riscv32"))]
     println!("Entering Loading state. Track: {:?}", ctx.current_track);
 }
 
 fn exit_loading(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    #[cfg(not(target_arch = "riscv32"))]
     println!("Exiting Loading state. Track: {:?}", ctx.current_track);
 }
 
 fn entry_playing(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    #[cfg(not(target_arch = "riscv32"))]
     println!("Entering Playing state. Track: {:?}", ctx.current_track);
 }
 
 fn exit_playing(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    #[cfg(not(target_arch = "riscv32"))]
     println!("Exiting Playing state. Track: {:?}", ctx.current_track);
+}
+
+fn action_volume_up(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    if ctx.volume < 100 {
+        ctx.volume += 1;
+    }
+}
+
+fn action_volume_down(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    if ctx.volume > 0 {
+        ctx.volume -= 1;
+    }
 }
 
 statechart! {
@@ -118,7 +139,7 @@ statechart! {
     state Stopped {
         entry: entry_stopped;
         exit: exit_stopped;
-        on MediaPlayerEvent::Play [guard is_track_loaded] => Playing [action do_play];
+        on Play [guard is_track_loaded] => Playing [action do_play];
         // on MediaPlayerEvent::LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track]; // Line fully commented now
     }
 
@@ -131,28 +152,31 @@ statechart! {
     state Playing {
         entry: entry_playing;
         exit: exit_playing;
-        on MediaPlayerEvent::Stop => Stopped [action do_stop];
-        on MediaPlayerEvent::VolumeUp => Playing;
-        on MediaPlayerEvent::VolumeDown => Playing;
+        on Stop => Stopped [action do_stop];
+        on VolumeUp => Playing [action action_volume_up];
+        on VolumeDown => Playing [action action_volume_down];
     }
 }
 
+#[cfg(not(target_arch = "riscv32"))] // Only include main for non-RISC-V targets
 fn main() {
     let player_context = MediaPlayerContext {
         current_track: None, // Some("initial_track.mp3".to_string()),
         volume: 50,
     };
-    let mut player = MediaPlayer::new(player_context.clone());
+    let mut player = MediaPlayer::new(player_context.clone(), &MediaPlayerEvent::default());
 
     println!("Initial state: {:?}", player.state());
     println!("Initial context: {:?}", player.context());
 
     println!("Sending Stop (should do nothing if already stopped or no track):");
-    player.send(&MediaPlayerEvent::Stop);
+    let result = player.send(&MediaPlayerEvent::Stop);
+    println!("Result: {result:?}");
     println!("State after Stop: {:?}", player.state());
 
     println!("Sending Play (should fail guard if no track):");
-    player.send(&MediaPlayerEvent::Play);
+    let result = player.send(&MediaPlayerEvent::Play);
+    println!("Result: {result:?}");
     println!("State after Play (no track): {:?}", player.state());
 
     /*
@@ -179,11 +203,13 @@ fn main() {
     // The following Play will likely always fail the guard now since no track is loaded.
     // This is fine for this test, as we are checking for E0533.
     println!("Sending Play (track was never loaded):");
-    player.send(&MediaPlayerEvent::Play);
+    let result = player.send(&MediaPlayerEvent::Play);
+    println!("Result: {result:?}");
     println!("State after Play: {:?}", player.state());
 
     println!("Sending Stop:");
-    player.send(&MediaPlayerEvent::Stop);
+    let result = player.send(&MediaPlayerEvent::Stop);
+    println!("Result: {result:?}");
     println!("State after Stop: {:?}", player.state());
 
     /*

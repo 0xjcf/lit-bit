@@ -71,3 +71,5 @@ diagram = ["dep:serde"] # For serializing statechart structure
 
 # Example of combining features for specific use cases:
 # async-std = ["async", "std", "dep:tokio"]
+
+debug-log = []

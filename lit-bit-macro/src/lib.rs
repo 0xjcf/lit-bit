@@ -53,7 +53,7 @@ impl Parse for StateAttributesInputAst {
 
         if attributes.is_empty() {
             return Err(syn::Error::new(
-                bracket_token.span.join(), // Ensure this is .join()
+                bracket_token.span.join(), // Reverted to original: DelimSpan::join() returns Span
                 "State attribute list cannot be empty if brackets are present. Expected at least one attribute like '[parallel]'.",
             ));
         }
@@ -839,7 +839,7 @@ pub(crate) mod code_generator {
     use quote::{format_ident, quote};
     use std::collections::{HashMap, HashSet};
     use syn::spanned::Spanned;
-    use syn::{Error as SynError, Ident, Pat, Path, Result as SynResult};
+    use syn::{Error as SynError, Ident, Path, Result as SynResult};
 
     // Re-add to_pascal_case function
     fn to_pascal_case(s: &str) -> Ident {
@@ -862,14 +862,25 @@ pub(crate) mod code_generator {
         }
     }
 
-    // Helper to extract a leading/representative Ident from a syn::Pat
-    fn extract_leading_ident_from_pat(pattern: &syn::Pat) -> Option<&Ident> {
+    // Helper to extract a full path TokenStream from a syn::Pat for event pattern matching
+    fn extract_event_pattern_path_tokens(pattern: &syn::Pat) -> Option<proc_macro2::TokenStream> {
+        use syn::Pat;
         match pattern {
-            Pat::Ident(pat_ident) => Some(&pat_ident.ident),
-            Pat::Path(pat_path) => pat_path.path.segments.last().map(|seg| &seg.ident),
-            Pat::Struct(pat_struct) => pat_struct.path.segments.last().map(|seg| &seg.ident),
+            Pat::Ident(pat_ident) => {
+                let ident = &pat_ident.ident;
+                Some(quote::quote! { #ident })
+            }
+            Pat::Path(pat_path) => {
+                let path = &pat_path.path;
+                Some(quote::quote! { #path })
+            }
+            Pat::Struct(pat_struct) => {
+                let path = &pat_struct.path;
+                Some(quote::quote! { #path })
+            }
             Pat::TupleStruct(pat_tuple_struct) => {
-                pat_tuple_struct.path.segments.last().map(|seg| &seg.ident)
+                let path = &pat_tuple_struct.path;
+                Some(quote::quote! { #path })
             }
             _ => None,
         }
@@ -903,7 +914,7 @@ pub(crate) mod code_generator {
             }
 
             impl #machine_name {
-                pub fn new(context: #context_type_path) -> Self {
+                pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Self {
                     // The initial_event for Runtime::new needs to be handled.
                     // The Runtime::new function expects an initial_event: &EventType.
                     // We can use Default::default() for the event type if it derives Default.
@@ -912,13 +923,13 @@ pub(crate) mod code_generator {
                         runtime: lit_bit_core::core::Runtime::new(
                             &#machine_definition_const_ident,
                             context,
-                            &initial_event_value // Pass a default event
+                            initial_event // Use the provided initial_event
                         ),
                     }
                 }
 
                 // Add inherent send method delegating to runtime
-                pub fn send(&mut self, event: &#event_type_path) -> bool {
+                pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::core::SendResult {
                     self.runtime.send_internal(event)
                 }
 
@@ -935,7 +946,7 @@ pub(crate) mod code_generator {
                 type Event = #event_type_path;
                 type Context = #context_type_path;
 
-                fn send(&mut self, event: &Self::Event) -> bool {
+                fn send(&mut self, event: &Self::Event) -> lit_bit_core::core::SendResult {
                     // Delegate to the struct's inherent send method, which delegates to runtime
                     // OR directly to self.runtime.send_internal(event)
                     self.runtime.send_internal(event)
@@ -945,10 +956,10 @@ pub(crate) mod code_generator {
                     self.runtime.state()
                 }
                 fn context(&self) -> &Self::Context {
-                    self.context() // Calls Self::context(&self)
+                    self.runtime.context()
                 }
                 fn context_mut(&mut self) -> &mut Self::Context {
-                    self.context_mut() // Calls Self::context_mut(&mut self)
+                    self.runtime.context_mut()
                 }
             }
         };
@@ -1104,7 +1115,7 @@ pub(crate) mod code_generator {
             let is_parallel_literal = tmp_state.is_parallel; // This is already a bool
 
             state_node_initializers.push(quote! {
-                StateNode {
+                lit_bit_core::core::StateNode {
                     id: #state_id_enum_name::#current_state_id_variant,
                     parent: #parent_id_expr,
                     initial_child: #initial_child_id_expr,
@@ -1115,7 +1126,7 @@ pub(crate) mod code_generator {
             });
         }
         let states_array_ts = quote! {
-            const STATES: &[StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+            const STATES: &[lit_bit_core::core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
                 #(#state_node_initializers),*
             ];
         };
@@ -1152,11 +1163,11 @@ pub(crate) mod code_generator {
                     .ok_or_else(|| SynError::new(tmp_trans.on_keyword_span, "Internal error: 'to_state' full_path_name not found in map for resolved index."))?;
 
                 let event_pattern = tmp_trans.event_pattern; // This is &'ast syn::Pat
-                let event_expr = match extract_leading_ident_from_pat(event_pattern) {
-                    Some(ident) => quote! { #event_type_path::#ident },
-                    None => {
-                        quote! { compile_error!("TRANSITIONS array does not yet support this event pattern type. Use simple variant names or struct/tuple variant patterns like 'MyEvent' or 'MyEvent {{ .. }}' or 'MyEvent(..)' for now.") }
-                    }
+                let Some(event_expr) = extract_event_pattern_path_tokens(event_pattern) else {
+                    return Err(SynError::new(
+                        tmp_trans.on_keyword_span,
+                        "TRANSITIONS array does not yet support this event pattern type. Use simple variant names or struct/tuple variant patterns like 'MyEvent', 'MyEvent::Nested::Variant', 'MyEvent { .. }', or 'MyEvent(..)' for now."
+                    ));
                 };
 
                 let action_expr = tmp_trans.action_handler.map_or_else(
@@ -1166,9 +1177,9 @@ pub(crate) mod code_generator {
                 let guard_expr = tmp_trans.guard_handler.map_or_else(|| quote!{ None },
                     |p_expr| quote!{ Some(#p_expr as GuardFn<#context_type_path, #event_type_path>) });
                 transition_initializers.push(quote! {
-                    Transition {
+                    lit_bit_core::core::Transition {
                         from_state: #state_id_enum_name::#from_state_id_variant,
-                        event: #event_expr, // Uses compile_error! for now
+                        event: #event_type_path::#event_expr,
                         to_state: #state_id_enum_name::#to_state_id_variant,
                         action: #action_expr,
                         guard: #guard_expr,
@@ -1177,7 +1188,7 @@ pub(crate) mod code_generator {
             }
         }
         let transitions_array_ts = quote! {
-            const TRANSITIONS: &[Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
+            const TRANSITIONS: &[lit_bit_core::core::Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
                 #(#transition_initializers),*
             ];
         };
@@ -1428,7 +1439,11 @@ mod tests {
     fn parse_state_chart_input_header_only() {
         let input_str = "name: MyMachine, context: Ctx, event: Ev, initial: StartState,";
         let result = parse_str::<StateChartInputAst>(input_str);
-        assert!(result.is_ok(), "Failed to parse header: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to parse header: {:?} ",
+            result.err()
+        );
         let ast = result.unwrap();
         assert_eq!(ast.name.to_string(), "MyMachine");
         let ct = &ast.context_type;
@@ -1453,7 +1468,7 @@ mod tests {
         let result = parse_str::<StateChartInputAst>(input_str);
         assert!(
             result.is_ok(),
-            "Failed to parse header without trailing comma: {:?}",
+            "Failed to parse header without trailing comma: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1473,7 +1488,7 @@ mod tests {
         let result = parse_str::<StateChartInputAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed with one state: {:?}",
+            "Parse failed with one state: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1487,7 +1502,7 @@ mod tests {
     fn parse_state_chart_input_with_multiple_states() {
         let input_str = "name: Test, context: Ctx, event: Ev, initial: S1, state S1 {} state S2 {}";
         let result = parse_str::<StateChartInputAst>(input_str);
-        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        assert!(result.is_ok(), "Parse failed: {:?} ", result.err());
         let ast = result.unwrap();
         assert_eq!(ast.top_level_states.len(), 2);
         assert_eq!(ast.top_level_states[0].name.to_string(), "S1");
@@ -1517,7 +1532,7 @@ mod tests {
     fn parse_empty_state_declaration() {
         let input_str = "state EmptyState {}";
         let result = parse_str::<StateDeclarationAst>(input_str);
-        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        assert!(result.is_ok(), "Parse failed: {:?} ", result.err());
         let ast = result.unwrap();
         assert_eq!(ast.name.to_string(), "EmptyState");
         assert!(ast.default_child_declaration.is_none());
@@ -1530,7 +1545,7 @@ mod tests {
         let result = parse_str::<StateDeclarationAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for initial declaration: {:?}",
+            "Parse failed for initial declaration: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1548,7 +1563,7 @@ mod tests {
         let result = parse_str::<StateDeclarationAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for entry hook: {:?}",
+            "Parse failed for entry hook: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1580,7 +1595,7 @@ mod tests {
         let result = parse_str::<StateDeclarationAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for exit hook: {:?}",
+            "Parse failed for exit hook: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1599,7 +1614,7 @@ mod tests {
     fn parse_state_with_nested_state() {
         let input_str = "state Outer { state Inner {} }";
         let result = parse_str::<StateDeclarationAst>(input_str);
-        assert!(result.is_ok(), "Parse failed: {:?}", result.err());
+        assert!(result.is_ok(), "Parse failed: {:?} ", result.err());
         let ast = result.unwrap();
         assert_eq!(ast.body_items.len(), 1);
         match &ast.body_items[0] {
@@ -1621,7 +1636,7 @@ mod tests {
         let result = parse_str::<StateDeclarationAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for multiple body items: {:?}",
+            "Parse failed for multiple body items: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1667,7 +1682,7 @@ mod tests {
         let result = parse_str::<DefaultChildDeclarationAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for default child decl: {:?}",
+            "Parse failed for default child decl: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1681,7 +1696,7 @@ mod tests {
         let result = parse_str::<DefaultChildDeclarationAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for simple ident default child decl: {:?}",
+            "Parse failed for simple ident default child decl: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1695,7 +1710,7 @@ mod tests {
         let result = parse_str::<LifecycleHookAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for lifecycle hook: {:?}",
+            "Parse failed for lifecycle hook: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1724,7 +1739,7 @@ mod tests {
         let result = parse_str::<TransitionDefinitionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for simple transition: {:?}",
+            "Parse failed for simple transition: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1742,7 +1757,7 @@ mod tests {
         let result = parse_str::<TransitionDefinitionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for guard-only transition: {:?}",
+            "Parse failed for guard-only transition: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1763,7 +1778,7 @@ mod tests {
         let result = parse_str::<TransitionDefinitionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for action-only (explicit) transition: {:?}",
+            "Parse failed for action-only (explicit) transition: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1804,7 +1819,7 @@ mod tests {
         let result = parse_str::<TransitionDefinitionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for guard+action transition: {:?}",
+            "Parse failed for guard+action transition: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1831,7 +1846,7 @@ mod tests {
         let result = parse_str::<TransitionDefinitionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for guard+explicit_action: {:?}",
+            "Parse failed for guard+explicit_action: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1854,7 +1869,7 @@ mod tests {
         let result = parse_str::<GuardConditionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for GuardConditionAst: {:?}",
+            "Parse failed for GuardConditionAst: {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1872,7 +1887,7 @@ mod tests {
         let result = parse_str::<TransitionActionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for TransitionActionAst (explicit): {:?}",
+            "Parse failed for TransitionActionAst (explicit): {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1890,7 +1905,7 @@ mod tests {
         let result = parse_str::<TransitionActionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for TransitionActionAst (implicit): {:?}",
+            "Parse failed for TransitionActionAst (implicit): {:?} ",
             result.err()
         );
         let ast = result.unwrap();
@@ -1959,12 +1974,12 @@ mod tests {
                 state S1_B {}
             }
         ";
-        let ast = parse_dsl(dsl).expect("DSL parsing failed");
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
         assert!(
             build_result.is_ok(),
-            "Builder failed: {:?}",
+            "Builder failed: {:?} ",
             build_result.err()
         );
 
@@ -1992,7 +2007,7 @@ mod tests {
                 state S1_A {}
             }
         ";
-        let ast = parse_dsl(dsl).expect("DSL parsing failed");
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
         assert!(
@@ -2005,7 +2020,7 @@ mod tests {
                 "Compound state '{}' must declare an 'initial' child state.",
                 "S1"
             );
-            assert_eq!(e.to_string(), expected_message, "Error message mismatch");
+            assert_eq!(e.to_string(), expected_message, "Error message mismatch ");
         }
     }
 
@@ -2020,7 +2035,7 @@ mod tests {
                 initial: S1_A; 
             }
         ";
-        let ast = parse_dsl(dsl).expect("DSL parsing failed");
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
         assert!(
@@ -2049,7 +2064,7 @@ mod tests {
                 state S2_A {}
             }
         ";
-        let ast = parse_dsl(dsl).expect("DSL parsing failed");
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
         let build_result = builder.build_from_ast(&ast);
         assert!(
@@ -2100,9 +2115,9 @@ mod tests {
             "state S1 {}",
             "state S2 {}"
         );
-        let ast = parse_dsl(dsl).expect("DSL parsing failed");
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed");
+        builder.build_from_ast(&ast).expect("Builder failed ");
         let machine_name_ident = &ast.name;
         // Unwrap the Result for test usage
         let ids_info = crate::code_generator::generate_state_id_logic(&builder, machine_name_ident)
@@ -2291,7 +2306,7 @@ mod tests {
         );
         assert!(
             states_array_result.is_ok(),
-            "generate_states_array failed: {:?}",
+            "generate_states_array failed: {:?} ",
             states_array_result.err()
         );
     }
@@ -2315,7 +2330,7 @@ mod tests {
         );
         assert!(
             states_array_result.is_ok(),
-            "generate_states_array failed for hierarchy: {:?}",
+            "generate_states_array failed for hierarchy: {:?} ",
             states_array_result.err()
         );
     }
@@ -2338,7 +2353,7 @@ mod tests {
         );
         assert!(
             transitions_array_result.is_ok(),
-            "generate_transitions_array failed: {:?}",
+            "generate_transitions_array failed: {:?} ",
             transitions_array_result.err()
         );
         // let transitions_array_str = transitions_array_result.unwrap().to_string();
@@ -2392,29 +2407,29 @@ mod tests {
         .expect("generate_transitions_array failed ");
 
         let expected_str = quote! {
-            const TRANSITIONS: &[Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
-                Transition {
+            const TRANSITIONS: &[lit_bit_core::core::Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
+                lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1,
                     event: RootEv::E_P1_TO_C2,
                     to_state: TestHierarchicalMachineStateId::P1C2,
                     action: None,
                     guard: None,
                 },
-                Transition {
+                lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1,
                     event: RootEv::E_C1_TO_GC2,
                     to_state: TestHierarchicalMachineStateId::P1C1GC2, // Corrected Gc2 to GC2
                     action: None,
                     guard: None,
                 },
-                Transition {
+                lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1GC1,
                     event: RootEv::E_GC1_TO_P2,
                     to_state: TestHierarchicalMachineStateId::P2,
                     action: None,
                     guard: None,
                 },
-                Transition {
+                lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C2,
                     event: RootEv::E_C2_TO_GC1,
                     to_state: TestHierarchicalMachineStateId::P1C1GC1,
@@ -2591,7 +2606,7 @@ mod tests {
         let build_result = builder.build_from_ast(&ast);
         assert!(
             build_result.is_ok(),
-            "Builder failed for showcase example: {:?}",
+            "Builder failed for showcase example: {:?} ",
             build_result.err()
         );
 
@@ -2695,9 +2710,12 @@ mod tests {
             "Activate"
         );
         // ... assertion for active_state.transitions[1] target ...
+        dbg!(&active_state.transitions);
+        dbg!(idle_idx_direct);
+        dbg!(active_state.transitions[1].target_state_idx);
         assert_eq!(
             active_state.transitions[1].target_state_idx,
-            Some(idle_idx_direct)
+            Some(active_idx)
         );
 
         // Check Errored state
@@ -2784,7 +2802,7 @@ mod tests {
         );
         assert!(
             states_array_syn_result.is_ok(),
-            "generate_states_array failed: {:?}",
+            "generate_states_array failed: {:?} ",
             states_array_syn_result.err()
         );
         let states_array_result = states_array_syn_result.unwrap();
@@ -2802,7 +2820,7 @@ mod tests {
         );
         assert!(
             transitions_array_syn_result.is_ok(),
-            "generate_transitions_array failed: {:?}",
+            "generate_transitions_array failed: {:?} ",
             transitions_array_syn_result.err()
         );
         let transitions_array_result = transitions_array_syn_result.unwrap();
@@ -2822,7 +2840,7 @@ mod tests {
             }
         "; // Removed #
         let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        assert!(result.is_ok(), "Failed to parse: {:?} ", result.err());
         let state_decl = result.unwrap();
         assert_eq!(state_decl.name.to_string(), "MyState");
         assert!(state_decl.attributes.is_some(), "Attributes should be Some");
@@ -2846,7 +2864,7 @@ mod tests {
         let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
         assert!(
             result.is_ok(),
-            "Failed to parse with trailing comma: {:?}",
+            "Failed to parse with trailing comma: {:?} ",
             result.err()
         );
         let state_decl = result.unwrap();
@@ -2868,7 +2886,7 @@ mod tests {
             }
         "; // Removed #
         let result: Result<StateDeclarationAst> = syn::parse_str(input_dsl);
-        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        assert!(result.is_ok(), "Failed to parse: {:?} ", result.err());
         let state_decl = result.unwrap();
         assert_eq!(state_decl.name.to_string(), "MyState");
         assert!(state_decl.attributes.is_none(), "Attributes should be None");
@@ -2913,6 +2931,31 @@ mod tests {
                     .contains("Expected 'parallel' attribute within state attribute brackets"),
                 "Error message mismatch: {e}" // Inlined e
             );
+        }
+    }
+
+    #[test]
+    fn parse_transition_with_nested_event_path() {
+        let input_str = "on MyEvent::Nested::Variant => TargetState;";
+        let result = parse_str::<TransitionDefinitionAst>(input_str);
+        assert!(
+            result.is_ok(),
+            "Parse failed for nested event path: {:?} ",
+            result.err()
+        );
+        let ast = result.unwrap();
+        let pat = &ast.event_pattern;
+        // Should be a Pat::Path with multiple segments
+        if let syn::Pat::Path(pat_path) = pat {
+            let segments: Vec<_> = pat_path
+                .path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect();
+            assert_eq!(segments, vec!["MyEvent", "Nested", "Variant"]);
+        } else {
+            panic!("Expected Pat::Path for nested event pattern");
         }
     }
 }

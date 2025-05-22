@@ -2,8 +2,22 @@
 
 Reverse-chronological log of daily coding sessions.  Keep entries **concise** and link to PRs / issues for full detail.
 
+_Add new sessions below this line._ 
+
+## 2025-05-22 · _Session End_
+* _Author_: @AI-agent Default (via @0xjcf)
+* _Phase_: 1-core-runtime / macro
+* _Work_: Debugged and fixed failing macro test (`parse_and_build_hierarchical_showcase_example`) by correcting the test assertion for the self-transition in the `Active` state. All macro and core tests now pass. Cleaned up debug output and ensured linter compliance throughout. See commit for details.
+* _Next_: Review for any further macro edge cases, then proceed to next roadmap phase or feature.
+
+## 2025-05-22 · _Session Start_
+* _Author_: @AI-agent Default (via @0xjcf)
+* _Phase_: 1-core-runtime
+* _Work_: Fixed hierarchical state entry/exit bugs: (1) cross-root transition fallback/entry path, (2) double entry on child-to-parent, (3) dedup for parallel region leaf self-transition. All changes respect linter and explicit naming rules. See commit for details.
+* _Next_: Re-run full test suite and verify all hierarchical/parallel transition tests pass. 
+
 ## 2024-05-21 · _Session End_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Macro Refactor & Test Corrections)
 *   _Work_:
     *   Refactored the `statechart!` macro's code generation for the `send` method. It now delegates directly to `Runtime::send_internal` in `lit-bit-core`. This resolved a persistent E0317 linter error ("if may be missing else clause") and fixed numerous test failures related to incorrect transition processing in hierarchical and parallel states.
@@ -18,7 +32,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 
 ## 2024-05-19 · _Session Start_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Enhancement: Macro Event Pattern Matching)
 *   _Work_:
     *   Pivoting to implement pattern matching for events with associated data directly within the `statechart!` macro (e.g., `on Event::Variant { field } => ...`).
@@ -36,7 +50,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2024-05-19 · _Session End_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Runtime Bugfixing & Test Completion)
 *   _Work_:
     *   Successfully debugged and fixed all remaining failing unit and integration tests for hierarchical and parallel state transitions.
@@ -55,7 +69,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2024-05-19 · _Session Start_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Runtime Implementation)
 *   _Work_: Began session to implement parallel state event dispatch in `Runtime::send()`.
 *   _Next_: Focus on Task 3.2: Completing `Runtime::send()` for parallel states, then Task 4.1: Unit tests for this logic.
@@ -63,7 +77,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-18 · _Session End (Code Review Follow-up Part 2)_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Runtime Refinement & Polish)
 *   _Work_:
     *   Addressed a second batch of code review suggestions following initial lint/test fixes:
@@ -102,7 +116,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-17 · _Session End (Linter & Runtime Refinements)_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Runtime Refinement)
 *   _Work_:
     *   Fixed a runtime bug where simple leaf self-transitions would result in an empty active state set by ensuring the state is correctly processed through the entry execution path in `Runtime::send()`.
@@ -115,7 +129,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-17 · _Session End (Parallel Runtime Logic - Exit Implemented)_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Runtime Implementation)
 *   _Work_:
     *   Refactored `Runtime::new()` in `lit-bit-core` to correctly initialize `active_leaf_states` when the machine's overall initial state is a parallel state. (Task 3.5 DONE from `prompts/decomposition/03_parallel_states_tasks.md`).
@@ -135,7 +149,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-17 · _Session Mid (Runtime::new Parallel Init & Linter/Test Fixes)_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Runtime Implementation)
 *   _Work_:
     *   Refactored `Runtime::new()` in `lit-bit-core` to correctly initialize `active_leaf_states` when the machine's overall initial state is a parallel state. (Task 3.5 DONE from `prompts/decomposition/03_parallel_states_tasks.md`).
@@ -149,7 +163,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-17 · _Session Start_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Runtime Implementation)
 *   _Work_:
     *   Created new branch `feat/parallel-states` and committed foundational P0 and P1 (data structures) work for parallel states.
@@ -161,7 +175,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-17 · _Session End (Planned Next: Parallel Runtime Logic)_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (P0 Tasks Complete, P1 Structs Done)
 *   _Work_:
     *   Fixed all linter errors in `lit-bit-macro` and `lit-bit-core`.
@@ -179,7 +193,7 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 ---
 
 ## 2025-05-17 · _Session Start_
-*   _Author_: @Gemini (via @user)
+*   _Author_: @Gemini (via @0xjcf)
 *   _Phase_: 03-parallel-states (Begin Implementation)
 *   _Work_:
     *   Completed re-entry process, initiating Phase 03 planning.
@@ -329,4 +343,3 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 ---
 
-_Add new sessions above this line._ 

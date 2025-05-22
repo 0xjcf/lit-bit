@@ -6,6 +6,7 @@ pub mod basic_machine_integration_test {
     use core::convert::TryFrom;
     use heapless::String;
     use lit_bit_core::StateMachine;
+    use lit_bit_core::core::SendResult;
     use lit_bit_macro::statechart;
 
     const ACTION_LOG_CAPACITY: usize = 20;
@@ -94,15 +95,16 @@ pub mod basic_machine_integration_test {
 
     #[test]
     fn test_basic_state_machine_transitions_and_actions() {
-        let mut machine = TestMachine::new(TestContext::default());
+        let mut machine = TestMachine::new(TestContext::default(), &TestEvent::default());
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         let expected_log_init: [String<ACTION_STRING_CAPACITY>; 1] = [hstr!("entry_s1")];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_init);
 
         machine.context_mut().clear_log();
-        let transition_occurred_1 = machine.send(&TestEvent::Increment);
-        assert!(
-            transition_occurred_1,
+        let send_result_1 = machine.send(&TestEvent::Increment);
+        assert_eq!(
+            send_result_1,
+            SendResult::Transitioned,
             "Expected a transition for first Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
@@ -111,8 +113,12 @@ pub mod basic_machine_integration_test {
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc1);
 
         machine.context_mut().clear_log();
-        let transition_occurred_reset = machine.send(&TestEvent::Reset);
-        assert!(transition_occurred_reset, "Expected a transition for Reset");
+        let send_result_reset = machine.send(&TestEvent::Reset);
+        assert_eq!(
+            send_result_reset,
+            SendResult::Transitioned,
+            "Expected a transition for Reset"
+        );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         let expected_log_reset1: [String<ACTION_STRING_CAPACITY>; 1] = [hstr!("entry_s1")];
         assert_eq!(
@@ -121,9 +127,10 @@ pub mod basic_machine_integration_test {
         );
 
         machine.context_mut().clear_log();
-        let transition_occurred_inc2 = machine.send(&TestEvent::Increment);
-        assert!(
-            transition_occurred_inc2,
+        let send_result_inc2 = machine.send(&TestEvent::Increment);
+        assert_eq!(
+            send_result_inc2,
+            SendResult::Transitioned,
             "Expected a transition for second Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State2]);
@@ -132,9 +139,10 @@ pub mod basic_machine_integration_test {
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_inc2);
 
         machine.context_mut().clear_log();
-        let transition_occurred_reset_2 = machine.send(&TestEvent::Reset);
-        assert!(
-            transition_occurred_reset_2,
+        let send_result_reset_2 = machine.send(&TestEvent::Reset);
+        assert_eq!(
+            send_result_reset_2,
+            SendResult::Transitioned,
             "Expected a transition for second Reset"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
@@ -145,9 +153,10 @@ pub mod basic_machine_integration_test {
         );
 
         machine.context_mut().clear_log();
-        let transition_occurred_blocked = machine.send(&TestEvent::Increment);
-        assert!(
-            !transition_occurred_blocked,
+        let send_result_blocked = machine.send(&TestEvent::Increment);
+        assert_eq!(
+            send_result_blocked,
+            SendResult::NoMatch,
             "Expected no transition for blocked Increment"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
@@ -162,9 +171,10 @@ pub mod basic_machine_integration_test {
         );
 
         machine.context_mut().clear_log();
-        let transition_occurred_decrement = machine.send(&TestEvent::Decrement);
-        assert!(
-            transition_occurred_decrement,
+        let send_result_decrement = machine.send(&TestEvent::Decrement);
+        assert_eq!(
+            send_result_decrement,
+            SendResult::Transitioned,
             "Expected a transition for Decrement"
         );
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
@@ -176,6 +186,8 @@ pub mod basic_machine_integration_test {
             &expected_decrement_log,
             "Self-transition action order incorrect"
         );
+
+        // End of test
     }
 }
 
@@ -248,8 +260,8 @@ mod parallel_initial_state_test {
 
     #[test]
     fn test_initial_parallel_state_activation() {
-        let machine = ParallelInitialMachine::new(ParallelInitContext::default());
-
+        let machine =
+            ParallelInitialMachine::new(ParallelInitContext::default(), &TestEvent::default());
         let active_states = machine.state();
 
         assert_eq!(
@@ -284,5 +296,7 @@ mod parallel_initial_state_test {
             actual_log_strs, expected_log_sequence,
             "Full log sequence mismatch."
         );
+
+        // End of test
     }
 }
