@@ -189,15 +189,27 @@ pub(crate) fn generate_transitions_array<'ast>(
             let event_pattern = trans_def_ast.event_pattern;
             let event_pattern_tokens = quote! { #event_pattern };
 
+            // Use comprehensive pattern prefix detection to qualify patterns correctly
+            let pattern_needs_prefix =
+                crate::pattern_needs_prefix_comprehensive(event_pattern, event_type_path);
+
             // Generate a unique matcher function ident for each transition
             let matcher_fn_ident = quote::format_ident!(
                 "matches_{}_T{}",
                 machine_name,
                 transition_initializers.len()
             );
-            let matcher_fn = quote! {
-                fn #matcher_fn_ident(e: &#event_type_path) -> bool {
-                    matches!(e, &#event_pattern_tokens)
+            let matcher_fn = if pattern_needs_prefix {
+                quote! {
+                    fn #matcher_fn_ident(e: &#event_type_path) -> bool {
+                        matches!(e, #event_type_path :: #event_pattern_tokens)
+                    }
+                }
+            } else {
+                quote! {
+                    fn #matcher_fn_ident(e: &#event_type_path) -> bool {
+                        matches!(e, &#event_pattern_tokens)
+                    }
                 }
             };
             matcher_fns.push(matcher_fn);

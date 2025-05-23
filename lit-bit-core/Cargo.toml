@@ -68,7 +68,7 @@ default = [] # Keep default empty for no_std focus
 std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "dep:futures", "futures/std"]
 # The `async` feature implies `alloc` (via async-trait/futures)
 # and if `std` is also active, can pull in tokio.
-async = ["dep:async-trait", "dep:futures"]
+async = ["dep:async-trait", "dep:futures", "dep:tokio"]
 diagram = ["dep:serde"] # For serializing statechart structure
 
 # Example of combining features for specific use cases:
