@@ -24,6 +24,9 @@
 
 pub mod core;
 
+// Re-export macros from lit_bit_macro
+pub use lit_bit_macro::{statechart, statechart_event};
+
 // Re-export key types/traits for easier use by consumers of the crate.
 pub use core::DefaultContext;
 pub use core::MAX_ACTIVE_REGIONS;

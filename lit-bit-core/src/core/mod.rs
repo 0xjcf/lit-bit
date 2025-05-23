@@ -45,16 +45,20 @@ pub type GuardFn<ContextType, EventType> = fn(context: &ContextType, event: &Eve
 pub type EntryExitActionFn<ContextType, EventType> =
     fn(context: &mut ContextType, event: &EventType);
 
+// Add near ActionFn / GuardFn
+type MatchFn<EventType> = fn(&EventType) -> bool;
+
 // --- Flat State Machine Definition ---
 
 /// Represents a simple transition for a flat state machine.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Transition<StateType, EventType, ContextType> {
     pub from_state: StateType,
-    pub event: EventType,
     pub to_state: StateType,
     pub action: Option<ActionFn<ContextType, EventType>>,
     pub guard: Option<GuardFn<ContextType, EventType>>,
+    /// Pattern matching function that determines if an event matches this transition
+    pub match_fn: Option<MatchFn<EventType>>,
 }
 
 /// Defines the structure of a simple, flat state machine.
@@ -767,15 +771,19 @@ where
             'hierarchy_search: while let Some(check_state_id) = check_state_id_opt {
                 if self.machine_def.get_state_node(check_state_id).is_some() {
                     for t_def in self.machine_def.transitions {
-                        if t_def.from_state == check_state_id
-                            && core::mem::discriminant(&t_def.event)
-                                == core::mem::discriminant(event)
-                        {
+                        if t_def.from_state == check_state_id {
+                            // Check if event matches using match_fn if available
+                            if let Some(match_fn) = t_def.match_fn {
+                                if !match_fn(event) {
+                                    continue; // Skip this transition if event doesn't match
+                                }
+                            }
+                            // Now check the guard if any
                             if let Some(guard_fn) = t_def.guard {
                                 if !guard_fn(&self.context, event) {
                                     trace!(
-                                        "[GUARD FAIL] {:?} → {:?} on {:?} blocked by guard",
-                                        t_def.from_state, t_def.to_state, event
+                                        "[GUARD FAILED] From {:?} on {:?} → {:?}",
+                                        t_def.from_state, event, t_def.to_state
                                     );
                                     continue;
                                 }
@@ -1472,6 +1480,11 @@ mod tests {
         context.val < 5 // Example guard
     }
 
+    // Match functions for TestEvent transitions
+    fn matches_test_event_e0(event: &TestEvent) -> bool {
+        matches!(event, TestEvent::E0)
+    }
+
     // Populated StateNode arrays for tests
     const TEST_STATENODES_EMPTY_CTX_POPULATED: &[StateNode<
         TestState,
@@ -1567,16 +1580,17 @@ mod tests {
         ChildTwoAlpha, // Child of ParentTwo
     }
 
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    #[allow(dead_code)]
     enum TestHierarchyEvent {
         EventTriggerP1ToP2,        // ParentOne to ParentTwo
+        EventTriggerP1ToC1B,       // ParentOne to ChildOneBravo
         EventTriggerToSibling,     // ChildOneAlpha to ChildOneBravo
         EventTriggerToParent,      // GrandchildOneAlphaXray to ChildOneAlpha
         EventTriggerToGrandparent, // GrandchildOneAlphaYankee to ParentOne
         EventTriggerToCousinChild, // ChildOneBravo to GrandchildOneAlphaYankee
-        EventTriggerParentReentry, // ChildOneBravo to ParentOne (expect re-entry to P1 initial)
+        EventTriggerParentReentry, // ChildOneBravo to ParentOne (expect re-entry logic)
         EventTriggerP2ToP1,        // ParentTwo to ParentOne
-        EventTriggerP1ToC1B,       // ParentOne to ChildOneBravo (new)
     }
 
     // Helper action functions for logging
@@ -1657,6 +1671,39 @@ mod tests {
         ctx.log_action("TransitionAction");
     }
 
+    // Match functions for TestHierarchyEvent transitions
+    fn matches_event_trigger_p1_to_p2(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerP1ToP2)
+    }
+
+    fn matches_event_trigger_p1_to_c1b(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerP1ToC1B)
+    }
+
+    fn matches_event_trigger_to_sibling(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerToSibling)
+    }
+
+    fn matches_event_trigger_to_parent(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerToParent)
+    }
+
+    fn matches_event_trigger_to_grandparent(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerToGrandparent)
+    }
+
+    fn matches_event_trigger_to_cousin_child(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerToCousinChild)
+    }
+
+    fn matches_event_trigger_parent_reentry(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerParentReentry)
+    }
+
+    fn matches_event_trigger_p2_to_p1(event: &TestHierarchyEvent) -> bool {
+        matches!(event, TestHierarchyEvent::EventTriggerP2ToP1)
+    }
+
     const TEST_HIERARCHY_STATENODES: &[StateNode<
         TestHierarchyState,
         HierarchicalActionLogContext,
@@ -1725,7 +1772,7 @@ mod tests {
         },
     ];
 
-    const TEST_HIERARCHY_TRANSITIONS: &[Transition<
+    const HIERARCHY_TEST_TRANSITIONS: &[Transition<
         TestHierarchyState,
         TestHierarchyEvent,
         HierarchicalActionLogContext,
@@ -1733,66 +1780,66 @@ mod tests {
         // EventTriggerP1ToP2: ParentOne to ParentTwo
         Transition {
             from_state: TestHierarchyState::ParentOne,
-            event: TestHierarchyEvent::EventTriggerP1ToP2,
             to_state: TestHierarchyState::ParentTwo,
             action: Some(log_transition_action),
             guard: None,
+            match_fn: Some(matches_event_trigger_p1_to_p2),
         },
         // New transition for ParentOne to ChildOneBravo
         Transition {
             from_state: TestHierarchyState::ParentOne,
-            event: TestHierarchyEvent::EventTriggerP1ToC1B,
             to_state: TestHierarchyState::ChildOneBravo,
             action: Some(log_transition_action), // Add a transition action
             guard: None,
+            match_fn: Some(matches_event_trigger_p1_to_c1b),
         },
-        // EventTriggerToSibling: ChildOneAlpha to ChildOneBravo
+        // Transition from ChildOneAlpha to ChildOneBravo
         Transition {
             from_state: TestHierarchyState::ChildOneAlpha,
-            event: TestHierarchyEvent::EventTriggerToSibling,
             to_state: TestHierarchyState::ChildOneBravo,
             action: Some(log_transition_action),
             guard: None,
+            match_fn: Some(matches_event_trigger_to_sibling),
         },
-        // EventTriggerToParent: GrandchildOneAlphaXray to ChildOneAlpha
+        // Transition from GrandchildOneAlphaXray to ChildOneAlpha
         Transition {
             from_state: TestHierarchyState::GrandchildOneAlphaXray,
-            event: TestHierarchyEvent::EventTriggerToParent,
             to_state: TestHierarchyState::ChildOneAlpha,
             action: Some(log_transition_action),
             guard: None,
+            match_fn: Some(matches_event_trigger_to_parent),
         },
-        // EventTriggerToGrandparent: GrandchildOneAlphaYankee to ParentOne
+        // Transition from GrandchildOneAlphaYankee to ParentOne
         Transition {
             from_state: TestHierarchyState::GrandchildOneAlphaYankee,
-            event: TestHierarchyEvent::EventTriggerToGrandparent,
             to_state: TestHierarchyState::ParentOne,
             action: Some(log_transition_action),
             guard: None,
+            match_fn: Some(matches_event_trigger_to_grandparent),
         },
-        // EventTriggerToCousinChild: ChildOneBravo to GrandchildOneAlphaYankee
+        // ChildOneBravo to GrandchildOneAlphaYankee (Cousin transition)
         Transition {
             from_state: TestHierarchyState::ChildOneBravo,
-            event: TestHierarchyEvent::EventTriggerToCousinChild,
             to_state: TestHierarchyState::GrandchildOneAlphaYankee,
             action: Some(log_transition_action),
             guard: None,
+            match_fn: Some(matches_event_trigger_to_cousin_child),
         },
-        // EventTriggerParentReentry: ChildOneBravo to ParentOne (target is composite ParentOne)
+        // Parent-reentry transition (ChildOneBravo to ParentOne)
         Transition {
             from_state: TestHierarchyState::ChildOneBravo,
-            event: TestHierarchyEvent::EventTriggerParentReentry,
-            to_state: TestHierarchyState::ParentOne, // Target ParentOne, should re-enter its initial path
+            to_state: TestHierarchyState::ParentOne,
             action: Some(log_transition_action),
             guard: None,
+            match_fn: Some(matches_event_trigger_parent_reentry),
         },
         // EventTriggerP2ToP1: ParentTwo to ParentOne
         Transition {
             from_state: TestHierarchyState::ParentTwo,
-            event: TestHierarchyEvent::EventTriggerP2ToP1,
             to_state: TestHierarchyState::ParentOne,
             action: Some(log_transition_action),
             guard: None,
+            match_fn: Some(matches_event_trigger_p2_to_p1),
         },
     ];
 
@@ -1802,7 +1849,7 @@ mod tests {
         HierarchicalActionLogContext,
     > = MachineDefinition::new(
         TEST_HIERARCHY_STATENODES,
-        TEST_HIERARCHY_TRANSITIONS,
+        HIERARCHY_TEST_TRANSITIONS,
         TestHierarchyState::ParentOne,
     );
 
@@ -1812,7 +1859,7 @@ mod tests {
         HierarchicalActionLogContext,
     > = MachineDefinition::new(
         TEST_HIERARCHY_STATENODES,
-        TEST_HIERARCHY_TRANSITIONS,
+        HIERARCHY_TEST_TRANSITIONS,
         TestHierarchyState::ParentOne,
     );
 
@@ -1822,7 +1869,7 @@ mod tests {
         HierarchicalActionLogContext,
     > = MachineDefinition::new(
         TEST_HIERARCHY_STATENODES,
-        TEST_HIERARCHY_TRANSITIONS,
+        HIERARCHY_TEST_TRANSITIONS,
         TestHierarchyState::ParentOne,
     );
 
@@ -1832,7 +1879,7 @@ mod tests {
         HierarchicalActionLogContext,
     > = MachineDefinition::new(
         TEST_HIERARCHY_STATENODES,
-        TEST_HIERARCHY_TRANSITIONS,
+        HIERARCHY_TEST_TRANSITIONS,
         TestHierarchyState::ParentOne, // Top-level initial state for the machine definition
     );
 
@@ -1878,7 +1925,7 @@ mod tests {
             HierarchicalActionLogContext,
         > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
-            TEST_HIERARCHY_TRANSITIONS,
+            HIERARCHY_TEST_TRANSITIONS,
             TestHierarchyState::ParentOne,
         );
 
@@ -1951,10 +1998,10 @@ mod tests {
         const ACTION_TRANSITIONS: &[Transition<TestState, TestEvent, TestContext>] =
             &[Transition {
                 from_state: TestState::S0,
-                event: TestEvent::E0,
                 to_state: TestState::S1,
                 action: Some(transition_action_for_increment),
                 guard: None,
+                match_fn: Some(matches_test_event_e0),
             }];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContext> =
             MachineDefinition::new(
@@ -1982,10 +2029,10 @@ mod tests {
         const GUARDED_TRANSITIONS: &[Transition<TestState, TestEvent, TestContext>] =
             &[Transition {
                 from_state: TestState::S0,
-                event: TestEvent::E0,
                 to_state: TestState::S1,
                 action: Some(transition_action_for_increment),
                 guard: Some(guard_for_increment),
+                match_fn: Some(matches_test_event_e0),
             }];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContext> =
             MachineDefinition::new(
@@ -2054,10 +2101,10 @@ mod tests {
         const TEST_TRANSITIONS: &[Transition<TestState, TestEvent, TestContextForEmpty>] =
             &[Transition {
                 from_state: TestState::S0,
-                event: TestEvent::E0,
                 to_state: TestState::S1,
                 action: None,
                 guard: None,
+                match_fn: Some(matches_test_event_e0),
             }];
         const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContextForEmpty> =
             MachineDefinition::new(
@@ -2084,10 +2131,10 @@ mod tests {
             TestContextForEmpty,
         >] = &[Transition {
             from_state: TestState::S0,
-            event: TestEvent::E0,
             to_state: TestState::S1,
             action: None,
             guard: None,
+            match_fn: Some(matches_test_event_e0),
         }];
         // This MachineDefinition is a const, so a reference to it is &'static
         const TEST_MACHINE_DEF_ST_MATCH: MachineDefinition<
@@ -2118,7 +2165,7 @@ mod tests {
             HierarchicalActionLogContext,
         > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
-            TEST_HIERARCHY_TRANSITIONS,
+            HIERARCHY_TEST_TRANSITIONS,
             TestHierarchyState::ParentOne,
         );
 
@@ -2204,7 +2251,7 @@ mod tests {
             HierarchicalActionLogContext,
         > = MachineDefinition::new(
             TEST_HIERARCHY_STATENODES,
-            TEST_HIERARCHY_TRANSITIONS,
+            HIERARCHY_TEST_TRANSITIONS,
             TestHierarchyState::ParentOne,
         );
         let initial_event_for_test = TestHierarchyEvent::EventTriggerToGrandparent; // Example
@@ -2288,6 +2335,7 @@ mod tests {
             println!(">>> sibling_result: {sibling_result:?}");
             std::io::stdout().flush().unwrap();
         }
+        let _ = sibling_result; // Mark as used to avoid warning
 
         let cousin_result = runtime.send(&TestHierarchyEvent::EventTriggerToCousinChild);
         #[cfg(feature = "std")]
@@ -2296,6 +2344,7 @@ mod tests {
             println!(">>> cousin_result: {cousin_result:?}");
             std::io::stdout().flush().unwrap();
         }
+        let _ = cousin_result; // Mark as used to avoid warning
 
         assert_eq!(
             runtime.state().as_slice(),
@@ -2447,24 +2496,24 @@ mod tests {
     >] = &[
         Transition {
             from_state: MultiGuardTestState::InitialState,
-            event: MultiGuardTestEvent::TriggerEvent,
             to_state: MultiGuardTestState::TargetStateOne,
             action: Some(action_for_target_one),
             guard: Some(guard_for_target_one),
+            match_fn: Some(matches_multi_guard_trigger_event),
         },
         Transition {
             from_state: MultiGuardTestState::InitialState,
-            event: MultiGuardTestEvent::TriggerEvent,
             to_state: MultiGuardTestState::TargetStateTwo,
             action: Some(action_for_target_two),
             guard: Some(guard_for_target_two),
+            match_fn: Some(matches_multi_guard_trigger_event),
         },
         Transition {
             from_state: MultiGuardTestState::InitialState,
-            event: MultiGuardTestEvent::TriggerEvent,
             to_state: MultiGuardTestState::TargetStateThree,
             action: Some(action_for_target_three),
             guard: Some(guard_for_target_three),
+            match_fn: Some(matches_multi_guard_trigger_event),
         },
     ];
 
@@ -2640,13 +2689,15 @@ mod tests {
         SOuter,
     }
 
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    #[allow(dead_code)]
     enum ParallelTestEvent {
         E1,
         E2,
-        EventParallelSelf,    // Was E_P_Self
+        EventR1ToR2,          // Was E_R1_To_R2
         EventRegion1Self,     // Was E_R1_Self
         EventRegion2Self,     // Was E_R2_Self
+        EventParallelSelf,    // Was E_P_Self
         EventParallelToOuter, // Was E_P_To_SOuter
         EventOuterToParallel, // Was E_SOuter_To_P
         EventRegion1Only,     // Was E_R1_Only
@@ -2855,73 +2906,73 @@ mod tests {
     >] = &[
         Transition {
             from_state: ParallelTestState::P,
-            event: ParallelTestEvent::EventParallelSelf,
             to_state: ParallelTestState::P,
             action: Some(pt_log_event_parallel_self_action),
             guard: None,
+            match_fn: Some(matches_parallel_self),
         },
         Transition {
             from_state: ParallelTestState::P,
-            event: ParallelTestEvent::EventParallelToOuter,
             to_state: ParallelTestState::SOuter,
             action: Some(pt_log_event_parallel_to_outer_action),
             guard: None,
+            match_fn: Some(matches_parallel_to_outer),
         },
         Transition {
             from_state: ParallelTestState::R1A,
-            event: ParallelTestEvent::E1,
             to_state: ParallelTestState::R1B,
             action: Some(pt_log_region1_state_a_event_e1_action),
             guard: None,
+            match_fn: Some(matches_parallel_e1),
         },
         Transition {
             from_state: ParallelTestState::R1A,
-            event: ParallelTestEvent::EventRegion1Self,
             to_state: ParallelTestState::R1A,
             action: Some(pt_log_region1_state_a_event_region1_self_action),
             guard: None,
+            match_fn: Some(matches_parallel_region1_self),
         },
         Transition {
             from_state: ParallelTestState::R1A,
-            event: ParallelTestEvent::EventRegion1Only,
             to_state: ParallelTestState::R1B,
             action: Some(pt_log_region1_state_a_event_region1_only_action),
             guard: None,
+            match_fn: Some(matches_region1_only),
         },
         Transition {
             from_state: ParallelTestState::R1B,
-            event: ParallelTestEvent::E2,
             to_state: ParallelTestState::R1A,
             action: Some(pt_log_region1_state_b_event_e2_action),
             guard: None,
+            match_fn: Some(matches_parallel_e2),
         },
         Transition {
             from_state: ParallelTestState::R2X,
-            event: ParallelTestEvent::E1,
             to_state: ParallelTestState::R2Y,
             action: Some(pt_log_region2_state_x_event_e1_action),
             guard: None,
+            match_fn: Some(matches_parallel_e1),
         },
         Transition {
             from_state: ParallelTestState::R2X,
-            event: ParallelTestEvent::EventRegion2Self,
             to_state: ParallelTestState::R2X,
             action: Some(pt_log_region2_state_x_event_region2_self_action),
             guard: None,
+            match_fn: Some(matches_parallel_region2_self),
         },
         Transition {
             from_state: ParallelTestState::R2Y,
-            event: ParallelTestEvent::E2,
             to_state: ParallelTestState::R2X,
             action: Some(pt_log_region2_state_y_event_e2_action),
             guard: None,
+            match_fn: Some(matches_parallel_e2),
         },
         Transition {
             from_state: ParallelTestState::SOuter,
-            event: ParallelTestEvent::EventOuterToParallel,
             to_state: ParallelTestState::P,
             action: Some(pt_log_event_outer_to_parallel_action),
             guard: None,
+            match_fn: Some(matches_outer_to_parallel),
         },
     ];
 
@@ -3196,5 +3247,43 @@ mod tests {
             expected_log,
             runtime.context().log
         );
+    }
+
+    // Match function for MultiGuardTestEvent
+    fn matches_multi_guard_trigger_event(event: &MultiGuardTestEvent) -> bool {
+        matches!(event, MultiGuardTestEvent::TriggerEvent)
+    }
+
+    // Match functions for ParallelTestEvent
+    fn matches_parallel_e1(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::E1)
+    }
+
+    fn matches_parallel_e2(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::E2)
+    }
+
+    fn matches_parallel_region1_self(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::EventRegion1Self)
+    }
+
+    fn matches_parallel_region2_self(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::EventRegion2Self)
+    }
+
+    fn matches_parallel_self(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::EventParallelSelf)
+    }
+
+    fn matches_parallel_to_outer(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::EventParallelToOuter)
+    }
+
+    fn matches_outer_to_parallel(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::EventOuterToParallel)
+    }
+
+    fn matches_region1_only(event: &ParallelTestEvent) -> bool {
+        matches!(event, ParallelTestEvent::EventRegion1Only)
     }
 }

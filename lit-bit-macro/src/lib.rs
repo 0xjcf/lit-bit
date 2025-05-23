@@ -1,9 +1,9 @@
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{
     braced, bracketed,
-    parse::{Parse, ParseStream},
-    Ident, Path, Result, Token,
+    parse::{Parse, ParseStream, Result},
+    parse_macro_input, Ident, ItemEnum, Path, Token,
 };
 
 // Define keywords for parsing
@@ -863,27 +863,8 @@ pub(crate) mod code_generator {
     }
 
     // Helper to extract a full path TokenStream from a syn::Pat for event pattern matching
-    fn extract_event_pattern_path_tokens(pattern: &syn::Pat) -> Option<proc_macro2::TokenStream> {
-        use syn::Pat;
-        match pattern {
-            Pat::Ident(pat_ident) => {
-                let ident = &pat_ident.ident;
-                Some(quote::quote! { #ident })
-            }
-            Pat::Path(pat_path) => {
-                let path = &pat_path.path;
-                Some(quote::quote! { #path })
-            }
-            Pat::Struct(pat_struct) => {
-                let path = &pat_struct.path;
-                Some(quote::quote! { #path })
-            }
-            Pat::TupleStruct(pat_tuple_struct) => {
-                let path = &pat_tuple_struct.path;
-                Some(quote::quote! { #path })
-            }
-            _ => None,
-        }
+    fn extract_pat_tokens(pat: &syn::Pat) -> proc_macro2::TokenStream {
+        quote! { #pat }
     }
 
     #[allow(dead_code)]
@@ -1133,7 +1114,7 @@ pub(crate) mod code_generator {
         Ok(states_array_ts)
     }
 
-    #[allow(dead_code)]
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn generate_transitions_array<'ast>(
         builder: &'ast TmpStateTreeBuilder<'ast>,
         generated_ids: &GeneratedStateIds,
@@ -1142,6 +1123,7 @@ pub(crate) mod code_generator {
     ) -> SynResult<TokenStream> {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         let mut transition_initializers = Vec::new();
+        let mut matcher_fns = Vec::new();
         for tmp_state in &builder.all_states {
             let from_state_id_variant = generated_ids.full_path_to_variant_ident.get(&tmp_state.full_path_name)
                 .ok_or_else(|| SynError::new(tmp_state.name_span, "Internal error: 'from_state' full_path_name not found in generated IDs map"))?;
@@ -1163,12 +1145,6 @@ pub(crate) mod code_generator {
                     .ok_or_else(|| SynError::new(tmp_trans.on_keyword_span, "Internal error: 'to_state' full_path_name not found in map for resolved index."))?;
 
                 let event_pattern = tmp_trans.event_pattern; // This is &'ast syn::Pat
-                let Some(event_expr) = extract_event_pattern_path_tokens(event_pattern) else {
-                    return Err(SynError::new(
-                        tmp_trans.on_keyword_span,
-                        "TRANSITIONS array does not yet support this event pattern type. Use simple variant names or struct/tuple variant patterns like 'MyEvent', 'MyEvent::Nested::Variant', 'MyEvent { .. }', or 'MyEvent(..)' for now."
-                    ));
-                };
 
                 let action_expr = tmp_trans.action_handler.map_or_else(
                     || quote! { None },
@@ -1176,18 +1152,30 @@ pub(crate) mod code_generator {
                 );
                 let guard_expr = tmp_trans.guard_handler.map_or_else(|| quote!{ None },
                     |p_expr| quote!{ Some(#p_expr as GuardFn<#context_type_path, #event_type_path>) });
+                let event_pattern_tokens = extract_pat_tokens(event_pattern);
+                // Generate a unique matcher function ident for each transition
+                let matcher_fn_ident = format_ident!("matches_T{}", transition_initializers.len());
+                let matcher_fn = quote! {
+                    fn #matcher_fn_ident(e: &#event_type_path) -> bool {
+                        matches!(e, #event_type_path :: #event_pattern_tokens)
+                    }
+                };
+                matcher_fns.push(matcher_fn);
+
+                // Generate the Transition initializer
                 transition_initializers.push(quote! {
                     lit_bit_core::core::Transition {
                         from_state: #state_id_enum_name::#from_state_id_variant,
-                        event: #event_type_path::#event_expr,
                         to_state: #state_id_enum_name::#to_state_id_variant,
                         action: #action_expr,
                         guard: #guard_expr,
+                        match_fn: Some(#matcher_fn_ident),
                     }
                 });
             }
         }
         let transitions_array_ts = quote! {
+            #(#matcher_fns)*
             const TRANSITIONS: &[lit_bit_core::core::Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
                 #(#transition_initializers),*
             ];
@@ -1297,6 +1285,48 @@ pub(crate) mod code_generator {
         };
         machine_def_ts
     }
+
+    // Add this helper function at the top-level (or in code_generator):
+    #[allow(dead_code)]
+    fn dummy_expr_for_type(ty: &syn::Type) -> proc_macro2::TokenStream {
+        if let syn::Type::Path(type_path) = ty {
+            let ident = type_path.path.segments.last().unwrap().ident.to_string();
+            if ident == "String" && type_path.path.segments.first().unwrap().ident == "heapless" {
+                // Extract N from heapless::String<N>
+                if let syn::PathArguments::AngleBracketed(args) =
+                    &type_path.path.segments.last().unwrap().arguments
+                {
+                    if let Some(syn::GenericArgument::Const(expr)) = args.args.first() {
+                        return quote! { ::heapless::String::<#expr>::new() };
+                    }
+                }
+                return quote! { ::heapless::String::<64>::new() };
+            }
+            if ident == "Option" {
+                return quote! { None };
+            }
+            if ident == "bool" {
+                return quote! { false };
+            }
+            if ident == "u8"
+                || ident == "u16"
+                || ident == "u32"
+                || ident == "u64"
+                || ident == "usize"
+                || ident == "i8"
+                || ident == "i16"
+                || ident == "i32"
+                || ident == "i64"
+                || ident == "isize"
+            {
+                return quote! { 0 };
+            }
+            // fallback:
+            quote! { <_ as ::core::default::Default>::default() }
+        } else {
+            quote! { <_ as ::core::default::Default>::default() }
+        }
+    }
 }
 
 // In the main proc_macro function, after parsing:
@@ -1403,6 +1433,51 @@ pub fn statechart(input: TokenStream) -> TokenStream {
         pub use generated_state_machine::*;
     };
     final_code.into()
+}
+
+#[proc_macro_attribute]
+pub fn statechart_event(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let enum_ast: ItemEnum = parse_macro_input!(item as ItemEnum);
+    let enum_ident = &enum_ast.ident;
+
+    // Generate the discriminant enum name
+    let discriminant_enum_ident = format_ident!("{}Kind", enum_ident);
+
+    // Generate discriminant enum variants (same names, no data)
+    let discriminant_variants = enum_ast.variants.iter().map(|v| {
+        let variant_ident = &v.ident;
+        quote! { #variant_ident }
+    });
+
+    // Generate From impl for converting event to discriminant
+    let from_arms = enum_ast.variants.iter().map(|v| {
+        let variant_ident = &v.ident;
+        match &v.fields {
+            syn::Fields::Unit => quote! { #enum_ident::#variant_ident => #discriminant_enum_ident::#variant_ident },
+            syn::Fields::Named(_) => quote! { #enum_ident::#variant_ident { .. } => #discriminant_enum_ident::#variant_ident },
+            syn::Fields::Unnamed(_) => quote! { #enum_ident::#variant_ident(..) => #discriminant_enum_ident::#variant_ident },
+        }
+    });
+
+    let output = quote! {
+        #enum_ast
+
+        // Discriminant enum for pattern matching without data
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum #discriminant_enum_ident {
+            #(#discriminant_variants,)*
+        }
+
+        impl From<&#enum_ident> for #discriminant_enum_ident {
+            fn from(event: &#enum_ident) -> Self {
+                match event {
+                    #(#from_arms,)*
+                }
+            }
+        }
+    };
+
+    output.into()
 }
 
 // Need to make ast_structs module visible to intermediate_tree, or pass items differently.
@@ -2407,39 +2482,50 @@ mod tests {
         .expect("generate_transitions_array failed ");
 
         let expected_str = quote! {
+            fn matches_T0(e: &RootEv) -> bool {
+                matches!(e, RootEv::E_P1_TO_C2)
+            }
+            fn matches_T1(e: &RootEv) -> bool {
+                matches!(e, RootEv::E_C1_TO_GC2)
+            }
+            fn matches_T2(e: &RootEv) -> bool {
+                matches!(e, RootEv::E_GC1_TO_P2)
+            }
+            fn matches_T3(e: &RootEv) -> bool {
+                matches!(e, RootEv::E_C2_TO_GC1)
+            }
             const TRANSITIONS: &[lit_bit_core::core::Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
                 lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1,
-                    event: RootEv::E_P1_TO_C2,
                     to_state: TestHierarchicalMachineStateId::P1C2,
                     action: None,
                     guard: None,
+                    match_fn: Some(matches_T0),
                 },
                 lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1,
-                    event: RootEv::E_C1_TO_GC2,
-                    to_state: TestHierarchicalMachineStateId::P1C1GC2, // Corrected Gc2 to GC2
+                    to_state: TestHierarchicalMachineStateId::P1C1GC2,
                     action: None,
                     guard: None,
+                    match_fn: Some(matches_T1),
                 },
                 lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1GC1,
-                    event: RootEv::E_GC1_TO_P2,
                     to_state: TestHierarchicalMachineStateId::P2,
                     action: None,
                     guard: None,
+                    match_fn: Some(matches_T2),
                 },
                 lit_bit_core::core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C2,
-                    event: RootEv::E_C2_TO_GC1,
                     to_state: TestHierarchicalMachineStateId::P1C1GC1,
                     action: None,
                     guard: None,
+                    match_fn: Some(matches_T3),
                 }
             ];
         }
         .to_string();
-
         let normalize = |s: String| s.split_whitespace().collect::<Vec<&str>>().join(" ");
         assert_eq!(
             normalize(transitions_array_tokens.to_string()),

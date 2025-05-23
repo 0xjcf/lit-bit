@@ -11,8 +11,12 @@ mod riscv_logic {
     use riscv_rt::entry;
     use semihosting::println;
 
-    use lit_bit_core::core::{
-        ActionFn, MAX_ACTIVE_REGIONS, MachineDefinition, Runtime, StateNode, Transition,
+    use lit_bit_core::{
+        StateMachine,
+        core::{
+            ActionFn, MAX_ACTIVE_REGIONS, MachineDefinition, Runtime, SendResult, StateNode,
+            Transition,
+        },
     };
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -50,26 +54,31 @@ mod riscv_logic {
         }
     }
 
-    fn log_red(_context: &mut TrafficLightContext) {
+    fn log_red(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
             uart_print_str("U: Light is now RED.\n");
         }
     }
 
-    fn log_green(_context: &mut TrafficLightContext) {
+    fn log_green(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
             uart_print_str("U: Light is now GREEN.\n");
         }
     }
 
-    fn log_yellow(_context: &mut TrafficLightContext) {
+    fn log_yellow(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
             uart_print_str("U: Light is now YELLOW.\n");
         }
     }
 
-    fn increment_cycle(context: &mut TrafficLightContext) {
+    fn increment_cycle(context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         context.cycle_count += 1;
+    }
+
+    // Match function for timer elapsed event
+    fn matches_timer_elapsed(event: &TrafficLightEvent) -> bool {
+        matches!(event, TrafficLightEvent::TimerElapsed)
     }
 
     // Define the transitions
@@ -80,35 +89,39 @@ mod riscv_logic {
     >] = &[
         Transition {
             from_state: TrafficLightState::Red,
-            event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Green,
             action: None,
             guard: None,
+            match_fn: Some(matches_timer_elapsed),
         },
         Transition {
             from_state: TrafficLightState::Green,
-            event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Yellow,
             action: None,
             guard: None,
+            match_fn: Some(matches_timer_elapsed),
         },
         Transition {
             from_state: TrafficLightState::Yellow,
-            event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Red,
-            action: Some(increment_cycle as ActionFn<TrafficLightContext>),
+            action: Some(increment_cycle as ActionFn<TrafficLightContext, TrafficLightEvent>),
             guard: None,
+            match_fn: Some(matches_timer_elapsed),
         },
     ];
 
     // Define the states (even if simple, the definition needs an array)
     #[allow(dead_code)] // Suppress dead code warning as it's used via TRAFFIC_LIGHT_MACHINE_DEF
-    const TRAFFIC_LIGHT_STATENODES: &[StateNode<TrafficLightState, TrafficLightContext>] = &[
+    const TRAFFIC_LIGHT_STATENODES: &[StateNode<
+        TrafficLightState,
+        TrafficLightContext,
+        TrafficLightEvent,
+    >] = &[
         StateNode {
             id: TrafficLightState::Red,
             parent: None,
             initial_child: None,
-            entry_action: Some(log_red as ActionFn<TrafficLightContext>),
+            entry_action: Some(log_red as ActionFn<TrafficLightContext, TrafficLightEvent>),
             exit_action: None,
             is_parallel: false,
         },
@@ -116,7 +129,7 @@ mod riscv_logic {
             id: TrafficLightState::Green,
             parent: None,
             initial_child: None,
-            entry_action: Some(log_green as ActionFn<TrafficLightContext>),
+            entry_action: Some(log_green as ActionFn<TrafficLightContext, TrafficLightEvent>),
             exit_action: None,
             is_parallel: false,
         },
@@ -124,7 +137,7 @@ mod riscv_logic {
             id: TrafficLightState::Yellow,
             parent: None,
             initial_child: None,
-            entry_action: Some(log_yellow as ActionFn<TrafficLightContext>),
+            entry_action: Some(log_yellow as ActionFn<TrafficLightContext, TrafficLightEvent>),
             exit_action: None,
             is_parallel: false,
         },
@@ -161,20 +174,21 @@ mod riscv_logic {
         }
 
         let initial_context = TrafficLightContext { cycle_count: 0 };
+        let initial_event = TrafficLightEvent::TimerElapsed; // Initial event
         // Use the type alias
         let mut runtime: TrafficLightRuntime =
-            Runtime::new(&TRAFFIC_LIGHT_MACHINE_DEF, initial_context);
+            Runtime::new(&TRAFFIC_LIGHT_MACHINE_DEF, initial_context, &initial_event);
 
         unsafe {
             uart_print_str("UART: SM created.\n");
         }
 
-        for _i in 0..7 {
+        for _ in 0..7 {
             unsafe {
                 uart_print_str("\nUART: Event -> ");
             }
-            let transitioned = runtime.send(TrafficLightEvent::TimerElapsed);
-            if transitioned {
+            let send_result = runtime.send(&TrafficLightEvent::TimerElapsed);
+            if matches!(send_result, SendResult::Transitioned) {
                 unsafe {
                     uart_print_str("UART: Transitioned.\n");
                 }

@@ -9,6 +9,7 @@ use panic_halt as _;
 
 use lit_bit_core::StateMachine;
 use lit_bit_macro::statechart;
+use lit_bit_macro::statechart_event;
 
 use heapless::String; // Removed Vec
 
@@ -26,15 +27,15 @@ pub struct MediaPlayerContext {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
+#[statechart_event]
 pub enum MediaPlayerEvent {
     #[default]
     Play,
     Stop,
-    /* // Fully comment out LoadTrack variant
+    // Load a new track from the file-system (payload = file path)
     LoadTrack {
         path: String<TRACK_ID_CAPACITY>,
     },
-    */
     VolumeUp,
     VolumeDown,
     NextTrack,
@@ -62,31 +63,26 @@ fn is_track_loaded(context: &MediaPlayerContext, _event: &MediaPlayerEvent) -> b
     loaded
 }
 
-/* // Commenting out guard_for_load_track
-fn guard_for_load_track(_context: &MediaPlayerContext, event: &MediaPlayerEvent) -> bool {
-    if let MediaPlayerEvent::LoadTrack { path } = event {
-        let valid = !path.is_empty() && path.contains('.');
-        println!(
-            "[Guard] guard_for_load_track ('{}')? {}",
-            path.as_str(),
-            valid
-        );
-        return valid;
-    }
-    false
-}
-*/
-
-/* // Commenting out action_for_load_track
-fn action_for_load_track(context: &mut MediaPlayerContext, event: &MediaPlayerEvent) {
-    if let MediaPlayerEvent::LoadTrack { path } = event {
-        println!("[Action] action_for_load_track - Path: {}", path.as_str());
-        context.current_track = Some(path.clone()); // Clone the heapless String
+// -------------- guard & action for LoadTrack --------------
+fn guard_for_load_track(_ctx: &MediaPlayerContext, ev: &MediaPlayerEvent) -> bool {
+    if let MediaPlayerEvent::LoadTrack { path } = ev {
+        // very naive "is this a file?" check
+        let ok = !path.is_empty() && path.contains('.');
+        #[cfg(not(target_arch = "riscv32"))]
+        println!("[Guard] guard_for_load_track('{path}')? {ok}");
+        ok
     } else {
-        println!("[Action] action_for_load_track called with unexpected event type");
+        false
     }
 }
-*/
+
+fn action_for_load_track(ctx: &mut MediaPlayerContext, ev: &MediaPlayerEvent) {
+    if let MediaPlayerEvent::LoadTrack { path } = ev {
+        #[cfg(not(target_arch = "riscv32"))]
+        println!("[Action] action_for_load_track – Path: {path}");
+        ctx.current_track = Some(path.clone());
+    }
+}
 
 fn entry_stopped(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
     #[cfg(not(target_arch = "riscv32"))]
@@ -140,13 +136,13 @@ statechart! {
         entry: entry_stopped;
         exit: exit_stopped;
         on Play [guard is_track_loaded] => Playing [action do_play];
-        // on MediaPlayerEvent::LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track]; // Line fully commented now
+        on LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track];
     }
 
     state Loading {
         entry: entry_loading;
         exit: exit_loading;
-        // on MediaPlayerEvent::Play => Playing [action do_play]; // Temporarily commented out due to unreachable_pattern lint
+        on Play [guard is_track_loaded] => Playing [action do_play];
     }
 
     state Playing {
@@ -179,7 +175,7 @@ fn main() {
     println!("Result: {result:?}");
     println!("State after Play (no track): {:?}", player.state());
 
-    /*
+    // Uncommented test code for LoadTrack event pattern matching
     println!("Sending LoadTrack (empty path, should fail guard):");
     player.send(&MediaPlayerEvent::LoadTrack {
         path: String::try_from("").unwrap(),
@@ -198,7 +194,6 @@ fn main() {
     });
     println!("State after LoadTrack: {:?}", player.state());
     println!("Context after LoadTrack: {:?}", player.context());
-    */
 
     // The following Play will likely always fail the guard now since no track is loaded.
     // This is fine for this test, as we are checking for E0533.

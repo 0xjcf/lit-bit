@@ -11,12 +11,15 @@ mod cortex_m_logic {
     // use cortex_m_semihosting::{debug, hprintln};
 
     use lit_bit_core::{
-        DefaultContext,
-        MAX_ACTIVE_REGIONS, // Use re-exported version
-        MachineDefinition,
-        Runtime,
-        StateNode,
-        Transition,
+        StateMachine,
+        core::{
+            DefaultContext,
+            MAX_ACTIVE_REGIONS, // Use re-exported version
+            MachineDefinition,
+            Runtime,
+            StateNode,
+            Transition,
+        },
     };
 
     // Define states for the traffic light
@@ -35,25 +38,30 @@ mod cortex_m_logic {
     // For this example, we'll use the DefaultContext since actions don't modify a specific context.
     type BlinkyContext = DefaultContext;
 
+    // Match function for toggle event
+    fn matches_toggle(event: &LightEvent) -> bool {
+        matches!(event, LightEvent::Toggle)
+    }
+
     const LIGHT_TRANSITIONS: &[Transition<LightState, LightEvent, BlinkyContext>] = &[
         Transition {
             from_state: LightState::Off,
-            event: LightEvent::Toggle,
             to_state: LightState::On,
             action: None,
             guard: None,
+            match_fn: Some(matches_toggle),
         },
         Transition {
             from_state: LightState::On,
-            event: LightEvent::Toggle,
             to_state: LightState::Off,
             action: None,
             guard: None,
+            match_fn: Some(matches_toggle),
         },
     ];
 
     // Define the states (even if simple, the definition needs an array)
-    const LIGHT_STATENODES: &[StateNode<LightState, BlinkyContext>] = &[];
+    const LIGHT_STATENODES: &[StateNode<LightState, BlinkyContext, LightEvent>] = &[];
 
     #[allow(dead_code)]
     const BLINKY_MACHINE_DEF: MachineDefinition<LightState, LightEvent, BlinkyContext> =
@@ -74,12 +82,16 @@ mod cortex_m_logic {
     #[entry]
     fn main_cortex_m_entry() -> ! {
         let initial_context = DefaultContext::default();
+        let initial_event = LightEvent::Toggle;
         // Use turbofish for const generics, allowing type inference for State, Event, Context
-        let mut runtime =
-            Runtime::<_, _, _, M, MAX_NODES_CALC>::new(&BLINKY_MACHINE_DEF, initial_context);
+        let mut runtime = Runtime::<_, _, _, M, MAX_NODES_CALC>::new(
+            &BLINKY_MACHINE_DEF,
+            initial_context,
+            &initial_event,
+        );
 
-        runtime.send(LightEvent::Toggle);
-        runtime.send(LightEvent::Toggle);
+        let _ = runtime.send(&LightEvent::Toggle);
+        let _ = runtime.send(&LightEvent::Toggle);
         let _ = runtime.state();
         let _ = runtime.context();
 

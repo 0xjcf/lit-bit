@@ -1,6 +1,6 @@
 [package]
 name = "lit-bit-macro"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -9,10 +9,9 @@ edition = "2021"
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0", features = ["full", "extra-traits"] }
-quote = "1.0"
 proc-macro2 = "1.0"
-trybuild = "1.0.105"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 lit-bit-core = { path = "../lit-bit-core" }

@@ -4,11 +4,23 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 _Add new sessions below this line._ 
 
-## 2025-05-22 · _Session End_
-* _Author_: @AI-agent Default (via @0xjcf)
-* _Phase_: 1-core-runtime / macro
-* _Work_: Debugged and fixed failing macro test (`parse_and_build_hierarchical_showcase_example`) by correcting the test assertion for the self-transition in the `Active` state. All macro and core tests now pass. Cleaned up debug output and ensured linter compliance throughout. See commit for details.
-* _Next_: Review for any further macro edge cases, then proceed to next roadmap phase or feature.
+## 2025-05-23 · _Session End_ (Embedded Build Fixes) ✅
+* _Author_: @AI-agent (via @0xjcf)
+* _Phase_: 1-core-runtime (Build fixes for embedded targets)
+* _Work_: Fixed `just run-rv` and `just size-check-cortex-m` commands. (1) Removed unnecessary `lit-bit-macro-support` crate and all dependencies on it, (2) Cleaned up `#[statechart_event]` macro to remove unused EventMeta generation, (3) Updated traffic_light examples for both RISC-V and Cortex-M to use new API (match_fn, proper imports, Runtime::new signature), (4) All builds passing, RISC-V example runs in QEMU successfully, Cortex-M size check reports ~10KB text section. **(5) Fixed macro imports by adding lit-bit-macro as dependency and re-exporting from lit-bit-core. All tests passing, linter clean.**
+* _Next_: Continue with Phase 1 deliverables, consider adding no_std tests in CI to prevent regressions.
+
+## 2025-05-23 · _Session End_ (Pattern Matching Refactor) ✅
+* _Author_: @AI-agent (via @0xjcf)
+* _Phase_: 1-core-runtime / macro (Event Pattern Matching Refactor)
+* _Work_: Successfully refactored event pattern matching implementation. (1) Updated Spec.md to document `#[statechart_event]` requirement with rationale, (2) Created external_events.rs example showing three patterns for handling external enums, (3) Moved `#[statechart_event]` proc macro before tests module to fix linter, (4) Fixed test expectations for new Transition format without event field, (5) All tests passing, examples compile and run correctly. **(6) Added match_fn check in Runtime::send_internal to properly match events during transitions.** **(7) All linter issues resolved, full test suite passing.**
+* _Next_: Consider adding more examples for complex event patterns, test const-correctness with no_std builds, and potentially optimize generated match functions.
+
+## 2025-05-23 · _Session Start_
+* _Author_: @claude-4-opus (via @0xjcf)
+* _Phase_: 1-core-runtime / macro (Event Pattern Matching Refactor)
+* _Work_: Starting refactor of event pattern matching implementation based on research findings. The research confirmed that requiring `#[statechart_event]` is the industry-standard approach (similar to Strum, Serde, enum_dispatch). Will implement discriminant enum approach to fix const context issues.
+* _Next_: (1) Update Spec.md documentation about `#[statechart_event]` rationale, (2) Create examples for external event enum handling, (3) Refactor macro to use discriminant enums instead of dummy values.
 
 ## 2025-05-22 · _Session Start_
 * _Author_: @AI-agent Default (via @0xjcf)
