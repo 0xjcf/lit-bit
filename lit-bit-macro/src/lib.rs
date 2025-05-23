@@ -874,11 +874,12 @@ pub(crate) mod code_generator {
         event_type_path: &syn::Path,
         context_type_path: &syn::Path,
         machine_definition_const_ident: &Ident,
-        _builder: &TmpStateTreeBuilder, // Added builder, mark as unused for now if send_method_tokens is removed
-        _generated_ids: &GeneratedStateIds, // Added generated_ids, mark as unused for now
+        builder: &TmpStateTreeBuilder, // Removed underscore prefix since we use it
+        _generated_ids: &GeneratedStateIds, // Keep underscore prefix since it's unused
     ) -> TokenStream {
-        let m_val = proc_macro2::Literal::usize_unsuffixed(8);
-        let max_nodes_for_computation_val = proc_macro2::Literal::usize_unsuffixed(8 * 4);
+        let m_val = proc_macro2::Literal::usize_unsuffixed(builder.all_states.len());
+        let max_nodes_for_computation_val =
+            proc_macro2::Literal::usize_unsuffixed(builder.all_states.len() * 4);
 
         // REMOVE: let send_method_tokens = generate_send_method(...)
 
@@ -1153,11 +1154,75 @@ pub(crate) mod code_generator {
                 let guard_expr = tmp_trans.guard_handler.map_or_else(|| quote!{ None },
                     |p_expr| quote!{ Some(#p_expr as GuardFn<#context_type_path, #event_type_path>) });
                 let event_pattern_tokens = extract_pat_tokens(event_pattern);
+
+                // Check if the pattern already starts with the event type path
+                let pattern_needs_prefix = match event_pattern {
+                    syn::Pat::Path(pat_path) => {
+                        // Check if the path already starts with the event type segments
+                        let event_segments: Vec<_> =
+                            event_type_path.segments.iter().map(|s| &s.ident).collect();
+                        let pat_segments: Vec<_> =
+                            pat_path.path.segments.iter().map(|s| &s.ident).collect();
+
+                        // If pattern has fewer segments than event type, it needs prefix
+                        if pat_segments.len() < event_segments.len() {
+                            true
+                        } else {
+                            // Check if pattern starts with event type segments
+                            !event_segments
+                                .iter()
+                                .zip(&pat_segments)
+                                .all(|(e, p)| e == p)
+                        }
+                    }
+                    syn::Pat::TupleStruct(pat_tuple) if pat_tuple.qself.is_none() => {
+                        // Check tuple struct patterns
+                        let event_segments: Vec<_> =
+                            event_type_path.segments.iter().map(|s| &s.ident).collect();
+                        let pat_segments: Vec<_> =
+                            pat_tuple.path.segments.iter().map(|s| &s.ident).collect();
+
+                        if pat_segments.len() < event_segments.len() {
+                            true
+                        } else {
+                            !event_segments
+                                .iter()
+                                .zip(&pat_segments)
+                                .all(|(e, p)| e == p)
+                        }
+                    }
+                    syn::Pat::Struct(pat_struct) if pat_struct.qself.is_none() => {
+                        // Check struct patterns
+                        let event_segments: Vec<_> =
+                            event_type_path.segments.iter().map(|s| &s.ident).collect();
+                        let pat_segments: Vec<_> =
+                            pat_struct.path.segments.iter().map(|s| &s.ident).collect();
+
+                        if pat_segments.len() < event_segments.len() {
+                            true
+                        } else {
+                            !event_segments
+                                .iter()
+                                .zip(&pat_segments)
+                                .all(|(e, p)| e == p)
+                        }
+                    }
+                    _ => true, // For other patterns, assume they need prefix
+                };
+
                 // Generate a unique matcher function ident for each transition
                 let matcher_fn_ident = format_ident!("matches_T{}", transition_initializers.len());
-                let matcher_fn = quote! {
-                    fn #matcher_fn_ident(e: &#event_type_path) -> bool {
-                        matches!(e, #event_type_path :: #event_pattern_tokens)
+                let matcher_fn = if pattern_needs_prefix {
+                    quote! {
+                        fn #matcher_fn_ident(e: &#event_type_path) -> bool {
+                            matches!(e, #event_type_path :: #event_pattern_tokens)
+                        }
+                    }
+                } else {
+                    quote! {
+                        fn #matcher_fn_ident(e: &#event_type_path) -> bool {
+                            matches!(e, #event_pattern_tokens)
+                        }
                     }
                 };
                 matcher_fns.push(matcher_fn);

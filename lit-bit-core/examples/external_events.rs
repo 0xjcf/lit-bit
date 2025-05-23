@@ -120,7 +120,17 @@ fn process_external_event(
 ) {
     // Convert external event to wrapped event
     let wrapped = WrappedEvent::from(external_event);
-    machine.send(&wrapped);
+    match machine.send(&wrapped) {
+        lit_bit_core::core::SendResult::Transitioned => {
+            println!("  -> Event handled: transition occurred");
+        }
+        lit_bit_core::core::SendResult::NoMatch => {
+            println!("  -> Event ignored: no matching transition");
+        }
+        lit_bit_core::core::SendResult::Error(e) => {
+            eprintln!("  -> Error processing event: {e:?}");
+        }
+    }
 }
 
 fn main() {

@@ -414,6 +414,7 @@ where
         let mut mutable_context = initial_context;
         let mut active_states_vec = heapless::Vec::new();
         let mut visited_for_initial_entry: heapless::Vec<StateType, M> = heapless::Vec::new();
+        let mut entry_actions_run_vec: heapless::Vec<StateType, M> = heapless::Vec::new();
 
         let top_level_initial_state_id = machine_def.initial_leaf_state;
 
@@ -425,7 +426,7 @@ where
             &mut active_states_vec,
             &mut visited_for_initial_entry,
             &mut Scratch::<StateType, M> {
-                entry_actions_run: &mut heapless::Vec::new(),
+                entry_actions_run: &mut entry_actions_run_vec,
             },
             initial_event,
         ) {
@@ -757,6 +758,10 @@ where
             println!("send_internal() called with event: {event:?}");
             io::stdout().flush().unwrap();
         }
+
+        // Create a single entry_actions_run Vec to be reused throughout send_internal
+        let mut entry_actions_run_vec: heapless::Vec<StateType, M> = heapless::Vec::new();
+
         // Error type is now ProcessingError by default
         // Phase 0: Collect potential transitions (read-only on context for guards)
         let mut potential_transitions: heapless::Vec<
@@ -1110,7 +1115,7 @@ where
                 source_id, // Use source_id from the tuple
                 event,
                 &mut Scratch::<StateType, M> {
-                    entry_actions_run: &mut heapless::Vec::new(),
+                    entry_actions_run: &mut entry_actions_run_vec, // Pass the existing vec
                 },
                 &mut temp_context,
             ) {

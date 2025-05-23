@@ -4,6 +4,12 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 _Add new sessions below this line._ 
 
+## 2024-12-28 · _Session End_ (Code Review Fixes Complete) ✅
+* _Author_: @AI-agent (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review & Quality Improvements)
+* _Work_: Completed comprehensive code review addressing 9 identified issues: (1) ~~Reverted M value calculation to use all_states.len() instead of max_depth() - tests showed hierarchy depth wasn't sufficient for internal operations~~, (2) Fixed Transition struct initialization to use match_fn field instead of outdated event field, generating proper matcher functions, (3) Updated match arm patterns to correctly match references by prefixing event patterns with &, (4) Fixed dangling references in Scratch struct creation by using named mutable Vec variables, (5) Fixed shared entry_actions_run_vec across all Scratch instances in send_internal to prevent repeated execution, (6) Updated external_events.rs example to properly capture and handle SendResult return values, (7) Fixed tests to directly compare StateId enum variants instead of string conversion, (8) Resolved all clippy warnings including unused parameter prefixes and format args issues, (9) Removed unused max_depth() method causing warnings. **All 28 core tests + 53 macro tests passing, linter clean, no warnings or errors.**
+* _Next_: Continue with Phase 1 deliverables, consider moving to Phase 2 (Hierarchy & Guards) implementation and testing.
+
 ## 2025-05-23 · _Session End_ (Embedded Build Fixes) ✅
 * _Author_: @AI-agent (via @0xjcf)
 * _Phase_: 1-core-runtime (Build fixes for embedded targets)

@@ -173,27 +173,22 @@ mod parallel_integration_tests {
             IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
         let active_states = machine.state();
 
-        let mut active_state_strings = active_states
-            .iter()
-            .map(|s| {
-                heapless::String::<STRING_CAPACITY>::try_from(format!("{s:?}").as_str()).unwrap()
-            })
-            .collect::<heapless::Vec<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>>();
-        active_state_strings.sort_unstable();
+        // Directly use the StateId type from the generated machine
+        let mut sorted_active_states = active_states;
+        sorted_active_states.sort_unstable();
 
-        let mut expected_state_strings =
-            heapless::Vec::<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>::new();
-        // Match Debug output of StateId enum variants (no underscores)
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion1Region1StateA").unwrap())
+        let mut expected_sorted_active_states =
+            heapless::Vec::<IntegrationParallelMachineStateId, MAX_ACTIVE_REGIONS>::new();
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion1Region1StateA)
             .unwrap();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion2Region2StateX").unwrap())
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion2Region2StateX)
             .unwrap();
-        expected_state_strings.sort_unstable();
+        expected_sorted_active_states.sort_unstable();
 
         assert_eq!(
-            active_state_strings, expected_state_strings,
+            sorted_active_states, expected_sorted_active_states,
             "Initial active states mismatch"
         );
 
@@ -220,25 +215,20 @@ mod parallel_integration_tests {
         );
 
         let active_states = machine.state();
-        let mut active_state_strings = active_states
-            .iter()
-            .map(|s| {
-                heapless::String::<STRING_CAPACITY>::try_from(format!("{s:?}").as_str()).unwrap()
-            })
-            .collect::<heapless::Vec<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>>();
-        active_state_strings.sort_unstable();
+        let mut sorted_active_states = active_states;
+        sorted_active_states.sort_unstable();
 
-        let mut expected_state_strings =
-            heapless::Vec::<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>::new();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion1Region1StateA").unwrap())
+        let mut expected_sorted_active_states =
+            heapless::Vec::<IntegrationParallelMachineStateId, MAX_ACTIVE_REGIONS>::new();
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion1Region1StateA)
             .unwrap();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion2Region2StateX").unwrap())
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion2Region2StateX)
             .unwrap();
-        expected_state_strings.sort_unstable();
+        expected_sorted_active_states.sort_unstable();
         assert_eq!(
-            active_state_strings, expected_state_strings,
+            sorted_active_states, expected_sorted_active_states,
             "Active states should remain after EvGlobal self-transitions"
         );
 
@@ -281,25 +271,20 @@ mod parallel_integration_tests {
 
         // Active states should remain the same initial leaf states of the regions
         let active_states = machine.state();
-        let mut active_state_strings = active_states
-            .iter()
-            .map(|s| {
-                heapless::String::<STRING_CAPACITY>::try_from(format!("{s:?}").as_str()).unwrap()
-            })
-            .collect::<heapless::Vec<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>>();
-        active_state_strings.sort_unstable();
+        let mut sorted_active_states = active_states;
+        sorted_active_states.sort_unstable();
 
-        let mut expected_state_strings =
-            heapless::Vec::<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>::new();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion1Region1StateA").unwrap())
+        let mut expected_sorted_active_states =
+            heapless::Vec::<IntegrationParallelMachineStateId, MAX_ACTIVE_REGIONS>::new();
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion1Region1StateA)
             .unwrap();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion2Region2StateX").unwrap())
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion2Region2StateX)
             .unwrap();
-        expected_state_strings.sort_unstable();
+        expected_sorted_active_states.sort_unstable();
         assert_eq!(
-            active_state_strings, expected_state_strings,
+            sorted_active_states, expected_sorted_active_states,
             "Active states should be reset to initial regional states after ParallelState self-transition"
         );
 
@@ -341,23 +326,18 @@ mod parallel_integration_tests {
         );
 
         let active_states = machine.state();
-        let mut active_state_strings = active_states
-            .iter()
-            .map(|s| {
-                heapless::String::<STRING_CAPACITY>::try_from(format!("{s:?}").as_str()).unwrap()
-            })
-            .collect::<heapless::Vec<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>>();
+        let mut sorted_active_states = active_states;
         // Only one active state expected, no sort needed but done for consistency if future changes add more.
-        active_state_strings.sort_unstable();
+        sorted_active_states.sort_unstable();
 
-        let mut expected_state_strings =
-            heapless::Vec::<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>::new();
-        expected_state_strings
-            .push(String::try_from("OuterState").unwrap())
+        let mut expected_sorted_active_states =
+            heapless::Vec::<IntegrationParallelMachineStateId, MAX_ACTIVE_REGIONS>::new();
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::OuterState)
             .unwrap();
-        expected_state_strings.sort_unstable();
+        expected_sorted_active_states.sort_unstable();
         assert_eq!(
-            active_state_strings, expected_state_strings,
+            sorted_active_states, expected_sorted_active_states,
             "Active state should be OuterState"
         );
 
@@ -392,12 +372,10 @@ mod parallel_integration_tests {
             1,
             "Should be in OuterState before testing EvToP"
         );
-        let current_intermediate_state_name = heapless::String::<STRING_CAPACITY>::try_from(
-            format!("{:?}", current_intermediate_states[0]).as_str(),
-        )
-        .unwrap();
+        // Compare StateId directly
         assert_eq!(
-            current_intermediate_state_name, "OuterState",
+            current_intermediate_states[0],
+            IntegrationParallelMachineStateId::OuterState,
             "Machine not in OuterState before EvToP test"
         );
 
@@ -411,25 +389,20 @@ mod parallel_integration_tests {
         );
 
         let active_states = machine.state();
-        let mut active_state_strings = active_states
-            .iter()
-            .map(|s| {
-                heapless::String::<STRING_CAPACITY>::try_from(format!("{s:?}").as_str()).unwrap()
-            })
-            .collect::<heapless::Vec<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>>();
-        active_state_strings.sort_unstable();
+        let mut sorted_active_states = active_states;
+        sorted_active_states.sort_unstable();
 
-        let mut expected_state_strings =
-            heapless::Vec::<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>::new();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion1Region1StateA").unwrap())
+        let mut expected_sorted_active_states =
+            heapless::Vec::<IntegrationParallelMachineStateId, MAX_ACTIVE_REGIONS>::new();
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion1Region1StateA)
             .unwrap();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion2Region2StateX").unwrap())
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion2Region2StateX)
             .unwrap();
-        expected_state_strings.sort_unstable();
+        expected_sorted_active_states.sort_unstable();
         assert_eq!(
-            active_state_strings, expected_state_strings,
+            sorted_active_states, expected_sorted_active_states,
             "Active states should be regional children of ParallelState"
         );
 
@@ -466,25 +439,20 @@ mod parallel_integration_tests {
 
         // Active states should remain the same as R1A has a self-transition and R2X is unaffected.
         let active_states = machine.state();
-        let mut active_state_strings = active_states
-            .iter()
-            .map(|s| {
-                heapless::String::<STRING_CAPACITY>::try_from(format!("{s:?}").as_str()).unwrap()
-            })
-            .collect::<heapless::Vec<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>>();
-        active_state_strings.sort_unstable();
+        let mut sorted_active_states = active_states;
+        sorted_active_states.sort_unstable();
 
-        let mut expected_state_strings =
-            heapless::Vec::<heapless::String<STRING_CAPACITY>, MAX_ACTIVE_REGIONS>::new();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion1Region1StateA").unwrap())
+        let mut expected_sorted_active_states =
+            heapless::Vec::<IntegrationParallelMachineStateId, MAX_ACTIVE_REGIONS>::new();
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion1Region1StateA)
             .unwrap();
-        expected_state_strings
-            .push(String::try_from("ParallelStateRegion2Region2StateX").unwrap())
+        expected_sorted_active_states
+            .push(IntegrationParallelMachineStateId::ParallelStateRegion2Region2StateX)
             .unwrap();
-        expected_state_strings.sort_unstable();
+        expected_sorted_active_states.sort_unstable();
         assert_eq!(
-            active_state_strings, expected_state_strings,
+            sorted_active_states, expected_sorted_active_states,
             "Active states mismatch after EvR1"
         );
 

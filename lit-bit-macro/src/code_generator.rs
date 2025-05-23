@@ -8,9 +8,9 @@ pub(crate) fn generate_machine_struct_and_impl(
     builder: &TmpStateTreeBuilder,
     generated_ids: &GeneratedStateIds,
 ) -> TokenStream {
-    let m_val = proc_macro2::Literal::usize_unsuffixed(builder.all_states.len());
+    let m_val = proc_macro2::Literal::usize_unsuffixed(builder.max_depth());
     let max_nodes_for_computation_val =
-        proc_macro2::Literal::usize_unsuffixed(builder.all_states.len() * 4); // M * 4
+        proc_macro2::Literal::usize_unsuffixed(builder.max_depth() * 4); // M * 4
 
     // --- Generate match-based send method ---
     let mut match_arms = Vec::new();
@@ -52,7 +52,7 @@ pub(crate) fn generate_machine_struct_and_impl(
                 quote! {}
             };
             match_arms.push(quote! {
-                #event_pat => {
+                &#event_pat => {
                     lit_bit_core::core::trace!("[EVENT] {:?} received in state {:?}", event, #from_state_variant);
                     lit_bit_core::core::trace!("[MATCH] From {:?} on {:?} → {:?}", #from_state_variant, event, #to_state_variant);
                     #guard_check
@@ -204,6 +204,7 @@ pub(crate) fn generate_transitions_array<'ast>(
 ) -> SynResult<TokenStream> {
     let state_id_enum_name = &generated_ids.state_id_enum_name;
     let mut transition_initializers = Vec::new();
+    let mut matcher_fns = Vec::new();
 
     for tmp_state_node in &builder.all_states {
         let from_state_variant = generated_ids
@@ -239,25 +240,18 @@ pub(crate) fn generate_transitions_array<'ast>(
                     )
                 })?;
 
-            // Event variant needs to be constructed based on event_pattern.
-            // This is tricky as event_pattern is syn::Pat, not just an Ident.
-            // For now, we assume simple `EventEnum::Variant` patterns.
-            // A more robust solution would analyze `syn::Pat` to extract the event discriminant.
-            // This part is NON-TRIVIAL and was the reason for the old generate_send_method approach.
-            // The Runtime must handle matching event: &EventType against pattern: &Pat
-            // The Transition struct in core takes `event: EventType`, not a pattern.
-            // This implies `Transition.event` field needs re-thinking or `Runtime` needs `Pat` matching.
+            let event_pattern = trans_def_ast.event_pattern;
+            let event_pattern_tokens = quote! { #event_pattern };
 
-            // For now, let's use a temporary measure: if pattern is simple Ident, use it.
-            // This is INCOMPLETE for pattern matching like `Event::MyEvent { .. }`
-            let Some(event_expr) =
-                crate::extract_event_pattern_path_tokens(trans_def_ast.event_pattern)
-            else {
-                return Err(SynError::new(
-                    trans_def_ast.event_pattern.span(),
-                    "TRANSITIONS array does not yet support this event pattern type. Use simple variant names or struct/tuple variant patterns like 'MyEvent', 'MyEvent::Nested::Variant', 'MyEvent { .. }', or 'MyEvent(..)' for now."
-                ));
+            // Generate a unique matcher function ident for each transition
+            let matcher_fn_ident =
+                quote::format_ident!("matches_T{}", transition_initializers.len());
+            let matcher_fn = quote! {
+                fn #matcher_fn_ident(e: &#event_type_path) -> bool {
+                    matches!(e, #event_pattern_tokens)
+                }
             };
+            matcher_fns.push(matcher_fn);
 
             let action_expr = trans_def_ast.action_handler.map_or_else(
                 || quote! { None },
@@ -271,16 +265,17 @@ pub(crate) fn generate_transitions_array<'ast>(
             transition_initializers.push(quote! {
                 lit_bit_core::core::Transition {
                     from_state: #state_id_enum_name::#from_state_variant,
-                    event: #event_expr,
                     to_state: #state_id_enum_name::#to_state_variant,
                     action: #action_expr,
                     guard: #guard_expr,
+                    match_fn: Some(#matcher_fn_ident),
                 }
             });
         }
     }
 
     let transitions_array_ts = quote! {
+        #(#matcher_fns)*
         const TRANSITIONS: &[lit_bit_core::core::Transition<
             #state_id_enum_name, #event_type_path, #context_type_path
         >] = &[
