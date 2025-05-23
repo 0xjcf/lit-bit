@@ -361,11 +361,9 @@ where
         } else if !accumulator.contains(&state_id_to_enter)
             && accumulator.push(state_id_to_enter).is_err()
         {
-            panic!(
-                "MAX_ACTIVE_REGIONS ({}) exceeded while accumulating leaf states for {:?}.",
-                accumulator.capacity(),
-                state_id_to_enter
-            );
+            return Err(EntryError {
+                kind: EntryErrorKind::CapacityExceeded,
+            });
         }
 
         Ok(())
@@ -732,6 +730,70 @@ where
             current = parent;
         }
         None
+    }
+
+    /// Collects potential transitions for the given event from all active leaf states
+    #[allow(dead_code)]
+    fn collect_potential_transitions(
+        &self,
+        event: &EventType,
+        current_active_leaves_snapshot: &heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
+    ) -> Result<
+        heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        >,
+        ProcessingError,
+    > {
+        let mut potential_transitions: heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        > = heapless::Vec::new();
+
+        for &active_leaf_id in current_active_leaves_snapshot {
+            let mut check_state_id_opt = Some(active_leaf_id);
+            'hierarchy_search: while let Some(check_state_id) = check_state_id_opt {
+                if self.machine_def.get_state_node(check_state_id).is_some() {
+                    for t_def in self.machine_def.transitions {
+                        if t_def.from_state == check_state_id {
+                            // Check if event matches using match_fn if available
+                            if let Some(match_fn) = t_def.match_fn {
+                                if !match_fn(event) {
+                                    continue; // Skip this transition if event doesn't match
+                                }
+                            }
+                            // Now check the guard if any
+                            if let Some(guard_fn) = t_def.guard {
+                                if !guard_fn(&self.context, event) {
+                                    trace!(
+                                        "[GUARD FAILED] From {:?} on {:?} → {:?}",
+                                        t_def.from_state, event, t_def.to_state
+                                    );
+                                    continue;
+                                }
+                            }
+                            trace!(
+                                "[MATCH] From {:?} on {:?} → {:?}",
+                                t_def.from_state, event, t_def.to_state
+                            );
+                            let pot_trans = PotentialTransition {
+                                source_leaf_id: active_leaf_id,
+                                transition_from_state_id: check_state_id,
+                                target_state_id: t_def.to_state,
+                                transition_ref: t_def,
+                            };
+                            if potential_transitions.push(pot_trans).is_err() {
+                                return Err(ProcessingError::CapacityExceeded);
+                            }
+                            break 'hierarchy_search;
+                        }
+                    }
+                }
+                check_state_id_opt = self.machine_def.get_parent_of(check_state_id);
+            }
+        }
+
+        Ok(potential_transitions)
     }
 
     /// Sends an event to the state machine for processing.
@@ -1178,8 +1240,10 @@ where
         if next_active_leaves.is_empty() && !only_leaves.is_empty() {
             for &leaf in &only_leaves {
                 let resolved_leaf = self.resolve_to_leaf(leaf);
-                if !next_active_leaves.contains(&resolved_leaf) {
-                    next_active_leaves.push(resolved_leaf).unwrap();
+                if !next_active_leaves.contains(&resolved_leaf)
+                    && next_active_leaves.push(resolved_leaf).is_err()
+                {
+                    return SendResult::Error(ProcessingError::CapacityExceeded);
                 }
             }
             trace!(
@@ -1190,8 +1254,10 @@ where
             // Step 3: Merge new leaves into retained ones
             for &leaf in &only_leaves {
                 let resolved_leaf = self.resolve_to_leaf(leaf);
-                if !next_active_leaves.contains(&resolved_leaf) {
-                    next_active_leaves.push(resolved_leaf).unwrap();
+                if !next_active_leaves.contains(&resolved_leaf)
+                    && next_active_leaves.push(resolved_leaf).is_err()
+                {
+                    return SendResult::Error(ProcessingError::CapacityExceeded);
                 }
             }
             trace!(
@@ -1208,7 +1274,9 @@ where
                 "[TRACE] Fallback triggered for event {:?}: fallback_leaf = {:?}",
                 event, fallback_leaf
             );
-            next_active_leaves.push(fallback_leaf).unwrap();
+            if next_active_leaves.push(fallback_leaf).is_err() {
+                return SendResult::Error(ProcessingError::CapacityExceeded);
+            }
         }
 
         trace!(
@@ -1419,6 +1487,78 @@ where
         }
         ancestry
     }
+
+    /// Arbitrates and de-duplicates potential transitions, selecting the most specific ones
+    #[allow(dead_code)]
+    fn arbitrate_transitions(
+        &self,
+        potential_transitions: &[PotentialTransition<StateType, EventType, ContextType>],
+    ) -> Result<
+        heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        >,
+        ProcessingError,
+    > {
+        let mut arbitrated_transitions: heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        > = heapless::Vec::new();
+
+        // Arbitration logic: prefer more specific (descendant) transition sources
+        'candidate_loop: for pt_candidate in potential_transitions {
+            for other_pt in potential_transitions {
+                if core::ptr::eq(pt_candidate, other_pt) {
+                    continue;
+                }
+                match self.is_proper_ancestor(
+                    pt_candidate.transition_from_state_id,
+                    other_pt.transition_from_state_id,
+                ) {
+                    Ok(is_ancestor) => {
+                        if is_ancestor {
+                            continue 'candidate_loop;
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            if arbitrated_transitions.push(pt_candidate.clone()).is_err() {
+                return Err(ProcessingError::CapacityExceeded);
+            }
+        }
+
+        // De-duplicate transitions by transition reference pointer
+        let mut final_transitions: heapless::Vec<
+            PotentialTransition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        > = heapless::Vec::new();
+        let mut processed_transition_pointers: heapless::Vec<
+            *const Transition<StateType, EventType, ContextType>,
+            MAX_NODES_FOR_COMPUTATION,
+        > = heapless::Vec::new();
+
+        for trans_to_consider in &arbitrated_transitions {
+            let current_ref_ptr = trans_to_consider.transition_ref as *const _;
+            let mut already_processed = false;
+            for &seen_ptr in &processed_transition_pointers {
+                if seen_ptr == current_ref_ptr {
+                    already_processed = true;
+                    break;
+                }
+            }
+            if !already_processed {
+                if final_transitions.push(trans_to_consider.clone()).is_err() {
+                    return Err(ProcessingError::CapacityExceeded);
+                }
+                if processed_transition_pointers.push(current_ref_ptr).is_err() {
+                    return Err(ProcessingError::CapacityExceeded);
+                }
+            }
+        }
+
+        Ok(final_transitions)
+    }
 }
 
 impl<StateType, EventType, ContextType, const M: usize, const MAX_NODES_FOR_COMPUTATION: usize>
@@ -1460,6 +1600,7 @@ mod tests {
     const TEST_MAX_NODES_FOR_COMPUTATION: usize = TEST_HIERARCHY_DEPTH_M * MAX_ACTIVE_REGIONS; // Renamed from TEST_MTMAR
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[allow(dead_code)]
     enum TestState {
         S0,
         S1,
@@ -1467,16 +1608,19 @@ mod tests {
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[allow(dead_code)]
     enum TestEvent {
         E0,
         E1,
     }
 
     // Using the DefaultContext from the parent module for this alias
+    #[allow(dead_code)]
     type TestContextForEmpty = DefaultContext;
 
     // Define CounterContext at the module scope for tests
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    #[allow(dead_code)]
     struct TestContext {
         // Assuming this is the context for transition_action_for_increment
         val: i32, // Example field
@@ -1484,22 +1628,26 @@ mod tests {
 
     // Action function for basic_machine_integration_test
     #[allow(clippy::trivially_copy_pass_by_ref)] // EventType is Copy
+    #[allow(dead_code)]
     fn transition_action_for_increment(context: &mut TestContext, _event: &TestEvent) {
         context.val += 1; // Example action
     }
 
     // Guard function for basic_machine_integration_test (example, ensure its signature is correct)
     #[allow(clippy::trivially_copy_pass_by_ref)] // EventType is Copy
+    #[allow(dead_code)]
     fn guard_for_increment(context: &TestContext, _event: &TestEvent) -> bool {
         context.val < 5 // Example guard
     }
 
     // Match functions for TestEvent transitions
+    #[allow(dead_code)]
     fn matches_test_event_e0(event: &TestEvent) -> bool {
         matches!(event, TestEvent::E0)
     }
 
     // Populated StateNode arrays for tests
+    #[allow(dead_code)]
     const TEST_STATENODES_EMPTY_CTX_POPULATED: &[StateNode<
         TestState,
         TestContextForEmpty,
@@ -1531,6 +1679,7 @@ mod tests {
         },
     ];
 
+    #[allow(dead_code)]
     const TEST_STATENODES_COUNTER_CTX_POPULATED: &[StateNode<TestState, TestContext, TestEvent>] =
         &[
             StateNode {
@@ -1561,14 +1710,18 @@ mod tests {
 
     // --- New Test Setup for Hierarchical Transitions ---
 
+    #[allow(dead_code)]
     const MAX_LOG_ENTRIES: usize = 64; // Increased from 32
+    #[allow(dead_code)]
     const MAX_LOG_STRING_LEN: usize = 64; // Max length for a logged action string
 
     #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    #[allow(dead_code)]
     struct HierarchicalActionLogContext {
         log: Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES>,
     }
 
+    #[allow(dead_code)]
     impl HierarchicalActionLogContext {
         fn log_action(&mut self, action_description: &str) {
             let mut s = heapless::String::<MAX_LOG_STRING_LEN>::new();
@@ -1584,6 +1737,7 @@ mod tests {
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[allow(dead_code)]
     enum TestHierarchyState {
         ParentOne,
         ChildOneAlpha,            // Child of ParentOne
@@ -1607,1055 +1761,7 @@ mod tests {
         EventTriggerP2ToP1,        // ParentTwo to ParentOne
     }
 
-    // Helper action functions for logging
-    fn log_enter_parent_one(ctx: &mut HierarchicalActionLogContext, _event: &TestHierarchyEvent) {
-        ctx.log_action("EnterParentOne");
-    }
-    fn log_exit_parent_one(ctx: &mut HierarchicalActionLogContext, _event: &TestHierarchyEvent) {
-        ctx.log_action("ExitParentOne");
-    }
-    fn log_enter_child_one_alpha(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("EnterChildOneAlpha");
-    }
-    fn log_exit_child_one_alpha(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("ExitChildOneAlpha");
-    }
-    fn log_enter_grandchild_one_alpha_xray(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("EnterGrandchildOneAlphaXray");
-    }
-    fn log_exit_grandchild_one_alpha_xray(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("ExitGrandchildOneAlphaXray");
-    }
-    fn log_enter_grandchild_one_alpha_yankee(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("EnterGrandchildOneAlphaYankee");
-    }
-    fn log_exit_grandchild_one_alpha_yankee(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("ExitGrandchildOneAlphaYankee");
-    }
-    fn log_enter_child_one_bravo(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("EnterChildOneBravo");
-    }
-    fn log_exit_child_one_bravo(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("ExitChildOneBravo");
-    }
-    fn log_enter_parent_two(ctx: &mut HierarchicalActionLogContext, _event: &TestHierarchyEvent) {
-        ctx.log_action("EnterParentTwo");
-    }
-    fn log_exit_parent_two(ctx: &mut HierarchicalActionLogContext, _event: &TestHierarchyEvent) {
-        ctx.log_action("ExitParentTwo");
-    }
-    fn log_enter_child_two_alpha(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("EnterChildTwoAlpha");
-    }
-    fn log_exit_child_two_alpha(
-        ctx: &mut HierarchicalActionLogContext,
-        _event: &TestHierarchyEvent,
-    ) {
-        ctx.log_action("ExitChildTwoAlpha");
-    }
-    fn log_transition_action(ctx: &mut HierarchicalActionLogContext, _event: &TestHierarchyEvent) {
-        // Added _event back
-        ctx.log_action("TransitionAction");
-    }
-
-    // Match functions for TestHierarchyEvent transitions
-    fn matches_event_trigger_p1_to_p2(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerP1ToP2)
-    }
-
-    fn matches_event_trigger_p1_to_c1b(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerP1ToC1B)
-    }
-
-    fn matches_event_trigger_to_sibling(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerToSibling)
-    }
-
-    fn matches_event_trigger_to_parent(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerToParent)
-    }
-
-    fn matches_event_trigger_to_grandparent(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerToGrandparent)
-    }
-
-    fn matches_event_trigger_to_cousin_child(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerToCousinChild)
-    }
-
-    fn matches_event_trigger_parent_reentry(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerParentReentry)
-    }
-
-    fn matches_event_trigger_p2_to_p1(event: &TestHierarchyEvent) -> bool {
-        matches!(event, TestHierarchyEvent::EventTriggerP2ToP1)
-    }
-
-    const TEST_HIERARCHY_STATENODES: &[StateNode<
-        TestHierarchyState,
-        HierarchicalActionLogContext,
-        TestHierarchyEvent,
-    >] = &[
-        // ParentOne level
-        StateNode {
-            id: TestHierarchyState::ParentOne,
-            parent: None,
-            initial_child: Some(TestHierarchyState::ChildOneAlpha),
-            entry_action: Some(log_enter_parent_one),
-            exit_action: Some(log_exit_parent_one),
-            is_parallel: false,
-        },
-        // Children of ParentOne
-        StateNode {
-            id: TestHierarchyState::ChildOneAlpha,
-            parent: Some(TestHierarchyState::ParentOne),
-            initial_child: Some(TestHierarchyState::GrandchildOneAlphaXray),
-            entry_action: Some(log_enter_child_one_alpha),
-            exit_action: Some(log_exit_child_one_alpha),
-            is_parallel: false,
-        },
-        StateNode {
-            id: TestHierarchyState::ChildOneBravo,
-            parent: Some(TestHierarchyState::ParentOne),
-            initial_child: None, // Leaf state
-            entry_action: Some(log_enter_child_one_bravo),
-            exit_action: Some(log_exit_child_one_bravo),
-            is_parallel: false,
-        },
-        // Grandchildren of ParentOne (children of ChildOneAlpha)
-        StateNode {
-            id: TestHierarchyState::GrandchildOneAlphaXray,
-            parent: Some(TestHierarchyState::ChildOneAlpha),
-            initial_child: None, // Leaf state
-            entry_action: Some(log_enter_grandchild_one_alpha_xray),
-            exit_action: Some(log_exit_grandchild_one_alpha_xray),
-            is_parallel: false,
-        },
-        StateNode {
-            id: TestHierarchyState::GrandchildOneAlphaYankee,
-            parent: Some(TestHierarchyState::ChildOneAlpha),
-            initial_child: None, // Leaf state
-            entry_action: Some(log_enter_grandchild_one_alpha_yankee),
-            exit_action: Some(log_exit_grandchild_one_alpha_yankee),
-            is_parallel: false,
-        },
-        // ParentTwo level
-        StateNode {
-            id: TestHierarchyState::ParentTwo,
-            parent: None,
-            initial_child: Some(TestHierarchyState::ChildTwoAlpha),
-            entry_action: Some(log_enter_parent_two),
-            exit_action: Some(log_exit_parent_two),
-            is_parallel: false,
-        },
-        // Children of ParentTwo
-        StateNode {
-            id: TestHierarchyState::ChildTwoAlpha,
-            parent: Some(TestHierarchyState::ParentTwo),
-            initial_child: None, // Leaf state
-            entry_action: Some(log_enter_child_two_alpha),
-            exit_action: Some(log_exit_child_two_alpha),
-            is_parallel: false,
-        },
-    ];
-
-    const HIERARCHY_TEST_TRANSITIONS: &[Transition<
-        TestHierarchyState,
-        TestHierarchyEvent,
-        HierarchicalActionLogContext,
-    >] = &[
-        // EventTriggerP1ToP2: ParentOne to ParentTwo
-        Transition {
-            from_state: TestHierarchyState::ParentOne,
-            to_state: TestHierarchyState::ParentTwo,
-            action: Some(log_transition_action),
-            guard: None,
-            match_fn: Some(matches_event_trigger_p1_to_p2),
-        },
-        // New transition for ParentOne to ChildOneBravo
-        Transition {
-            from_state: TestHierarchyState::ParentOne,
-            to_state: TestHierarchyState::ChildOneBravo,
-            action: Some(log_transition_action), // Add a transition action
-            guard: None,
-            match_fn: Some(matches_event_trigger_p1_to_c1b),
-        },
-        // Transition from ChildOneAlpha to ChildOneBravo
-        Transition {
-            from_state: TestHierarchyState::ChildOneAlpha,
-            to_state: TestHierarchyState::ChildOneBravo,
-            action: Some(log_transition_action),
-            guard: None,
-            match_fn: Some(matches_event_trigger_to_sibling),
-        },
-        // Transition from GrandchildOneAlphaXray to ChildOneAlpha
-        Transition {
-            from_state: TestHierarchyState::GrandchildOneAlphaXray,
-            to_state: TestHierarchyState::ChildOneAlpha,
-            action: Some(log_transition_action),
-            guard: None,
-            match_fn: Some(matches_event_trigger_to_parent),
-        },
-        // Transition from GrandchildOneAlphaYankee to ParentOne
-        Transition {
-            from_state: TestHierarchyState::GrandchildOneAlphaYankee,
-            to_state: TestHierarchyState::ParentOne,
-            action: Some(log_transition_action),
-            guard: None,
-            match_fn: Some(matches_event_trigger_to_grandparent),
-        },
-        // ChildOneBravo to GrandchildOneAlphaYankee (Cousin transition)
-        Transition {
-            from_state: TestHierarchyState::ChildOneBravo,
-            to_state: TestHierarchyState::GrandchildOneAlphaYankee,
-            action: Some(log_transition_action),
-            guard: None,
-            match_fn: Some(matches_event_trigger_to_cousin_child),
-        },
-        // Parent-reentry transition (ChildOneBravo to ParentOne)
-        Transition {
-            from_state: TestHierarchyState::ChildOneBravo,
-            to_state: TestHierarchyState::ParentOne,
-            action: Some(log_transition_action),
-            guard: None,
-            match_fn: Some(matches_event_trigger_parent_reentry),
-        },
-        // EventTriggerP2ToP1: ParentTwo to ParentOne
-        Transition {
-            from_state: TestHierarchyState::ParentTwo,
-            to_state: TestHierarchyState::ParentOne,
-            action: Some(log_transition_action),
-            guard: None,
-            match_fn: Some(matches_event_trigger_p2_to_p1),
-        },
-    ];
-
-    static PARENT_TO_CHILD_MACHINE_DEF: MachineDefinition<
-        TestHierarchyState,
-        TestHierarchyEvent,
-        HierarchicalActionLogContext,
-    > = MachineDefinition::new(
-        TEST_HIERARCHY_STATENODES,
-        HIERARCHY_TEST_TRANSITIONS,
-        TestHierarchyState::ParentOne,
-    );
-
-    static COUSIN_MACHINE_DEF: MachineDefinition<
-        TestHierarchyState,
-        TestHierarchyEvent,
-        HierarchicalActionLogContext,
-    > = MachineDefinition::new(
-        TEST_HIERARCHY_STATENODES,
-        HIERARCHY_TEST_TRANSITIONS,
-        TestHierarchyState::ParentOne,
-    );
-
-    static CROSS_PARENT_MACHINE_DEF: MachineDefinition<
-        TestHierarchyState,
-        TestHierarchyEvent,
-        HierarchicalActionLogContext,
-    > = MachineDefinition::new(
-        TEST_HIERARCHY_STATENODES,
-        HIERARCHY_TEST_TRANSITIONS,
-        TestHierarchyState::ParentOne,
-    );
-
-    static MACHINE_DEF: MachineDefinition<
-        TestHierarchyState,
-        TestHierarchyEvent,
-        HierarchicalActionLogContext,
-    > = MachineDefinition::new(
-        TEST_HIERARCHY_STATENODES,
-        HIERARCHY_TEST_TRANSITIONS,
-        TestHierarchyState::ParentOne, // Top-level initial state for the machine definition
-    );
-
-    #[test]
-    fn hierarchical_machine_starts_in_correct_initial_leaf_with_entry_actions() {
-        let initial_context = HierarchicalActionLogContext::default();
-        let initial_event_for_test = TestHierarchyEvent::EventTriggerP1ToP2; // Example, choose any valid event
-        let runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &MACHINE_DEF,
-                initial_context,
-                &initial_event_for_test,
-            );
-
-        // Check final leaf state
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-
-        // Check entry action log
-        let mut expected_log_vec: heapless::Vec<
-            heapless::String<MAX_LOG_STRING_LEN>,
-            MAX_LOG_ENTRIES,
-        > = heapless::Vec::new();
-        expected_log_vec
-            .push(heapless::String::try_from("EnterParentOne").unwrap())
-            .expect("Log full");
-        expected_log_vec
-            .push(heapless::String::try_from("EnterChildOneAlpha").unwrap())
-            .expect("Log full");
-        expected_log_vec
-            .push(heapless::String::try_from("EnterGrandchildOneAlphaXray").unwrap())
-            .expect("Log full");
-        assert_eq!(runtime.context().get_log(), &expected_log_vec);
-    }
-
-    #[test]
-    fn test_sibling_transition_with_lca() {
-        static SIBLING_LCA_MACHINE_DEF: MachineDefinition<
-            TestHierarchyState,
-            TestHierarchyEvent,
-            HierarchicalActionLogContext,
-        > = MachineDefinition::new(
-            TEST_HIERARCHY_STATENODES,
-            HIERARCHY_TEST_TRANSITIONS,
-            TestHierarchyState::ParentOne,
-        );
-
-        let initial_event_for_test = TestHierarchyEvent::EventTriggerToSibling; // Example, choose any valid event
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &SIBLING_LCA_MACHINE_DEF, // <--- Uses the static definition
-                HierarchicalActionLogContext::default(),
-                &initial_event_for_test,
-            );
-
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        ); // Verify starting state
-        runtime.context_mut().log.clear(); // Clear initial entry logs
-
-        let event_processed = runtime.send(&TestHierarchyEvent::EventTriggerToSibling);
-        assert_eq!(
-            event_processed,
-            SendResult::Transitioned,
-            "Event EventTriggerToSibling should have been processed"
-        );
-
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::ChildOneBravo]
-        );
-
-        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            heapless::Vec::new();
-        expected_log
-            .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("TransitionAction").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterChildOneBravo").unwrap())
-            .expect("Log full");
-        assert_eq!(runtime.context().get_log(), &expected_log);
-    }
-
-    #[test]
-    fn machine_starts_in_initial_state() {
-        const TEST_TRANSITIONS: &[Transition<TestState, TestEvent, TestContextForEmpty>] = &[];
-        const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContextForEmpty> =
-            MachineDefinition::new(
-                TEST_STATENODES_EMPTY_CTX_POPULATED,
-                TEST_TRANSITIONS,
-                TestState::S0,
-            );
-
-        let initial_context = DefaultContext::default();
-        let initial_event_for_test = TestEvent::E0; // Example
-        let runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &TEST_MACHINE_DEF,
-                initial_context,
-                &initial_event_for_test,
-            );
-        assert_eq!(runtime.state().as_slice(), &[TestState::S0]);
-    }
-
-    #[test]
-    fn send_event_triggers_transition_and_action() {
-        const ACTION_TRANSITIONS: &[Transition<TestState, TestEvent, TestContext>] =
-            &[Transition {
-                from_state: TestState::S0,
-                to_state: TestState::S1,
-                action: Some(transition_action_for_increment),
-                guard: None,
-                match_fn: Some(matches_test_event_e0),
-            }];
-        const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContext> =
-            MachineDefinition::new(
-                TEST_STATENODES_COUNTER_CTX_POPULATED,
-                ACTION_TRANSITIONS,
-                TestState::S0,
-            );
-
-        let initial_context = TestContext { val: 0 };
-        let initial_event_for_test = TestEvent::E0; // Example
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &TEST_MACHINE_DEF,
-                initial_context,
-                &initial_event_for_test,
-            );
-
-        assert_eq!(runtime.send(&TestEvent::E0), SendResult::Transitioned);
-        assert_eq!(runtime.state().as_slice(), &[TestState::S1]);
-        assert_eq!(runtime.context().val, 1);
-    }
-
-    #[test]
-    fn send_event_no_transition_if_guard_fails() {
-        const GUARDED_TRANSITIONS: &[Transition<TestState, TestEvent, TestContext>] =
-            &[Transition {
-                from_state: TestState::S0,
-                to_state: TestState::S1,
-                action: Some(transition_action_for_increment),
-                guard: Some(guard_for_increment),
-                match_fn: Some(matches_test_event_e0),
-            }];
-        const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContext> =
-            MachineDefinition::new(
-                TEST_STATENODES_COUNTER_CTX_POPULATED,
-                GUARDED_TRANSITIONS,
-                TestState::S0,
-            );
-
-        // Test case 1: Guard should fail
-        let initial_context_guard_fails = TestContext { val: 5 }; // val is 5, so guard (val < 5) is false
-        let initial_event_for_test = TestEvent::E0; // Example
-        let mut runtime_guard_fails =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &TEST_MACHINE_DEF,
-                initial_context_guard_fails,
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime_guard_fails.send(&TestEvent::E0),
-            SendResult::NoMatch
-        ); // Guard should fail, expect NoMatch
-        assert_eq!(runtime_guard_fails.state().as_slice(), &[TestState::S0]);
-        assert_eq!(runtime_guard_fails.context().val, 5); // Action should not run
-
-        // Test case 2: Guard should pass
-        let initial_context_guard_passes = TestContext { val: 4 }; // val is 4, so guard (val < 5) is true
-        let mut runtime_guard_passes =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &TEST_MACHINE_DEF,
-                initial_context_guard_passes,
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime_guard_passes.send(&TestEvent::E0),
-            SendResult::Transitioned
-        ); // Guard should pass, expect Transitioned
-        assert_eq!(runtime_guard_passes.state().as_slice(), &[TestState::S1]);
-        assert_eq!(runtime_guard_passes.context().val, 5); // Action should run
-    }
-
-    #[test]
-    fn context_mut_provides_mutable_access() {
-        const NO_TRANSITIONS: &[Transition<TestState, TestEvent, TestContext>] = &[];
-        const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContext> =
-            MachineDefinition::new(
-                TEST_STATENODES_COUNTER_CTX_POPULATED,
-                NO_TRANSITIONS,
-                TestState::S0,
-            );
-
-        let initial_context = TestContext { val: 42 };
-        let initial_event_for_test = TestEvent::E0; // Example
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &TEST_MACHINE_DEF,
-                initial_context,
-                &initial_event_for_test,
-            );
-
-        runtime.context_mut().val += 1;
-        assert_eq!(runtime.context().val, 43);
-    }
-
-    #[test]
-    fn no_transition_if_event_does_not_match() {
-        const TEST_TRANSITIONS: &[Transition<TestState, TestEvent, TestContextForEmpty>] =
-            &[Transition {
-                from_state: TestState::S0,
-                to_state: TestState::S1,
-                action: None,
-                guard: None,
-                match_fn: Some(matches_test_event_e0),
-            }];
-        const TEST_MACHINE_DEF: MachineDefinition<TestState, TestEvent, TestContextForEmpty> =
-            MachineDefinition::new(
-                TEST_STATENODES_EMPTY_CTX_POPULATED,
-                TEST_TRANSITIONS,
-                TestState::S0,
-            );
-        let initial_event_for_test = TestEvent::E1; // Example
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &TEST_MACHINE_DEF,
-                DefaultContext::default(),
-                &initial_event_for_test,
-            );
-        assert_eq!(runtime.send(&TestEvent::E1), SendResult::NoMatch); // Different event
-        assert_eq!(runtime.state().as_slice(), &[TestState::S0]);
-    }
-
-    #[test]
-    fn no_transition_if_state_does_not_match() {
-        const TEST_TRANSITIONS_ST_MATCH: &[Transition<
-            TestState,
-            TestEvent,
-            TestContextForEmpty,
-        >] = &[Transition {
-            from_state: TestState::S0,
-            to_state: TestState::S1,
-            action: None,
-            guard: None,
-            match_fn: Some(matches_test_event_e0),
-        }];
-        // This MachineDefinition is a const, so a reference to it is &'static
-        const TEST_MACHINE_DEF_ST_MATCH: MachineDefinition<
-            TestState,
-            TestEvent,
-            TestContextForEmpty,
-        > = MachineDefinition::new(
-            TEST_STATENODES_EMPTY_CTX_POPULATED,
-            TEST_TRANSITIONS_ST_MATCH, // Use the locally defined const name
-            TestState::S1,
-        );
-        let initial_event_for_test = TestEvent::E0; // Example
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &TEST_MACHINE_DEF_ST_MATCH, // Pass by reference
-                DefaultContext::default(),
-                &initial_event_for_test,
-            );
-        assert_eq!(runtime.send(&TestEvent::E0), SendResult::NoMatch);
-        assert_eq!(runtime.state().as_slice(), &[TestState::S1]);
-    }
-
-    #[test]
-    fn test_child_to_parent_transition() {
-        static CHILD_TO_PARENT_MACHINE_DEF: MachineDefinition<
-            TestHierarchyState,
-            TestHierarchyEvent,
-            HierarchicalActionLogContext,
-        > = MachineDefinition::new(
-            TEST_HIERARCHY_STATENODES,
-            HIERARCHY_TEST_TRANSITIONS,
-            TestHierarchyState::ParentOne,
-        );
-
-        let initial_event_for_test = TestHierarchyEvent::EventTriggerToParent; // Example
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &CHILD_TO_PARENT_MACHINE_DEF,
-                HierarchicalActionLogContext::default(),
-                &initial_event_for_test,
-            );
-
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-        runtime.context_mut().log.clear();
-
-        let event_processed = runtime.send(&TestHierarchyEvent::EventTriggerToParent);
-        assert_eq!(
-            event_processed,
-            SendResult::Transitioned,
-            "Event EventTriggerToParent should have been processed"
-        );
-
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-
-        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            heapless::Vec::new();
-        expected_log
-            .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("TransitionAction").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterChildOneAlpha").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterGrandchildOneAlphaXray").unwrap())
-            .expect("Log full");
-        assert_eq!(runtime.context().get_log(), &expected_log);
-    }
-
-    #[test]
-    fn test_parent_to_child_transition() {
-        #[cfg(feature = "std")]
-        {
-            println!(">>> test_parent_to_child_transition started");
-            io::stdout().flush().unwrap();
-        }
-
-        let initial_event_for_test = TestHierarchyEvent::EventTriggerP1ToC1B;
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &PARENT_TO_CHILD_MACHINE_DEF,
-                HierarchicalActionLogContext::default(),
-                &initial_event_for_test,
-            );
-
-        // Optional: Assert initial state
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-
-        runtime.context_mut().log.clear();
-        let event_processed = runtime.send(&TestHierarchyEvent::EventTriggerP1ToC1B);
-        assert_eq!(event_processed, SendResult::Transitioned);
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::ChildOneBravo]
-        );
-    }
-
-    #[test]
-    fn test_grandchild_to_grandparent_reentry() {
-        static GC_TO_GP_MACHINE_DEF: MachineDefinition<
-            TestHierarchyState,
-            TestHierarchyEvent,
-            HierarchicalActionLogContext,
-        > = MachineDefinition::new(
-            TEST_HIERARCHY_STATENODES,
-            HIERARCHY_TEST_TRANSITIONS,
-            TestHierarchyState::ParentOne,
-        );
-        let initial_event_for_test = TestHierarchyEvent::EventTriggerToGrandparent; // Example
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &GC_TO_GP_MACHINE_DEF,
-                HierarchicalActionLogContext::default(),
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-        runtime.send(&TestHierarchyEvent::EventTriggerToSibling);
-        runtime.send(&TestHierarchyEvent::EventTriggerToCousinChild);
-        runtime.context_mut().log.clear();
-        let event_processed = runtime.send(&TestHierarchyEvent::EventTriggerToGrandparent);
-        assert_eq!(
-            event_processed,
-            SendResult::Transitioned,
-            "Event EventTriggerToGrandparent should have been processed"
-        );
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            heapless::Vec::new();
-        expected_log
-            .push(heapless::String::try_from("ExitGrandchildOneAlphaYankee").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("TransitionAction").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterParentOne").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterChildOneAlpha").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterGrandchildOneAlphaXray").unwrap())
-            .expect("Log full");
-        assert_eq!(runtime.context().get_log(), &expected_log);
-    }
-
-    #[test]
-    fn test_cousin_child_transition() {
-        #[cfg(feature = "std")]
-        {
-            println!("DEBUG PLUMBING TEST");
-        }
-        trace!("[TRACE] test_cousin_child_transition running");
-        #[cfg(feature = "std")]
-        {
-            println!(">>> test_cousin_child_transition started");
-            io::stdout().flush().unwrap();
-        }
-
-        let initial_event_for_test = TestHierarchyEvent::EventTriggerToCousinChild;
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &COUSIN_MACHINE_DEF,
-                HierarchicalActionLogContext::default(),
-                &initial_event_for_test,
-            );
-
-        // Optional: Assert initial state
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-
-        let sibling_result = runtime.send(&TestHierarchyEvent::EventTriggerToSibling);
-        #[cfg(feature = "std")]
-        {
-            println!(">>> After sibling transition: {0:?}", runtime.state());
-            println!(">>> sibling_result: {sibling_result:?}");
-            std::io::stdout().flush().unwrap();
-        }
-        let _ = sibling_result; // Mark as used to avoid warning
-
-        let cousin_result = runtime.send(&TestHierarchyEvent::EventTriggerToCousinChild);
-        #[cfg(feature = "std")]
-        {
-            println!(">>> After cousin transition: {0:?}", runtime.state());
-            println!(">>> cousin_result: {cousin_result:?}");
-            std::io::stdout().flush().unwrap();
-        }
-        let _ = cousin_result; // Mark as used to avoid warning
-
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaYankee]
-        );
-    }
-
-    #[test]
-    fn test_cross_top_level_parent_transition() {
-        #[cfg(feature = "std")]
-        {
-            println!("DEBUG PLUMBING TEST");
-        }
-        trace!("[TRACE] test_cross_top_level_parent_transition running");
-
-        let initial_event_for_test = TestHierarchyEvent::EventTriggerP1ToP2; // Example
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &CROSS_PARENT_MACHINE_DEF,
-                HierarchicalActionLogContext::default(),
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::GrandchildOneAlphaXray]
-        );
-        runtime.context_mut().log.clear();
-        let event_processed = runtime.send(&TestHierarchyEvent::EventTriggerP1ToP2);
-        assert_eq!(
-            event_processed,
-            SendResult::Transitioned,
-            "Event EventTriggerP1ToP2 should have been processed"
-        );
-        assert_eq!(
-            runtime.state().as_slice(),
-            &[TestHierarchyState::ChildTwoAlpha]
-        );
-        let mut expected_log: heapless::Vec<heapless::String<MAX_LOG_STRING_LEN>, MAX_LOG_ENTRIES> =
-            heapless::Vec::new();
-        expected_log
-            .push(heapless::String::try_from("ExitGrandchildOneAlphaXray").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("ExitChildOneAlpha").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("ExitParentOne").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("TransitionAction").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterParentTwo").unwrap())
-            .expect("Log full");
-        expected_log
-            .push(heapless::String::try_from("EnterChildTwoAlpha").unwrap())
-            .expect("Log full");
-        assert_eq!(runtime.context().get_log(), &expected_log);
-    }
-
-    // --- Tests for Multiple Guard Selection ---
-
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-    enum MultiGuardTestState {
-        InitialState,
-        TargetStateOne,
-        TargetStateTwo,
-        TargetStateThree,
-    }
-
-    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-    enum MultiGuardTestEvent {
-        TriggerEvent,
-    }
-
-    #[derive(Clone, Debug, Default, PartialEq, Eq)]
-    struct MultiGuardContext {
-        selector_value: i32,
-        action_taken_for: Option<MultiGuardTestState>,
-    }
-
-    fn guard_for_target_one(context: &MultiGuardContext, _event: &MultiGuardTestEvent) -> bool {
-        context.selector_value == 1
-    }
-    fn action_for_target_one(context: &mut MultiGuardContext, _event: &MultiGuardTestEvent) {
-        // Added _event back
-        context.action_taken_for = Some(MultiGuardTestState::TargetStateOne);
-    }
-
-    fn guard_for_target_two(context: &MultiGuardContext, _event: &MultiGuardTestEvent) -> bool {
-        context.selector_value == 2
-    }
-    fn action_for_target_two(context: &mut MultiGuardContext, _event: &MultiGuardTestEvent) {
-        // Added _event back
-        context.action_taken_for = Some(MultiGuardTestState::TargetStateTwo);
-    }
-
-    fn guard_for_target_three(context: &MultiGuardContext, _event: &MultiGuardTestEvent) -> bool {
-        context.selector_value == 3
-    }
-    fn action_for_target_three(context: &mut MultiGuardContext, _event: &MultiGuardTestEvent) {
-        // Added _event back
-        context.action_taken_for = Some(MultiGuardTestState::TargetStateThree);
-    }
-
-    const MULTI_GUARD_STATENODES: &[StateNode<
-        MultiGuardTestState,
-        MultiGuardContext,
-        MultiGuardTestEvent,
-    >] = &[
-        StateNode {
-            id: MultiGuardTestState::InitialState,
-            parent: None,
-            initial_child: None,
-            entry_action: None,
-            exit_action: None,
-            is_parallel: false,
-        },
-        StateNode {
-            id: MultiGuardTestState::TargetStateOne,
-            parent: None,
-            initial_child: None,
-            entry_action: None,
-            exit_action: None,
-            is_parallel: false,
-        },
-        StateNode {
-            id: MultiGuardTestState::TargetStateTwo,
-            parent: None,
-            initial_child: None,
-            entry_action: None,
-            exit_action: None,
-            is_parallel: false,
-        },
-        StateNode {
-            id: MultiGuardTestState::TargetStateThree,
-            parent: None,
-            initial_child: None,
-            entry_action: None,
-            exit_action: None,
-            is_parallel: false,
-        },
-    ];
-
-    const MULTI_GUARD_TRANSITIONS: &[Transition<
-        MultiGuardTestState,
-        MultiGuardTestEvent,
-        MultiGuardContext,
-    >] = &[
-        Transition {
-            from_state: MultiGuardTestState::InitialState,
-            to_state: MultiGuardTestState::TargetStateOne,
-            action: Some(action_for_target_one),
-            guard: Some(guard_for_target_one),
-            match_fn: Some(matches_multi_guard_trigger_event),
-        },
-        Transition {
-            from_state: MultiGuardTestState::InitialState,
-            to_state: MultiGuardTestState::TargetStateTwo,
-            action: Some(action_for_target_two),
-            guard: Some(guard_for_target_two),
-            match_fn: Some(matches_multi_guard_trigger_event),
-        },
-        Transition {
-            from_state: MultiGuardTestState::InitialState,
-            to_state: MultiGuardTestState::TargetStateThree,
-            action: Some(action_for_target_three),
-            guard: Some(guard_for_target_three),
-            match_fn: Some(matches_multi_guard_trigger_event),
-        },
-    ];
-
-    #[allow(clippy::too_many_lines)]
-    #[test]
-    fn test_multiple_guards_selects_correct_transition() {
-        static MULTI_GUARD_MACHINE_DEF: MachineDefinition<
-            MultiGuardTestState,
-            MultiGuardTestEvent,
-            MultiGuardContext,
-        > = MachineDefinition::new(
-            MULTI_GUARD_STATENODES,
-            MULTI_GUARD_TRANSITIONS,
-            MultiGuardTestState::InitialState,
-        );
-
-        let initial_event_for_test = MultiGuardTestEvent::TriggerEvent; // Example
-        let mut runtime1 =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &MULTI_GUARD_MACHINE_DEF,
-                MultiGuardContext {
-                    selector_value: 1,
-                    action_taken_for: None,
-                },
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime1.send(&MultiGuardTestEvent::TriggerEvent),
-            SendResult::Transitioned
-        );
-        assert_eq!(
-            runtime1.state().as_slice(),
-            &[MultiGuardTestState::TargetStateOne]
-        );
-        assert_eq!(
-            runtime1.context().action_taken_for,
-            Some(MultiGuardTestState::TargetStateOne)
-        );
-
-        let mut runtime2 =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &MULTI_GUARD_MACHINE_DEF,
-                MultiGuardContext {
-                    selector_value: 2,
-                    action_taken_for: None,
-                },
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime2.send(&MultiGuardTestEvent::TriggerEvent),
-            SendResult::Transitioned
-        );
-        assert_eq!(
-            runtime2.state().as_slice(),
-            &[MultiGuardTestState::TargetStateTwo]
-        );
-        assert_eq!(
-            runtime2.context().action_taken_for,
-            Some(MultiGuardTestState::TargetStateTwo)
-        );
-
-        let mut runtime3 =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &MULTI_GUARD_MACHINE_DEF,
-                MultiGuardContext {
-                    selector_value: 3,
-                    action_taken_for: None,
-                },
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime3.send(&MultiGuardTestEvent::TriggerEvent),
-            SendResult::Transitioned
-        );
-        assert_eq!(
-            runtime3.state().as_slice(),
-            &[MultiGuardTestState::TargetStateThree]
-        );
-        assert_eq!(
-            runtime3.context().action_taken_for,
-            Some(MultiGuardTestState::TargetStateThree)
-        );
-
-        let mut runtime4 =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &MULTI_GUARD_MACHINE_DEF,
-                MultiGuardContext {
-                    selector_value: 4,
-                    action_taken_for: None,
-                },
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime4.send(&MultiGuardTestEvent::TriggerEvent),
-            SendResult::NoMatch
-        );
-        assert_eq!(
-            runtime4.state().as_slice(),
-            &[MultiGuardTestState::InitialState]
-        );
-        assert_eq!(runtime4.context().action_taken_for, None);
-
-        let mut runtime5 =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &MULTI_GUARD_MACHINE_DEF,
-                MultiGuardContext {
-                    selector_value: 1,
-                    action_taken_for: None,
-                },
-                &initial_event_for_test,
-            );
-        assert_eq!(
-            runtime5.send(&MultiGuardTestEvent::TriggerEvent),
-            SendResult::Transitioned
-        );
-        assert_eq!(
-            runtime5.state().as_slice(),
-            &[MultiGuardTestState::TargetStateOne],
-            "Expected TargetStateOne due to transition order"
-        );
-        assert_eq!(
-            runtime5.context().action_taken_for,
-            Some(MultiGuardTestState::TargetStateOne)
-        );
-    }
-
-    // --- New Test Setup for Parallel State Transitions ---
-
+    // Add the missing constants for parallel tests
     const PARALLEL_LOG_ENTRIES: usize = 32;
     const PARALLEL_LOG_STRING_LEN: usize = 64;
 
@@ -2689,6 +1795,62 @@ mod tests {
             }
             v
         }
+    }
+
+    // --- Tests for Multiple Guard Selection ---
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[allow(dead_code)]
+    enum MultiGuardTestState {
+        InitialState,
+        TargetStateOne,
+        TargetStateTwo,
+        TargetStateThree,
+    }
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+    #[allow(dead_code)]
+    enum MultiGuardTestEvent {
+        TriggerEvent,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    #[allow(dead_code)]
+    struct MultiGuardContext {
+        selector_value: i32,
+        action_taken_for: Option<MultiGuardTestState>,
+    }
+
+    #[allow(dead_code)]
+    fn guard_for_target_one(context: &MultiGuardContext, _event: &MultiGuardTestEvent) -> bool {
+        context.selector_value == 1
+    }
+    #[allow(dead_code)]
+    fn action_for_target_one(context: &mut MultiGuardContext, _event: &MultiGuardTestEvent) {
+        context.action_taken_for = Some(MultiGuardTestState::TargetStateOne);
+    }
+
+    #[allow(dead_code)]
+    fn guard_for_target_two(context: &MultiGuardContext, _event: &MultiGuardTestEvent) -> bool {
+        context.selector_value == 2
+    }
+    #[allow(dead_code)]
+    fn action_for_target_two(context: &mut MultiGuardContext, _event: &MultiGuardTestEvent) {
+        context.action_taken_for = Some(MultiGuardTestState::TargetStateTwo);
+    }
+
+    #[allow(dead_code)]
+    fn guard_for_target_three(context: &MultiGuardContext, _event: &MultiGuardTestEvent) -> bool {
+        context.selector_value == 3
+    }
+    #[allow(dead_code)]
+    fn action_for_target_three(context: &mut MultiGuardContext, _event: &MultiGuardTestEvent) {
+        context.action_taken_for = Some(MultiGuardTestState::TargetStateThree);
+    }
+
+    #[allow(dead_code)]
+    fn matches_multi_guard_trigger_event(event: &MultiGuardTestEvent) -> bool {
+        matches!(event, MultiGuardTestEvent::TriggerEvent)
     }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -3261,11 +2423,6 @@ mod tests {
             expected_log,
             runtime.context().log
         );
-    }
-
-    // Match function for MultiGuardTestEvent
-    fn matches_multi_guard_trigger_event(event: &MultiGuardTestEvent) -> bool {
-        matches!(event, MultiGuardTestEvent::TriggerEvent)
     }
 
     // Match functions for ParallelTestEvent

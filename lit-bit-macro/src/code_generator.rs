@@ -9,8 +9,9 @@ pub(crate) fn generate_machine_struct_and_impl(
     generated_ids: &GeneratedStateIds,
 ) -> TokenStream {
     let m_val = proc_macro2::Literal::usize_unsuffixed(builder.all_states.len());
-    let max_nodes_for_computation_val =
-        proc_macro2::Literal::usize_unsuffixed(builder.all_states.len() * 4); // M * 4
+    let max_nodes_for_computation_val = proc_macro2::Literal::usize_unsuffixed(
+        builder.all_states.len() * lit_bit_core::core::MAX_ACTIVE_REGIONS,
+    );
 
     // --- Remove problematic match generation - delegate to Runtime instead ---
     let inherent_send_method_body = quote! {

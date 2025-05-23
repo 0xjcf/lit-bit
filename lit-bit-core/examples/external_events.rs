@@ -4,6 +4,7 @@
 //! that are defined in external crates and cannot be directly annotated with
 //! the `#[statechart_event]` attribute.
 
+#[allow(unused_imports)] // Needed for StateMachine trait methods
 use lit_bit_core::StateMachine;
 use lit_bit_macro::{statechart, statechart_event};
 
@@ -116,6 +117,7 @@ fn increment_count(ctx: &mut SystemContext, _event: &WrappedEvent) {
 }
 
 // Helper function to demonstrate usage
+#[allow(dead_code)]
 fn process_external_event(
     machine: &mut WrapperMachine,
     external_event: external_crate::ExternalEvent,

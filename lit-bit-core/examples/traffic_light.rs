@@ -187,14 +187,18 @@ mod riscv_logic {
             unsafe {
                 uart_print_str("\nUART: Event -> ");
             }
-            let send_result = runtime.send(&TrafficLightEvent::TimerElapsed);
-            if matches!(send_result, SendResult::Transitioned) {
-                unsafe {
+            match runtime.send(&TrafficLightEvent::TimerElapsed) {
+                SendResult::Transitioned => unsafe {
                     uart_print_str("UART: Transitioned.\n");
-                }
-            } else {
-                unsafe {
+                },
+                SendResult::NoMatch => unsafe {
                     uart_print_str("UART: No Transition.\n");
+                },
+                SendResult::Error(e) => {
+                    println!("SEMI: Runtime error: {e:?}");
+                    unsafe {
+                        uart_print_str("UART: ERROR during transition!\n");
+                    }
                 }
             }
         }

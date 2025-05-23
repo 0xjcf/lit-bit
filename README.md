@@ -19,7 +19,8 @@ It aims to provide a similar developer experience to XState but within the Rust 
 *   **`statechart!` Macro:** Define complex state machines with a clear, XState-inspired syntax.
     *   States, events, transitions, entry/exit actions, initial states.
     *   Hierarchical states.
-    *   (Planned: Parallel states, history states, guards, context/data management).
+    *   Parallel states (supported).
+    *   (Planned: History states, enhanced guards, advanced context/data management).
 *   **Compile-Time Safety:** Leverage Rust's type system to catch errors at compile time.
 *   **Minimal Footprint:** Designed to be lightweight in terms of code size and RAM usage for embedded targets.
 *   **Dual Target Examples:**

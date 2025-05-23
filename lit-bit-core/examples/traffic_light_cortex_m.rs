@@ -17,6 +17,7 @@ mod cortex_m_logic {
             MAX_ACTIVE_REGIONS, // Use re-exported version
             MachineDefinition,
             Runtime,
+            SendResult,
             StateNode,
             Transition,
         },
@@ -107,8 +108,31 @@ mod cortex_m_logic {
             &initial_event,
         );
 
-        let _ = runtime.send(&LightEvent::Toggle);
-        let _ = runtime.send(&LightEvent::Toggle);
+        match runtime.send(&LightEvent::Toggle) {
+            SendResult::Transitioned => {
+                // Success - state transition occurred
+            }
+            SendResult::NoMatch => {
+                // No matching transition found
+            }
+            SendResult::Error(_e) => {
+                // Runtime error occurred - in a real application this might
+                // trigger a system reset or enter a safe mode
+            }
+        }
+
+        match runtime.send(&LightEvent::Toggle) {
+            SendResult::Transitioned => {
+                // Success - state transition occurred
+            }
+            SendResult::NoMatch => {
+                // No matching transition found
+            }
+            SendResult::Error(_e) => {
+                // Runtime error occurred
+            }
+        }
+
         let _ = runtime.state();
         let _ = runtime.context();
 
