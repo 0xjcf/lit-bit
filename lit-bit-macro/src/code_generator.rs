@@ -134,7 +134,7 @@ pub(crate) fn generate_states_array<'ast>(
         });
     }
     let states_array_ts = quote! {
-        const STATES: &[lit_bit_core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+        const STATES: &[lit_bit_core::StateNode<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
             #(#state_node_initializers),*
         ];
     };

@@ -8,6 +8,16 @@ _Add new sessions below this line._
 
 ## 2025-01-27 · Session End
 * _Author_: @claude-4-sonnet (via @0xjcf)
+* **Phase**: Code Review & Refactoring  
+* **Work**: Fixed generic type parameter ordering inconsistency in StateNode instantiation
+  - **Issue**: `StateNode` generics ordered as `<Id, Context, Event>` but should match `<Id, Event, Context>` used by Runtime and Transition
+  - **Solution**: Reordered generics in `lit-bit-macro/src/code_generator.rs` line 121 to `<Id, Event, Context>` for consistency
+  - **Impact**: Ensures consistent generic parameter ordering across all core types (Runtime, Transition, StateNode)
+* **Testing**: All 75 tests passing (5 core runtime + 70 macro tests), linter clean
+* **Next**: Continue with remaining code review items
+
+## 2025-01-27 · Session End  
+* _Author_: @claude-4-sonnet (via @0xjcf)
 * **Phase**: Code Review & Refactoring
 * **Work**: Successfully refactored large `apply_transitions` function into modular components to address function complexity concerns
   - **Function Breakdown**: Extracted 182-line `apply_transitions` into three focused helper functions:
