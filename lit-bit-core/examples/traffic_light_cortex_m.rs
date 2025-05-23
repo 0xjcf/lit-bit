@@ -61,7 +61,24 @@ mod cortex_m_logic {
     ];
 
     // Define the states (even if simple, the definition needs an array)
-    const LIGHT_STATENODES: &[StateNode<LightState, BlinkyContext, LightEvent>] = &[];
+    const LIGHT_STATENODES: &[StateNode<LightState, BlinkyContext, LightEvent>] = &[
+        StateNode {
+            id: LightState::Off,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: LightState::On,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+    ];
 
     #[allow(dead_code)]
     const BLINKY_MACHINE_DEF: MachineDefinition<LightState, LightEvent, BlinkyContext> =

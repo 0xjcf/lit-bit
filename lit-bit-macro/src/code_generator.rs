@@ -8,71 +8,14 @@ pub(crate) fn generate_machine_struct_and_impl(
     builder: &TmpStateTreeBuilder,
     generated_ids: &GeneratedStateIds,
 ) -> TokenStream {
-    let m_val = proc_macro2::Literal::usize_unsuffixed(builder.max_depth());
+    let m_val = proc_macro2::Literal::usize_unsuffixed(builder.all_states.len());
     let max_nodes_for_computation_val =
-        proc_macro2::Literal::usize_unsuffixed(builder.max_depth() * 4); // M * 4
+        proc_macro2::Literal::usize_unsuffixed(builder.all_states.len() * 4); // M * 4
 
-    // --- Generate match-based send method ---
-    let mut match_arms = Vec::new();
-    for tmp_state in &builder.all_states {
-        let from_state_variant = generated_ids
-            .full_path_to_variant_ident
-            .get(&tmp_state.full_path_name)
-            .expect("State variant not found");
-        for trans in &tmp_state.transitions {
-            let event_pat = trans.event_pattern;
-            let target_state_idx = trans
-                .target_state_idx
-                .expect("Transition target idx not resolved");
-            let target_tmp_state = &builder.all_states[target_state_idx];
-            let to_state_variant = generated_ids
-                .full_path_to_variant_ident
-                .get(&target_tmp_state.full_path_name)
-                .expect("Target state variant not found");
-            let guard = trans.guard_handler;
-            let action = trans.action_handler;
-            // Build the match arm
-            let guard_check = if let Some(guard_expr) = guard {
-                quote! {
-                    lit_bit_core::core::trace!("[GUARD] Checking guard for {:?} → {:?} on {:?}", #from_state_variant, #to_state_variant, event);
-                    if !(#guard_expr(&self.context, event)) {
-                        lit_bit_core::core::trace!("[GUARD FAIL] {:?} → {:?} on {:?} blocked by guard", #from_state_variant, #to_state_variant, event);
-                        return lit_bit_core::core::SendResult::NoMatch;
-                    }
-                }
-            } else {
-                quote! {}
-            };
-            let action_call = if let Some(action_expr) = action {
-                quote! {
-                    lit_bit_core::core::trace!("[ACTION] Running action for {:?} → {:?} on {:?}", #from_state_variant, #to_state_variant, event);
-                    (#action_expr)(&mut self.context, event);
-                }
-            } else {
-                quote! {}
-            };
-            match_arms.push(quote! {
-                &#event_pat => {
-                    lit_bit_core::core::trace!("[EVENT] {:?} received in state {:?}", event, #from_state_variant);
-                    lit_bit_core::core::trace!("[MATCH] From {:?} on {:?} → {:?}", #from_state_variant, event, #to_state_variant);
-                    #guard_check
-                    #action_call
-                    lit_bit_core::core::trace!("[TRANSITION] {:?} → {:?} via {:?}", #from_state_variant, #to_state_variant, event);
-                    self.runtime.transition_to(#state_id_enum_name::#to_state_variant);
-                    lit_bit_core::core::trace!("[STATE] Now in state {:?}", #to_state_variant);
-                    return lit_bit_core::core::SendResult::Transitioned;
-                }
-            });
-        }
-    }
-    // Fallback arm
-    match_arms.push(quote! { _ => lit_bit_core::core::SendResult::NoMatch });
-
+    // --- Remove problematic match generation - delegate to Runtime instead ---
     let inherent_send_method_body = quote! {
         pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::core::SendResult {
-            match event {
-                #(#match_arms),*
-            }
+            self.runtime.send_internal(event)
         }
     };
 
@@ -201,6 +144,7 @@ pub(crate) fn generate_transitions_array<'ast>(
     generated_ids: &GeneratedStateIds,
     event_type_path: &'ast syn::Path,
     context_type_path: &'ast syn::Path,
+    machine_name: &Ident,
 ) -> SynResult<TokenStream> {
     let state_id_enum_name = &generated_ids.state_id_enum_name;
     let mut transition_initializers = Vec::new();
@@ -244,11 +188,14 @@ pub(crate) fn generate_transitions_array<'ast>(
             let event_pattern_tokens = quote! { #event_pattern };
 
             // Generate a unique matcher function ident for each transition
-            let matcher_fn_ident =
-                quote::format_ident!("matches_T{}", transition_initializers.len());
+            let matcher_fn_ident = quote::format_ident!(
+                "matches_{}_T{}",
+                machine_name,
+                transition_initializers.len()
+            );
             let matcher_fn = quote! {
                 fn #matcher_fn_ident(e: &#event_type_path) -> bool {
-                    matches!(e, #event_pattern_tokens)
+                    matches!(*e, #event_pattern_tokens)
                 }
             };
             matcher_fns.push(matcher_fn);

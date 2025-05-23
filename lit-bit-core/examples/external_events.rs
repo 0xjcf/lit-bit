@@ -104,12 +104,14 @@ fn configure_system(ctx: &mut SystemContext, event: &WrappedEvent) {
     if let WrappedEvent::Configure { setting } = event {
         ctx.is_configured = true;
         ctx.setting_value = *setting;
+        #[cfg(feature = "std")]
         println!("System configured with setting: {setting}");
     }
 }
 
 fn increment_count(ctx: &mut SystemContext, _event: &WrappedEvent) {
     ctx.operation_count += 1;
+    #[cfg(feature = "std")]
     println!("Operation count: {}", ctx.operation_count);
 }
 
@@ -122,17 +124,21 @@ fn process_external_event(
     let wrapped = WrappedEvent::from(external_event);
     match machine.send(&wrapped) {
         lit_bit_core::core::SendResult::Transitioned => {
+            #[cfg(feature = "std")]
             println!("  -> Event handled: transition occurred");
         }
         lit_bit_core::core::SendResult::NoMatch => {
+            #[cfg(feature = "std")]
             println!("  -> Event ignored: no matching transition");
         }
         lit_bit_core::core::SendResult::Error(e) => {
+            #[cfg(feature = "std")]
             eprintln!("  -> Error processing event: {e:?}");
         }
     }
 }
 
+#[cfg(feature = "std")]
 fn main() {
     println!("=== External Event Handling Example ===\n");
 
@@ -164,4 +170,10 @@ fn main() {
     println!("1. Wrapper Enum: Best for full control and pattern matching");
     println!("2. Newtype: Simpler but less ergonomic pattern matching");
     println!("3. Hybrid: Good balance when you only care about some variants");
+}
+
+// Dummy main for no_std targets
+#[cfg(not(feature = "std"))]
+fn main() {
+    // This external_events example is intended for std environments
 }

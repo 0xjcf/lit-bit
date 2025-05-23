@@ -53,7 +53,7 @@ impl Parse for StateAttributesInputAst {
 
         if attributes.is_empty() {
             return Err(syn::Error::new(
-                bracket_token.span.join(), // Reverted to original: DelimSpan::join() returns Span
+                bracket_token.span.open().join(bracket_token.span.close()).unwrap_or(bracket_token.span.open()),
                 "State attribute list cannot be empty if brackets are present. Expected at least one attribute like '[parallel]'.",
             ));
         }
@@ -103,10 +103,11 @@ impl Parse for StateChartInputAst {
 
         // Try parsing as Ident and verify
         let initial_ident: Ident = input.parse()?;
-        if initial_ident != "initial" {
+        let ident_str = initial_ident.to_string();
+        if ident_str != "initial" {
             return Err(syn::Error::new(
                 initial_ident.span(),
-                format!("Expected 'initial' keyword, got '{initial_ident}'"),
+                format!("Expected 'initial' keyword, got '{ident_str}'"),
             ));
         }
         let initial_keyword_token_span = initial_ident.span();
@@ -258,7 +259,8 @@ struct LifecycleHookAst {
 impl Parse for LifecycleHookAst {
     fn parse(input: ParseStream) -> Result<Self> {
         let kind: Ident = input.parse()?;
-        if kind != "entry" && kind != "exit" {
+        let kind_str = kind.to_string();
+        if kind_str != "entry" && kind_str != "exit" {
             return Err(syn::Error::new(
                 kind.span(),
                 "Expected 'entry' or 'exit' keyword for lifecycle hook",

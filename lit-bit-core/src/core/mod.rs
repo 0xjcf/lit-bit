@@ -6,7 +6,7 @@ mod tracing {
     #[macro_export]
     macro_rules! trace {
         ($($arg:tt)*) => {
-            #[cfg(feature = "debug-log")]
+            #[cfg(all(feature = "debug-log", feature = "std"))]
             {
                 use std::io::{self, Write};
                 println!($($arg)*);
@@ -1088,9 +1088,18 @@ where
         if overall_transition_occurred {
             for &leaf in &current_active_leaves_snapshot {
                 // Strict check: remove leaves that are self or descendant of any exited state
-                let should_remove = states_exited_this_step
-                    .iter()
-                    .any(|&exited| self.is_descendant_or_self(leaf, exited).unwrap_or(false));
+                let mut should_remove = false;
+                for &exited in &states_exited_this_step {
+                    match self.is_descendant_or_self(leaf, exited) {
+                        Ok(is_descendant) => {
+                            if is_descendant {
+                                should_remove = true;
+                                break;
+                            }
+                        }
+                        Err(processing_error) => return SendResult::Error(processing_error),
+                    }
+                }
                 if !should_remove && retained_leaves.push(leaf).is_err() {
                     return SendResult::Error(ProcessingError::CapacityExceeded);
                 }
