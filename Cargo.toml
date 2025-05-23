@@ -3,6 +3,10 @@
 resolver = "2"
 members = ["lit-bit-core", "lit-bit-macro"]
 
+# Workspace dependencies - centrally managed versions for publishing compatibility
+[workspace.dependencies]
+lit-bit-macro = { path = "lit-bit-macro", version = "0.1.0" }
+
 # Shared workspace-level profile settings
 [profile.dev]
 panic = "abort"

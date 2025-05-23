@@ -1101,9 +1101,9 @@ where
                     continue 'outer; // candidate is a parent, not a leaf
                 }
             }
-            only_leaves
-                .push(candidate)
-                .unwrap_or_else(|_| panic!("Failed to push leaf {candidate:?}"));
+            if only_leaves.push(candidate).is_err() {
+                return SendResult::Error(ProcessingError::CapacityExceeded);
+            }
         }
 
         // --- Refactored atomic update of active_leaf_states ---
@@ -1119,8 +1119,9 @@ where
                 .iter()
                 .any(|&exited| self.is_descendant_or_self(leaf, exited).unwrap_or(false))
                 && !next_active_leaves.contains(&leaf)
+                && next_active_leaves.push(leaf).is_err()
             {
-                next_active_leaves.push(leaf).unwrap();
+                return SendResult::Error(ProcessingError::CapacityExceeded);
             }
         }
         trace!(

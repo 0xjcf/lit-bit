@@ -19,12 +19,12 @@ categories = ["embedded", "no-std", "algorithms"]
 # Core dependencies (keep minimal for no_std focus)
 # We might add `heapless` later if needed for no_std collections.
 heapless = { version = "0.8.0", default-features = false }
-lit-bit-macro = { path = "../lit-bit-macro", version = "0.1.0" }
+lit-bit-macro = { workspace = true }
 
 # Optional dependencies for features (generally std-related or host tools)
 anyhow = { version = "1.0", optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-serde_json = { version = "1.0", default-features = false, features = ["alloc"], optional = true }
+serde_json = { version = "1.0", default-features = false, features = ["alloc", "raw_value"], optional = true }
 thiserror = { version = "1.0", optional = true }
 tracing = { version = "0.1", optional = true }
 futures = { version = "0.3", optional = true }
@@ -65,7 +65,7 @@ once_cell = { version = "1.19.0", default-features = false, features = ["critica
 [features]
 default = [] # Keep default empty for no_std focus
 
-std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "futures/std"]
+std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "dep:futures", "futures/std"]
 # The `async` feature implies `alloc` (via async-trait/futures)
 # and if `std` is also active, can pull in tokio.
 async = ["dep:async-trait", "dep:futures"]

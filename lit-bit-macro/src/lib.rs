@@ -1154,70 +1154,16 @@ pub(crate) mod code_generator {
                     |p_expr| quote!{ Some(#p_expr as GuardFn<#context_type_path, #event_type_path>) });
                 let event_pattern_tokens = extract_pat_tokens(event_pattern);
 
-                // Check if the pattern already starts with the event type path
-                let pattern_needs_prefix = match event_pattern {
-                    syn::Pat::Path(pat_path) => {
-                        // Check if the path already starts with the event type segments
-                        let event_segments: Vec<_> =
-                            event_type_path.segments.iter().map(|s| &s.ident).collect();
-                        let pat_segments: Vec<_> =
-                            pat_path.path.segments.iter().map(|s| &s.ident).collect();
-
-                        // If pattern has fewer segments than event type, it needs prefix
-                        if pat_segments.len() < event_segments.len() {
-                            true
-                        } else {
-                            // Check if pattern starts with event type segments
-                            !event_segments
-                                .iter()
-                                .zip(&pat_segments)
-                                .all(|(e, p)| e == p)
-                        }
-                    }
-                    syn::Pat::TupleStruct(pat_tuple) if pat_tuple.qself.is_none() => {
-                        // Check tuple struct patterns
-                        let event_segments: Vec<_> =
-                            event_type_path.segments.iter().map(|s| &s.ident).collect();
-                        let pat_segments: Vec<_> =
-                            pat_tuple.path.segments.iter().map(|s| &s.ident).collect();
-
-                        if pat_segments.len() < event_segments.len() {
-                            true
-                        } else {
-                            !event_segments
-                                .iter()
-                                .zip(&pat_segments)
-                                .all(|(e, p)| e == p)
-                        }
-                    }
-                    syn::Pat::Struct(pat_struct) if pat_struct.qself.is_none() => {
-                        // Check struct patterns
-                        let event_segments: Vec<_> =
-                            event_type_path.segments.iter().map(|s| &s.ident).collect();
-                        let pat_segments: Vec<_> =
-                            pat_struct.path.segments.iter().map(|s| &s.ident).collect();
-
-                        if pat_segments.len() < event_segments.len() {
-                            true
-                        } else {
-                            !event_segments
-                                .iter()
-                                .zip(&pat_segments)
-                                .all(|(e, p)| e == p)
-                        }
-                    }
-                    _ => false, // For wildcard, literals, identifiers, etc. - no prefix needed
-                };
+                // Use comprehensive pattern prefix detection
+                let pattern_needs_prefix =
+                    pattern_needs_prefix_comprehensive(event_pattern, event_type_path);
 
                 // Generate a unique matcher function ident for each transition
-                // Extract machine name from state_id_enum_name (e.g., TestMachineStateId -> TestMachine)
-                let state_id_enum_name_string = state_id_enum_name.to_string();
-                let machine_name_prefix = state_id_enum_name_string
-                    .strip_suffix("StateId")
-                    .unwrap_or(&state_id_enum_name_string);
+                // Include from/to state information to ensure global uniqueness even across modules
                 let matcher_fn_ident = format_ident!(
-                    "matches_{}_T{}",
-                    machine_name_prefix,
+                    "matches_{}_to_{}_T{}",
+                    from_state_id_variant,
+                    to_state_id_variant,
                     transition_initializers.len()
                 );
                 let matcher_fn = if pattern_needs_prefix {
@@ -1398,6 +1344,118 @@ pub(crate) mod code_generator {
             quote! { <_ as ::core::default::Default>::default() }
         } else {
             quote! { <_ as ::core::default::Default>::default() }
+        }
+    }
+
+    // Helper function to recursively extract all paths from a pattern and check if any need prefixing
+    pub(crate) fn pattern_needs_prefix_comprehensive(
+        pattern: &syn::Pat,
+        event_type_path: &syn::Path,
+    ) -> bool {
+        fn extract_paths_from_pattern(pattern: &syn::Pat, paths: &mut Vec<syn::Path>) {
+            match pattern {
+                syn::Pat::Path(pat_path) => {
+                    paths.push(pat_path.path.clone());
+                }
+                syn::Pat::TupleStruct(pat_tuple) if pat_tuple.qself.is_none() => {
+                    paths.push(pat_tuple.path.clone());
+                    // Note: For tuple structs, we don't extract paths from inner patterns
+                    // because those are just bindings, not paths that need event type prefixing
+                }
+                syn::Pat::Struct(pat_struct) if pat_struct.qself.is_none() => {
+                    paths.push(pat_struct.path.clone());
+                    // Note: For struct patterns, we don't extract paths from field patterns
+                    // because those are just bindings, not paths that need event type prefixing
+                    // Note: PatStruct.rest is just a token indicating "..", not a pattern to recurse into
+                }
+                syn::Pat::Reference(pat_ref) => {
+                    extract_paths_from_pattern(&pat_ref.pat, paths);
+                }
+                syn::Pat::Or(pat_or) => {
+                    for case in &pat_or.cases {
+                        extract_paths_from_pattern(case, paths);
+                    }
+                }
+                syn::Pat::Paren(pat_paren) => {
+                    extract_paths_from_pattern(&pat_paren.pat, paths);
+                }
+                syn::Pat::Tuple(pat_tuple) => {
+                    for elem in &pat_tuple.elems {
+                        extract_paths_from_pattern(elem, paths);
+                    }
+                }
+                syn::Pat::Slice(pat_slice) => {
+                    for elem in &pat_slice.elems {
+                        extract_paths_from_pattern(elem, paths);
+                    }
+                }
+                syn::Pat::Type(pat_type) => {
+                    extract_paths_from_pattern(&pat_type.pat, paths);
+                }
+                syn::Pat::Ident(pat_ident) => {
+                    // Convert single identifier to a single-segment path for consistent processing
+                    let ident_as_path = syn::Path {
+                        leading_colon: None,
+                        segments: {
+                            let mut segments = syn::punctuated::Punctuated::new();
+                            segments.push(syn::PathSegment {
+                                ident: pat_ident.ident.clone(),
+                                arguments: syn::PathArguments::None,
+                            });
+                            segments
+                        },
+                    };
+                    paths.push(ident_as_path);
+
+                    // Also check subpattern if present
+                    if let Some((_, subpat)) = &pat_ident.subpat {
+                        extract_paths_from_pattern(subpat, paths);
+                    }
+                }
+                // Other pattern types (Wild, Lit, Const, Range, Rest, Macro, Verbatim)
+                // don't contain paths that need prefixing
+                _ => {}
+            }
+        }
+
+        fn path_needs_prefix(path: &syn::Path, event_type_path: &syn::Path) -> bool {
+            let event_segments: Vec<_> = event_type_path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect();
+            let pat_segments: Vec<_> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+
+            // If pattern has fewer segments than event type, it needs prefix
+            if pat_segments.len() < event_segments.len() {
+                return true;
+            }
+
+            // Check if pattern starts with event type segments
+            !event_segments
+                .iter()
+                .zip(&pat_segments)
+                .all(|(e, p)| e == p)
+        }
+
+        // Handle special cases first
+        match pattern {
+            // These pattern types never need prefixing
+            syn::Pat::Wild(_)
+            | syn::Pat::Lit(_)
+            | syn::Pat::Const(_)
+            | syn::Pat::Range(_)
+            | syn::Pat::Rest(_) => false,
+            _ => {
+                // For all other patterns, extract paths and check if any need prefixing
+                let mut paths = Vec::new();
+                extract_paths_from_pattern(pattern, &mut paths);
+
+                // If any path needs prefixing, the whole pattern needs prefixing
+                paths
+                    .iter()
+                    .any(|path| path_needs_prefix(path, event_type_path))
+            }
         }
     }
 }
@@ -2555,16 +2613,16 @@ mod tests {
         .expect("generate_transitions_array failed ");
 
         let expected_str = quote! {
-            fn matches_TestHierarchicalMachine_T0(e: &RootEv) -> bool {
+            fn matches_P1_to_P1C2_T0(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_P1_TO_C2)
             }
-            fn matches_TestHierarchicalMachine_T1(e: &RootEv) -> bool {
+            fn matches_P1C1_to_P1C1GC2_T1(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_C1_TO_GC2)
             }
-            fn matches_TestHierarchicalMachine_T2(e: &RootEv) -> bool {
+            fn matches_P1C1GC1_to_P2_T2(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_GC1_TO_P2)
             }
-            fn matches_TestHierarchicalMachine_T3(e: &RootEv) -> bool {
+            fn matches_P1C2_to_P1C1GC1_T3(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_C2_TO_GC1)
             }
             const TRANSITIONS: &[lit_bit_core::Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
@@ -2573,28 +2631,28 @@ mod tests {
                     to_state: TestHierarchicalMachineStateId::P1C2,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_TestHierarchicalMachine_T0),
+                    match_fn: Some(matches_P1_to_P1C2_T0),
                 },
                 lit_bit_core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1,
                     to_state: TestHierarchicalMachineStateId::P1C1GC2,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_TestHierarchicalMachine_T1),
+                    match_fn: Some(matches_P1C1_to_P1C1GC2_T1),
                 },
                 lit_bit_core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1GC1,
                     to_state: TestHierarchicalMachineStateId::P2,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_TestHierarchicalMachine_T2),
+                    match_fn: Some(matches_P1C1GC1_to_P2_T2),
                 },
                 lit_bit_core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C2,
                     to_state: TestHierarchicalMachineStateId::P1C1GC1,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_TestHierarchicalMachine_T3),
+                    match_fn: Some(matches_P1C2_to_P1C1GC1_T3),
                 }
             ];
         }
@@ -3112,16 +3170,327 @@ mod tests {
     fn parse_transition_with_wildcard_pattern() {
         let input_str = "on _ => SomeState;";
         let result = parse_str::<TransitionDefinitionAst>(input_str);
-        assert!(
-            result.is_ok(),
-            "Failed to parse wildcard: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
         let ast = result.unwrap();
+        if let syn::Pat::Wild(_) = &ast.event_pattern {
+            // Expected wildcard pattern
+        } else {
+            panic!("Expected Pat::Wild, got {:?}", ast.event_pattern);
+        }
+    }
+
+    #[test]
+    fn parse_transition_with_reference_pattern() {
+        let input_str = "on &EventType::Variant => SomeState;";
+        let result = parse_str::<TransitionDefinitionAst>(input_str);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let ast = result.unwrap();
+        if let syn::Pat::Reference(pat_ref) = &ast.event_pattern {
+            if let syn::Pat::Path(_) = pat_ref.pat.as_ref() {
+                // Expected reference to path pattern
+            } else {
+                panic!(
+                    "Expected Pat::Reference containing Pat::Path, got {:?}",
+                    ast.event_pattern
+                );
+            }
+        } else {
+            panic!("Expected Pat::Reference, got {:?}", ast.event_pattern);
+        }
+    }
+
+    #[test]
+    fn parse_transition_with_or_pattern() {
+        let input_str = "on (EventType::A | EventType::B) => SomeState;";
+        let result = parse_str::<TransitionDefinitionAst>(input_str);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let ast = result.unwrap();
+        if let syn::Pat::Paren(paren_pat) = &ast.event_pattern {
+            if let syn::Pat::Or(_) = paren_pat.pat.as_ref() {
+                // Expected parenthesized OR pattern
+            } else {
+                panic!(
+                    "Expected Pat::Paren containing Pat::Or, got {:?}",
+                    ast.event_pattern
+                );
+            }
+        } else {
+            panic!("Expected Pat::Paren, got {:?}", ast.event_pattern);
+        }
+    }
+
+    #[test]
+    fn parse_transition_with_paren_pattern() {
+        let input_str = "on (EventType::Variant) => SomeState;";
+        let result = parse_str::<TransitionDefinitionAst>(input_str);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let ast = result.unwrap();
+        if let syn::Pat::Paren(_) = &ast.event_pattern {
+            // Expected parenthesized pattern
+        } else {
+            panic!("Expected Pat::Paren, got {:?}", ast.event_pattern);
+        }
+    }
+
+    #[test]
+    fn parse_transition_with_tuple_struct_pattern() {
+        let input_str = "on EventType::DataEvent(data) => SomeState;";
+        let result = parse_str::<TransitionDefinitionAst>(input_str);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let ast = result.unwrap();
+        if let syn::Pat::TupleStruct(_) = &ast.event_pattern {
+            // Expected tuple struct pattern
+        } else {
+            panic!("Expected Pat::TupleStruct, got {:?}", ast.event_pattern);
+        }
+    }
+
+    #[test]
+    fn test_pattern_prefix_detection_comprehensive() {
+        // This test verifies that various pattern types are parsed correctly
+        // by the transition definition parser
+
+        // Simple identifier pattern
+        let simple_str = "on Variant => SomeState;";
+        let simple_result = parse_str::<TransitionDefinitionAst>(simple_str);
+        assert!(simple_result.is_ok());
+        // A simple identifier like "Variant" is parsed as Pat::Ident, not Pat::Path
+        assert!(matches!(
+            simple_result.unwrap().event_pattern,
+            syn::Pat::Ident(_)
+        ));
+
+        // Reference pattern - already tested in parse_transition_with_reference_pattern
+        let ref_str = "on &EventType::Variant => SomeState;";
+        let ref_result = parse_str::<TransitionDefinitionAst>(ref_str);
+        assert!(ref_result.is_ok());
+        assert!(matches!(
+            ref_result.unwrap().event_pattern,
+            syn::Pat::Reference(_)
+        ));
+
+        // Parenthesized OR pattern - already tested in parse_transition_with_or_pattern
+        let or_str = "on (EventType::A | EventType::B) => SomeState;";
+        let or_result = parse_str::<TransitionDefinitionAst>(or_str);
+        assert!(or_result.is_ok());
+        assert!(matches!(
+            or_result.unwrap().event_pattern,
+            syn::Pat::Paren(_)
+        ));
+
+        // Parenthesized pattern - already tested in parse_transition_with_paren_pattern
+        let paren_str = "on (EventType::Variant) => SomeState;";
+        let paren_result = parse_str::<TransitionDefinitionAst>(paren_str);
+        assert!(paren_result.is_ok());
+        assert!(matches!(
+            paren_result.unwrap().event_pattern,
+            syn::Pat::Paren(_)
+        ));
+    }
+
+    #[test]
+    fn test_comprehensive_pattern_prefix_detection() {
+        use crate::code_generator::pattern_needs_prefix_comprehensive;
+
+        // Create a sample event type path (EventType)
+        let event_type_path: syn::Path = syn::parse_str("EventType").unwrap();
+
+        // Test cases where prefix is needed
+        let test_cases_need_prefix = vec![
+            // Simple identifier should need prefix
+            ("Variant", "simple identifier"),
+            // Tuple struct without prefix should need prefix
+            ("DataEvent(data)", "tuple struct without prefix"),
+            // Struct pattern without prefix should need prefix
+            ("DataEvent { field }", "struct pattern without prefix"),
+        ];
+
+        for (pattern_str, description) in test_cases_need_prefix {
+            let transition_str = format!("on {pattern_str} => SomeState;");
+            if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(&transition_str) {
+                let needs_prefix =
+                    pattern_needs_prefix_comprehensive(&ast.event_pattern, &event_type_path);
+                assert!(
+                    needs_prefix,
+                    "{description} should need prefix, but got false",
+                );
+            }
+        }
+
+        // Test cases where prefix is NOT needed
+        let test_cases_no_prefix = vec![
+            // Wildcard never needs prefix
+            ("_", "wildcard"),
+            // Already qualified paths don't need prefix
+            ("EventType::Variant", "fully qualified path"),
+            ("EventType::DataEvent(data)", "qualified tuple struct"),
+            ("EventType::DataEvent { field }", "qualified struct pattern"),
+        ];
+
+        for (pattern_str, description) in test_cases_no_prefix {
+            let transition_str = format!("on {pattern_str} => SomeState;");
+            if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(&transition_str) {
+                let needs_prefix =
+                    pattern_needs_prefix_comprehensive(&ast.event_pattern, &event_type_path);
+                assert!(
+                    !needs_prefix,
+                    "{description} should NOT need prefix, but got true",
+                );
+            }
+        }
+
+        // Test complex nested patterns
+        let complex_cases = vec![
+            // Reference to unqualified pattern should need prefix
+            ("&Variant", true, "reference to unqualified"),
+            // Reference to qualified pattern should not need prefix
+            ("&EventType::Variant", false, "reference to qualified"),
+            // Parenthesized unqualified should need prefix
+            ("(Variant)", true, "parenthesized unqualified"),
+            // Parenthesized qualified should not need prefix
+            ("(EventType::Variant)", false, "parenthesized qualified"),
+        ];
+
+        for (pattern_str, should_need_prefix, description) in complex_cases {
+            let transition_str = format!("on {pattern_str} => SomeState;");
+            if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(&transition_str) {
+                let needs_prefix =
+                    pattern_needs_prefix_comprehensive(&ast.event_pattern, &event_type_path);
+                assert_eq!(
+                    needs_prefix, should_need_prefix,
+                    "{description} prefix detection failed: expected {should_need_prefix}, got {needs_prefix}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_matcher_function_names_prevent_collisions() {
+        // This test verifies that the new naming convention prevents collisions
+        // even when different state machines have the same number of transitions
+
+        // Create two different state machines with same transition count
+        let dsl1 = concat!(
+            "name: TestMachine, ",
+            "context: Ctx1, ",
+            "event: Ev1, ",
+            "initial: A, ",
+            "state A { on Ev1::X => B; } ",
+            "state B {}"
+        );
+
+        let dsl2 = concat!(
+            "name: TestMachine, ", // Same machine name!
+            "context: Ctx2, ",
+            "event: Ev2, ",
+            "initial: X, ",
+            "state X { on Ev2::Y => Y; } ",
+            "state Y {}"
+        );
+
+        // Parse and generate for first machine
+        let ast1 = parse_dsl(dsl1).expect("DSL1 parsing failed");
+        let mut builder1 = TmpStateTreeBuilder::new();
+        builder1.build_from_ast(&ast1).expect("Builder1 failed");
+        let ids_info1 = generate_state_id_logic(&builder1, &ast1.name)
+            .expect("generate_state_id_logic failed for machine 1");
+
+        let transitions_array_tokens1 = crate::code_generator::generate_transitions_array(
+            &builder1,
+            &ids_info1,
+            &ast1.event_type,
+            &ast1.context_type,
+        )
+        .expect("generate_transitions_array failed for machine 1");
+
+        // Parse and generate for second machine
+        let ast2 = parse_dsl(dsl2).expect("DSL2 parsing failed");
+        let mut builder2 = TmpStateTreeBuilder::new();
+        builder2.build_from_ast(&ast2).expect("Builder2 failed");
+        let ids_info2 = generate_state_id_logic(&builder2, &ast2.name)
+            .expect("generate_state_id_logic failed for machine 2");
+
+        let transitions_array_tokens2 = crate::code_generator::generate_transitions_array(
+            &builder2,
+            &ids_info2,
+            &ast2.event_type,
+            &ast2.context_type,
+        )
+        .expect("generate_transitions_array failed for machine 2");
+
+        // Check that function names are different despite same machine name and transition count
+        let output1 = transitions_array_tokens1.to_string();
+        let output2 = transitions_array_tokens2.to_string();
+
+        // Machine 1 should generate: matches_A_to_B_T0
         assert!(
-            matches!(ast.event_pattern, syn::Pat::Wild(_)),
-            "Expected Pat::Wild, got {:?}",
-            ast.event_pattern
+            output1.contains("matches_A_to_B_T0"),
+            "Machine 1 should have function matches_A_to_B_T0, got: {output1}"
+        );
+
+        // Machine 2 should generate: matches_X_to_Y_T0
+        assert!(
+            output2.contains("matches_X_to_Y_T0"),
+            "Machine 2 should have function matches_X_to_Y_T0, got: {output2}"
+        );
+
+        // Verify they are different (no collision)
+        assert!(
+            !output1.contains("matches_X_to_Y_T0"),
+            "Machine 1 should not contain Machine 2's function name"
+        );
+        assert!(
+            !output2.contains("matches_A_to_B_T0"),
+            "Machine 2 should not contain Machine 1's function name"
+        );
+    }
+
+    #[test]
+    fn test_matcher_functions_work_with_non_copy_events() {
+        // This test verifies that the matcher functions work with non-Copy event types
+        // by ensuring the event parameter is matched by reference, not moved
+
+        let dsl = concat!(
+            "name: NonCopyTestMachine, ",
+            "context: Ctx, ",
+            "event: Ev, ", // Generic event type identifier
+            "initial: S1, ",
+            "state S1 { on Variant => S2; } ", // Simple identifier pattern that needs prefixing
+            "state S2 {}"
+        );
+
+        let ast = parse_dsl(dsl).expect("DSL parsing failed");
+        let mut builder = TmpStateTreeBuilder::new();
+        builder.build_from_ast(&ast).expect("Builder failed");
+        let ids_info =
+            generate_state_id_logic(&builder, &ast.name).expect("generate_state_id_logic failed");
+
+        let transitions_array_tokens = crate::code_generator::generate_transitions_array(
+            &builder,
+            &ids_info,
+            &ast.event_type,
+            &ast.context_type,
+        )
+        .expect("generate_transitions_array failed");
+
+        let output = transitions_array_tokens.to_string();
+
+        // The key thing we're testing: should NOT contain the problematic dereferencing pattern
+        assert!(
+            !output.contains("matches!(*e"),
+            "Matcher function should not dereference event parameter"
+        );
+
+        // Should contain the generated matcher function with our parameter name 'e'
+        assert!(
+            output.contains("fn matches_") && output.contains("(e :"),
+            "Should contain generated matcher function with reference parameter"
+        );
+
+        // Should contain the Variant pattern (verifies the pattern was processed)
+        assert!(
+            output.contains("Variant"),
+            "Should contain the Variant pattern we specified, got: {output}"
         );
     }
 }

@@ -11,6 +11,8 @@ use lit_bit_core::StateMachine;
 use lit_bit_macro::statechart;
 use lit_bit_macro::statechart_event;
 
+use core::convert::TryFrom; // ← required for String::try_from
+
 use heapless::String; // Removed Vec
 
 // Capacities for heapless collections

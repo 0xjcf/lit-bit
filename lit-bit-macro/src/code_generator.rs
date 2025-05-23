@@ -197,7 +197,7 @@ pub(crate) fn generate_transitions_array<'ast>(
             );
             let matcher_fn = quote! {
                 fn #matcher_fn_ident(e: &#event_type_path) -> bool {
-                    matches!(*e, #event_pattern_tokens)
+                    matches!(e, &#event_pattern_tokens)
                 }
             };
             matcher_fns.push(matcher_fn);

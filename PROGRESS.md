@@ -4,6 +4,24 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 _Add new sessions below this line._ 
 
+## 2025-01-01 · _Session End_ (Matcher Function Dereferencing Fix) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Non-Copy Event Type Support)
+* _Work_: **Fixed matcher function dereferencing issue** addressing code review item in `lit-bit-macro/src/code_generator.rs` around line 199. **Key fix**: Changed problematic `matches!(*e, #event_pattern_tokens)` pattern that dereferences/moves the event (only works for Copy types) to `matches!(e, &#event_pattern_tokens)` which keeps event borrowed, enabling support for both Copy and non-Copy enums that own data like `String`, `Vec`, etc. **Added comprehensive test** `test_matcher_functions_work_with_non_copy_events()` demonstrating the fix works correctly. **Verified both code generation paths**: (1) `lit-bit-macro/src/lib.rs` generate_transitions_array (already correct), (2) `lit-bit-macro/src/code_generator.rs` generate_transitions_array (now fixed). **Fixed clippy warnings** by merging duplicate match arms in pattern matching logic. **Modernized string formatting** in test assertions using inlined format args. **All 62 macro tests + 17 core tests passing, linter clean, library now supports event types that don't implement Copy.**
+* _Next_: Continue with remaining code review items or proceed with next development phase.
+
+## 2025-01-01 · _Session End_ (Matcher Function Name Collision Fix) ✅
+* _Author_: @calude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Global Symbol Collision Prevention)
+* _Work_: **Fixed matcher function name collisions** addressing code review item about global uniqueness issues in `lit-bit-macro/src/lib.rs` around lines 1214-1236. **Key improvement**: Changed matcher function naming from `matches_{MachineName}_T{n}` to `matches_{FromState}_to_{ToState}_T{n}` which includes from/to state information, ensuring global uniqueness even when different modules produce state machines with identical names and transition counts. **Added comprehensive collision prevention test** `test_matcher_function_names_prevent_collisions()` that demonstrates two machines with same name but different state transitions generate unique function names (e.g., `matches_A_to_B_T0` vs `matches_X_to_Y_T0`). **Updated existing test** `generate_transitions_array_hierarchical` to expect new naming convention. **All 61 macro tests + 17 core tests passing, no regressions, collision-free code generation verified.**
+* _Next_: Continue with remaining code review items or proceed with next development phase.
+
+## 2025-01-01 · _Session End_ (Comprehensive Pattern Prefix Detection Fix) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Pattern Matching Edge Cases)
+* _Work_: **Implemented comprehensive pattern prefix detection fix** addressing code review item about missing edge cases in `pattern_needs_prefix` logic around lines 1158-1210. **Major refactoring**: (1) Created new `pattern_needs_prefix_comprehensive()` function that recursively extracts all paths from any pattern variant (Pat::Path, Pat::TupleStruct, Pat::Struct, Pat::Ident, Pat::Reference, Pat::Or, Pat::Paren, etc.), (2) Fixed identifier comparison by using string representation instead of direct Ident comparison, (3) **Key insight**: For tuple struct and struct patterns, only the main path determines prefixing need - inner binding patterns (like `data` in `EventType::DataEvent(data)`) should not be considered for prefixing, (4) Added comprehensive unit tests covering all pattern variants including wildcards, references, OR patterns, parenthesized patterns, and complex nested cases, (5) Replaced old limited logic that only handled 3 pattern types with uniform handling of all syn::Pat variants. **All 60 macro tests + 17 core tests passing, comprehensive test coverage for edge cases, no regressions.**
+* _Next_: Continue with remaining code review items or proceed with next development phase.
+
 ## 2025-01-01 · _Session End_ (Complete Code Review Response - 7 Issues Fixed) ✅
 * _Author_: @AI-agent (via @0xjcf)
 * _Phase_: 1-core-runtime (Code Review Response & Quality Improvements)
