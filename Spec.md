@@ -221,7 +221,7 @@ To enable robust pattern matching on events (including variants with payloads) i
 ```rust
 use lit_bit_macro::statechart_event;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[statechart_event]  // Required for pattern matching support
 pub enum MediaPlayerEvent {
     Play,

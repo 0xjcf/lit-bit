@@ -899,10 +899,6 @@ pub(crate) mod code_generator {
 
             impl #machine_name {
                 pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Self {
-                    // The initial_event for Runtime::new needs to be handled.
-                    // The Runtime::new function expects an initial_event: &EventType.
-                    // We can use Default::default() for the event type if it derives Default.
-                    let initial_event_value = #event_type_path::default();
                     Self {
                         runtime: lit_bit_core::core::Runtime::new(
                             &#machine_definition_const_ident,

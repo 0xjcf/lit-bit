@@ -14,5 +14,3 @@ strip = true
 panic = "abort"
 
 # Optional: Default members for commands like `cargo run`
-
-[workspace.package]

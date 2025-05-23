@@ -238,19 +238,20 @@ mod parallel_integration_tests {
 
         assert!(
             check_subsequence_integration(&actual_log_strs, r1_actions_expected_slice),
-            "R1A self-transition log {r1_actions_expected_slice:?} not found. Log: {actual_log_strs:?}"
+            "R1A self-transition log {r1_actions_expected_slice:?} not found. Log: {actual_log_strs:?}",
         );
         assert!(
             check_subsequence_integration(&actual_log_strs, r2_actions_expected_slice),
-            "R2X self-transition log {r2_actions_expected_slice:?} not found. Log: {actual_log_strs:?}"
+            "R2X self-transition log {r2_actions_expected_slice:?} not found. Log: {actual_log_strs:?}",
         );
 
         assert_eq!(
             actual_log_strs.len(),
             r1_actions_expected_slice.len() + r2_actions_expected_slice.len(),
-            "Log length mismatch. Expected {}, got {}. Log: {actual_log_strs:?}",
+            "Log length mismatch. Expected {}, got {}. Log: {:?}",
             r1_actions_expected_slice.len() + r2_actions_expected_slice.len(),
-            actual_log_strs.len()
+            actual_log_strs.len(),
+            actual_log_strs
         );
     }
 
@@ -460,8 +461,8 @@ mod parallel_integration_tests {
         let actual_log_strs = machine.context().get_log_str_slice();
         assert_eq!(
             actual_log_strs.as_slice(),
-            &expected_log_sequence,
-            "Log for EvR1 (target Region1) mismatch. Log: {actual_log_strs:?}"
+            expected_log_sequence,
+            "Log for R1 self-transition mismatch. Log: {actual_log_strs:?}",
         );
     }
 
@@ -504,7 +505,7 @@ mod parallel_integration_tests {
         assert_eq!(
             actual_log_strs.as_slice(),
             expected_log_sequence,
-            "Log for R1 self-transition mismatch. Log: {actual_log_strs:?}"
+            "Log for R1 self-transition mismatch. Log: {actual_log_strs:?}",
         );
     }
 
