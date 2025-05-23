@@ -391,7 +391,7 @@ where
 
 // Define PotentialTransition struct at the module level
 #[derive(Debug, Clone, Copy)]
-struct PotentialTransition<StateType, EventType, ContextType>
+pub(crate) struct PotentialTransition<StateType, EventType, ContextType>
 where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     EventType: Clone + PartialEq + Eq + core::hash::Hash + 'static, // Removed Copy
@@ -823,16 +823,425 @@ where
         Ok(potential_transitions)
     }
 
+    /// Processes a simple leaf self-transition (exit, action, entry list update).
+    pub(crate) fn process_simple_leaf_self_transition(
+        &self,
+        trans_info: &PotentialTransition<StateType, EventType, ContextType>,
+        event: &EventType,
+        states_exited_this_step: &mut heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>,
+        entry_execution_list: &mut heapless::Vec<
+            (StateType, Option<StateType>, StateType),
+            MAX_ACTIVE_REGIONS,
+        >,
+        temp_context: &mut ContextType,
+    ) -> Result<(), ProcessingError> {
+        let source_state_id = trans_info.transition_from_state_id;
+        let active_leaf_for_this_trans = trans_info.source_leaf_id;
+
+        if let Some(node) = self.machine_def.get_state_node(source_state_id) {
+            if !states_exited_this_step.contains(&source_state_id) {
+                if let Some(exit_fn) = node.exit_action {
+                    trace!("[EXIT] {:?} (exit_fn = true)", source_state_id);
+                    exit_fn(temp_context, event);
+                } else {
+                    trace!("[EXIT] {:?} (exit_fn = false)", source_state_id);
+                }
+                if states_exited_this_step.push(source_state_id).is_err() {
+                    return Err(ProcessingError::CapacityExceeded);
+                }
+            }
+        }
+        if let Some(action_fn) = trans_info.transition_ref.action {
+            trace!(
+                "[ACTION] Running action for {:?} → {:?} on {:?}",
+                source_state_id, trans_info.target_state_id, event
+            );
+            action_fn(temp_context, event);
+        }
+        if entry_execution_list
+            .push((
+                source_state_id,
+                Some(source_state_id),
+                active_leaf_for_this_trans,
+            ))
+            .is_err()
+        {
+            return Err(ProcessingError::CapacityExceeded);
+        }
+        Ok(())
+    }
+
+    /// Processes a self-transition (not simple leaf - handles hierarchical exits/re-entry).
+    pub(crate) fn process_self_transition(
+        &self,
+        trans_info: &PotentialTransition<StateType, EventType, ContextType>,
+        current_active_leaves_snapshot: &heapless::Vec<StateType, N_ACTIVE>,
+        event: &EventType,
+        states_exited_this_step: &mut heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>,
+        entry_execution_list: &mut heapless::Vec<
+            (StateType, Option<StateType>, StateType),
+            MAX_ACTIVE_REGIONS,
+        >,
+        temp_context: &mut ContextType,
+    ) -> Result<(), ProcessingError> {
+        let source_state_id = trans_info.transition_from_state_id;
+        let active_leaf_for_this_trans = trans_info.source_leaf_id;
+
+        let node_being_self_transitioned =
+            self.machine_def.get_state_node(source_state_id).unwrap();
+        let parent_of_source = node_being_self_transitioned.parent;
+
+        for &current_active_leaf in current_active_leaves_snapshot {
+            // Use original snapshot for active leaves
+            if self
+                .is_descendant_or_self(current_active_leaf, source_state_id)
+                .unwrap_or(false)
+            {
+                let states_to_exit_for_this_leaf_branch =
+                    self.compute_ordered_exit_set(current_active_leaf, parent_of_source)?;
+                for &state_to_exit_id in &states_to_exit_for_this_leaf_branch {
+                    if !states_exited_this_step.contains(&state_to_exit_id) {
+                        if let Some(node) = self.machine_def.get_state_node(state_to_exit_id) {
+                            if let Some(exit_fn) = node.exit_action {
+                                trace!("[EXIT] {:?} (exit_fn = true)", state_to_exit_id);
+                                exit_fn(temp_context, event);
+                            } else {
+                                trace!("[EXIT] {:?} (exit_fn = false)", state_to_exit_id);
+                            }
+                        }
+                        if states_exited_this_step.push(state_to_exit_id).is_err() {
+                            return Err(ProcessingError::CapacityExceeded);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(action_fn) = trans_info.transition_ref.action {
+            trace!(
+                "[ACTION] Running action for {:?} → {:?} on {:?}",
+                source_state_id, trans_info.target_state_id, event
+            );
+            action_fn(temp_context, event);
+        }
+        if entry_execution_list
+            .push((
+                source_state_id,
+                Some(source_state_id),
+                active_leaf_for_this_trans,
+            ))
+            .is_err()
+        {
+            return Err(ProcessingError::CapacityExceeded);
+        }
+        Ok(())
+    }
+
+    /// Processes a regular transition (different source and target states).
+    pub(crate) fn process_regular_transition(
+        &self,
+        trans_info: &PotentialTransition<StateType, EventType, ContextType>,
+        event: &EventType,
+        states_exited_this_step: &mut heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>,
+        entry_execution_list: &mut heapless::Vec<
+            (StateType, Option<StateType>, StateType),
+            MAX_ACTIVE_REGIONS,
+        >,
+        temp_context: &mut ContextType,
+    ) -> Result<(), ProcessingError> {
+        let source_state_id = trans_info.transition_from_state_id;
+        let target_state_id = trans_info.target_state_id;
+        let active_leaf_for_this_trans = trans_info.source_leaf_id;
+
+        let lca_id = self.find_lca(active_leaf_for_this_trans, target_state_id)?;
+        let states_to_exit_for_branch =
+            self.compute_ordered_exit_set(active_leaf_for_this_trans, lca_id)?;
+
+        for &state_to_exit_id in &states_to_exit_for_branch {
+            if !states_exited_this_step.contains(&state_to_exit_id) {
+                if let Some(node) = self.machine_def.get_state_node(state_to_exit_id) {
+                    if let Some(exit_fn) = node.exit_action {
+                        trace!("[EXIT] {:?} (exit_fn = true)", state_to_exit_id);
+                        exit_fn(temp_context, event);
+                    } else {
+                        trace!("[EXIT] {:?} (exit_fn = false)", state_to_exit_id);
+                    }
+                }
+                if states_exited_this_step.push(state_to_exit_id).is_err() {
+                    return Err(ProcessingError::CapacityExceeded);
+                }
+            }
+        }
+
+        if source_state_id == target_state_id && !states_exited_this_step.contains(&source_state_id)
+        {
+            if let Some(node) = self.machine_def.get_state_node(source_state_id) {
+                if let Some(exit_fn) = node.exit_action {
+                    trace!("[EXIT] {:?} (exit_fn = true)", source_state_id);
+                    exit_fn(temp_context, event);
+                } else {
+                    trace!("[EXIT] {:?} (exit_fn = false)", source_state_id);
+                }
+            }
+            if states_exited_this_step.push(source_state_id).is_err() {
+                return Err(ProcessingError::CapacityExceeded);
+            }
+        }
+
+        if let Some(action_fn) = trans_info.transition_ref.action {
+            trace!(
+                "[ACTION] Running action for {:?} → {:?} on {:?}",
+                source_state_id, target_state_id, event
+            );
+            action_fn(temp_context, event);
+        }
+
+        let lca_for_entry = lca_id; // always use real LCA so ancestors stay suppressed
+        if entry_execution_list
+            .push((target_state_id, lca_for_entry, active_leaf_for_this_trans))
+            .is_err()
+        {
+            return Err(ProcessingError::CapacityExceeded);
+        }
+        Ok(())
+    }
+
+    /// Applies transition processing: exits, actions, and prepares entry execution list.
+    ///
+    /// Returns (`overall_transition_occurred`, `states_exited_this_step`, `entry_execution_list`, `temp_context`)
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn apply_transitions(
+        &self,
+        final_transitions_to_execute: &[PotentialTransition<StateType, EventType, ContextType>],
+        current_active_leaves_snapshot: &heapless::Vec<StateType, N_ACTIVE>,
+        event: &EventType,
+        mut temp_context: ContextType,
+    ) -> Result<
+        (
+            bool,                                                // overall_transition_occurred
+            heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>, // states_exited_this_step
+            heapless::Vec<(StateType, Option<StateType>, StateType), MAX_ACTIVE_REGIONS>, // entry_execution_list
+            ContextType, // updated temp_context
+        ),
+        ProcessingError,
+    > {
+        let mut overall_transition_occurred = false;
+        let mut states_exited_this_step: heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION> =
+            heapless::Vec::new();
+        let mut entry_execution_list: heapless::Vec<
+            (StateType, Option<StateType>, StateType),
+            MAX_ACTIVE_REGIONS,
+        > = heapless::Vec::new();
+
+        // Phase 1: Process exits and actions for all transitions first (use temp_context)
+        for trans_info in final_transitions_to_execute {
+            let source_state_id = trans_info.transition_from_state_id;
+            let target_state_id = trans_info.target_state_id;
+            let active_leaf_for_this_trans = trans_info.source_leaf_id;
+            overall_transition_occurred = true;
+
+            trace!(
+                "[TRANSITION] {:?} → {:?} via {:?}",
+                source_state_id, target_state_id, event
+            );
+
+            #[cfg(feature = "std")]
+            {
+                println!(
+                    "[TRACE] Active before: {prev:?}",
+                    prev = self.active_leaf_states
+                );
+                io::stdout().flush().unwrap();
+                println!(
+                    "[TRACE] Processing transition: {source_state_id:?} → {target_state_id:?}"
+                );
+            }
+
+            // Determine transition type and delegate to appropriate helper
+            let is_desc_result =
+                self.is_descendant_or_self(active_leaf_for_this_trans, source_state_id);
+            let is_simple_leaf_self_transition = source_state_id == target_state_id
+                && is_desc_result?
+                && self
+                    .machine_def
+                    .get_state_node(source_state_id)
+                    .is_some_and(|n| !n.is_parallel && n.initial_child.is_none());
+
+            if is_simple_leaf_self_transition {
+                self.process_simple_leaf_self_transition(
+                    trans_info,
+                    event,
+                    &mut states_exited_this_step,
+                    &mut entry_execution_list,
+                    &mut temp_context,
+                )?;
+            } else if source_state_id == target_state_id {
+                self.process_self_transition(
+                    trans_info,
+                    current_active_leaves_snapshot,
+                    event,
+                    &mut states_exited_this_step,
+                    &mut entry_execution_list,
+                    &mut temp_context,
+                )?;
+            } else {
+                self.process_regular_transition(
+                    trans_info,
+                    event,
+                    &mut states_exited_this_step,
+                    &mut entry_execution_list,
+                    &mut temp_context,
+                )?;
+            }
+        }
+
+        Ok((
+            overall_transition_occurred,
+            states_exited_this_step,
+            entry_execution_list,
+            temp_context,
+        ))
+    }
+
+    /// Commits the entry plan by processing all entries and collecting new leaves.
+    pub(crate) fn commit_entry_plan(
+        &self,
+        entry_execution_list: &[(StateType, Option<StateType>, StateType)],
+        entry_actions_run_vec: &mut heapless::Vec<StateType, M>,
+        event: &EventType,
+        temp_context: &mut ContextType,
+    ) -> Result<heapless::Vec<StateType, MAX_ACTIVE_REGIONS>, ProcessingError> {
+        let mut new_leaves = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
+
+        // Phase 3: Process entries and add new leaves (use temp_context)
+        for &(target_id, lca_id, source_id) in entry_execution_list {
+            trace!(
+                "[TRACE] ENTRY EXEC: target_state_id = {:?}, lca_id = {:?}, ancestry = {:?}",
+                target_id,
+                lca_id,
+                self.get_ancestry(target_id)
+            );
+            match self.execute_entry_actions_from_lca_with_context(
+                target_id,
+                lca_id,
+                source_id, // Use source_id from the tuple
+                event,
+                &mut Scratch::<StateType, M> {
+                    entry_actions_run: entry_actions_run_vec,
+                },
+                temp_context,
+            ) {
+                Ok(leaves_from_entry) => {
+                    for new_leaf in leaves_from_entry {
+                        if new_leaves.push(new_leaf).is_err() {
+                            return Err(ProcessingError::CapacityExceeded);
+                        }
+                    }
+                }
+                Err(processing_error) => return Err(processing_error),
+            }
+        }
+
+        // Filter: Only keep true leaves (not parents of any other in the set)
+        let mut only_leaves = heapless::Vec::<StateType, MAX_ACTIVE_REGIONS>::new();
+        'outer: for &candidate in &new_leaves {
+            for &other in &new_leaves {
+                if candidate != other && self.machine_def.get_parent_of(other) == Some(candidate) {
+                    continue 'outer; // candidate is a parent, not a leaf
+                }
+            }
+            if only_leaves.push(candidate).is_err() {
+                return Err(ProcessingError::CapacityExceeded);
+            }
+        }
+
+        Ok(only_leaves)
+    }
+
+    /// Merges and reconciles active leaf states after transitions and entries.
+    pub(crate) fn merge_active_sets(
+        &self,
+        current_active_leaves_snapshot: &heapless::Vec<StateType, N_ACTIVE>,
+        states_exited_this_step: &heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION>,
+        only_leaves: &heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
+        entry_execution_list_fallback: &[(StateType, Option<StateType>, StateType)],
+    ) -> Result<heapless::Vec<StateType, MAX_ACTIVE_REGIONS>, ProcessingError> {
+        let mut next_active_leaves = heapless::Vec::<StateType, MAX_ACTIVE_REGIONS>::new();
+
+        // Step 1: Retain active leaves that were not exited
+        for &leaf in current_active_leaves_snapshot {
+            if !states_exited_this_step
+                .iter()
+                .any(|&exited| self.is_descendant_or_self(leaf, exited).unwrap_or(false))
+                && !next_active_leaves.contains(&leaf)
+                && next_active_leaves.push(leaf).is_err()
+            {
+                return Err(ProcessingError::CapacityExceeded);
+            }
+        }
+        trace!(
+            "[TRACE] PATCH: Retained leaves after exit: {:?}",
+            next_active_leaves
+        );
+
+        // Step 2: Overwrite if all old leaves exited and new ones exist
+        if next_active_leaves.is_empty() && !only_leaves.is_empty() {
+            for &leaf in only_leaves {
+                let resolved_leaf = self.resolve_to_leaf(leaf)?;
+                if !next_active_leaves.contains(&resolved_leaf)
+                    && next_active_leaves.push(resolved_leaf).is_err()
+                {
+                    return Err(ProcessingError::CapacityExceeded);
+                }
+            }
+            trace!(
+                "[TRACE] PATCH: All old leaves exited, overwriting with only_leaves: {:?}",
+                next_active_leaves
+            );
+        } else {
+            // Step 3: Merge new leaves into retained ones
+            for &leaf in only_leaves {
+                let resolved_leaf = self.resolve_to_leaf(leaf)?;
+                if !next_active_leaves.contains(&resolved_leaf)
+                    && next_active_leaves.push(resolved_leaf).is_err()
+                {
+                    return Err(ProcessingError::CapacityExceeded);
+                }
+            }
+            trace!(
+                "[TRACE] PATCH: Added only_leaves to retained, next_active_leaves: {:?}",
+                next_active_leaves
+            );
+        }
+
+        // Step 4: Fallback to entry fallback state if necessary
+        if next_active_leaves.is_empty() && !entry_execution_list_fallback.is_empty() {
+            let (target_state_id, _, _) = entry_execution_list_fallback[0];
+            let fallback_leaf = self.resolve_to_leaf(target_state_id)?;
+            trace!(
+                "[TRACE] Fallback triggered: fallback_leaf = {:?}",
+                fallback_leaf
+            );
+            if next_active_leaves.push(fallback_leaf).is_err() {
+                return Err(ProcessingError::CapacityExceeded);
+            }
+        }
+
+        Ok(next_active_leaves)
+    }
+
     /// Sends an event to the state machine for processing.
     ///
-    /// This is a **TEMPORARY IMPLEMENTATION** and will be significantly refactored
-    /// to support parallel states.
+    /// Orchestrates the transition processing through multiple phases:
+    /// 1. Collect potential transitions
+    /// 2. Arbitrate and de-duplicate transitions
+    /// 3. Apply transitions (exits and actions)  
+    /// 4. Commit entry plans
+    /// 5. Merge and reconcile active leaf states
     ///
     /// # Panics
-    /// Contains `expect` and `panic` calls that might trigger if `MAX_ACTIVE_REGIONS` or
-    /// `M` (formerly `MAX_HIERARCHY_DEPTH`) are too small, or if internal logic errors occur.
-    // TODO: Refactor this function into smaller pieces.
-    #[allow(clippy::too_many_lines)]
+    ///
+    /// This function may panic if:
+    /// - Output stream operations fail when `std` feature is enabled (due to `unwrap()` calls)
     pub fn send_internal(&mut self, event: &EventType) -> SendResult {
         #[cfg(feature = "debug-log")]
         {
@@ -851,7 +1260,6 @@ where
         // Create a single entry_actions_run Vec to be reused throughout send_internal
         let mut entry_actions_run_vec: heapless::Vec<StateType, M> = heapless::Vec::new();
 
-        // Error type is now ProcessingError by default
         // Phase 0: Collect potential transitions (read-only on context for guards)
         let current_active_leaves_snapshot = self.active_leaf_states.clone();
 
@@ -878,335 +1286,49 @@ where
 
         // --- Context and State Commit Logic ---
         // Clone context here before any mutations by actions/entry/exit handlers.
-        let mut temp_context = self.context.clone();
-        let mut overall_transition_occurred = false;
-        let mut states_exited_this_step: heapless::Vec<StateType, MAX_NODES_FOR_COMPUTATION> =
-            heapless::Vec::new();
-        let mut entry_execution_list: heapless::Vec<
-            (StateType, Option<StateType>, StateType),
-            MAX_ACTIVE_REGIONS,
-        > = heapless::Vec::new();
+        let temp_context = self.context.clone();
 
-        // Phase 1: Process exits and actions for all transitions first (use temp_context)
-        for trans_info in &final_transitions_to_execute {
-            let source_state_id = trans_info.transition_from_state_id;
-            let target_state_id = trans_info.target_state_id;
-            let active_leaf_for_this_trans = trans_info.source_leaf_id;
-            overall_transition_occurred = true;
-            trace!(
-                "[TRANSITION] {:?} → {:?} via {:?}",
-                source_state_id, target_state_id, event
-            );
+        // Phase 1: Apply transitions (exits and actions)
+        let (
+            overall_transition_occurred,
+            states_exited_this_step,
+            entry_execution_list,
+            mut temp_context,
+        ) = match self.apply_transitions(
+            &final_transitions_to_execute,
+            &current_active_leaves_snapshot,
+            event,
+            temp_context,
+        ) {
+            Ok(result) => result,
+            Err(e) => return SendResult::Error(e),
+        };
 
-            #[cfg(feature = "std")]
-            {
-                println!(
-                    "[TRACE] Active before: {prev:?}",
-                    prev = self.active_leaf_states
-                );
-                io::stdout().flush().unwrap();
-                println!(
-                    "[TRACE] Processing transition: {source_state_id:?} → {target_state_id:?}"
-                );
-            }
-
-            let is_desc_result =
-                self.is_descendant_or_self(active_leaf_for_this_trans, source_state_id);
-            let is_simple_leaf_self_transition = source_state_id == target_state_id
-                && match is_desc_result {
-                    Ok(is_desc) => is_desc,
-                    Err(e) => return SendResult::Error(e),
-                }
-                && self
-                    .machine_def
-                    .get_state_node(source_state_id)
-                    .is_some_and(|n| !n.is_parallel && n.initial_child.is_none());
-
-            if is_simple_leaf_self_transition {
-                if let Some(node) = self.machine_def.get_state_node(source_state_id) {
-                    if !states_exited_this_step.contains(&source_state_id) {
-                        if let Some(exit_fn) = node.exit_action {
-                            trace!("[EXIT] {:?} (exit_fn = true)", source_state_id);
-                            exit_fn(&mut temp_context, event);
-                        } else {
-                            trace!("[EXIT] {:?} (exit_fn = false)", source_state_id);
-                        }
-                        if states_exited_this_step.push(source_state_id).is_err() {
-                            return SendResult::Error(ProcessingError::CapacityExceeded);
-                        }
-                    }
-                }
-                if let Some(action_fn) = trans_info.transition_ref.action {
-                    trace!(
-                        "[ACTION] Running action for {:?} → {:?} on {:?}",
-                        source_state_id, target_state_id, event
-                    );
-                    action_fn(&mut temp_context, event);
-                }
-                if entry_execution_list
-                    .push((
-                        source_state_id,
-                        Some(source_state_id),
-                        active_leaf_for_this_trans,
-                    ))
-                    .is_err()
-                {
-                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                }
-            } else if source_state_id == target_state_id {
-                let node_being_self_transitioned =
-                    self.machine_def.get_state_node(source_state_id).unwrap();
-                let parent_of_source = node_being_self_transitioned.parent;
-                for &current_active_leaf in &current_active_leaves_snapshot {
-                    // Use original snapshot for active leaves
-                    if self
-                        .is_descendant_or_self(current_active_leaf, source_state_id)
-                        .unwrap_or(false)
-                    {
-                        let states_to_exit_for_this_leaf_branch = match self
-                            .compute_ordered_exit_set(current_active_leaf, parent_of_source)
-                        {
-                            Ok(s) => s,
-                            Err(e) => return SendResult::Error(e),
-                        };
-                        for &state_to_exit_id in &states_to_exit_for_this_leaf_branch {
-                            if !states_exited_this_step.contains(&state_to_exit_id) {
-                                if let Some(node) =
-                                    self.machine_def.get_state_node(state_to_exit_id)
-                                {
-                                    if let Some(exit_fn) = node.exit_action {
-                                        trace!("[EXIT] {:?} (exit_fn = true)", state_to_exit_id);
-                                        exit_fn(&mut temp_context, event);
-                                    } else {
-                                        trace!("[EXIT] {:?} (exit_fn = false)", state_to_exit_id);
-                                    }
-                                }
-                                if states_exited_this_step.push(state_to_exit_id).is_err() {
-                                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some(action_fn) = trans_info.transition_ref.action {
-                    trace!(
-                        "[ACTION] Running action for {:?} → {:?} on {:?}",
-                        source_state_id, target_state_id, event
-                    );
-                    action_fn(&mut temp_context, event);
-                }
-                if entry_execution_list
-                    .push((
-                        source_state_id,
-                        Some(source_state_id),
-                        active_leaf_for_this_trans,
-                    ))
-                    .is_err()
-                {
-                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                }
-            } else {
-                let lca_id = match self.find_lca(active_leaf_for_this_trans, target_state_id) {
-                    Ok(l) => l,
-                    Err(e) => return SendResult::Error(e),
-                };
-                let states_to_exit_for_branch =
-                    match self.compute_ordered_exit_set(active_leaf_for_this_trans, lca_id) {
-                        Ok(s) => s,
-                        Err(e) => return SendResult::Error(e),
-                    };
-                for &state_to_exit_id in &states_to_exit_for_branch {
-                    if !states_exited_this_step.contains(&state_to_exit_id) {
-                        if let Some(node) = self.machine_def.get_state_node(state_to_exit_id) {
-                            if let Some(exit_fn) = node.exit_action {
-                                trace!("[EXIT] {:?} (exit_fn = true)", state_to_exit_id);
-                                exit_fn(&mut temp_context, event);
-                            } else {
-                                trace!("[EXIT] {:?} (exit_fn = false)", state_to_exit_id);
-                            }
-                        }
-                        if states_exited_this_step.push(state_to_exit_id).is_err() {
-                            return SendResult::Error(ProcessingError::CapacityExceeded);
-                        }
-                    }
-                }
-                if source_state_id == target_state_id
-                    && !states_exited_this_step.contains(&source_state_id)
-                {
-                    if let Some(node) = self.machine_def.get_state_node(source_state_id) {
-                        if let Some(exit_fn) = node.exit_action {
-                            trace!("[EXIT] {:?} (exit_fn = true)", source_state_id);
-                            exit_fn(&mut temp_context, event);
-                        } else {
-                            trace!("[EXIT] {:?} (exit_fn = false)", source_state_id);
-                        }
-                    }
-                    if states_exited_this_step.push(source_state_id).is_err() {
-                        return SendResult::Error(ProcessingError::CapacityExceeded);
-                    }
-                }
-                if let Some(action_fn) = trans_info.transition_ref.action {
-                    trace!(
-                        "[ACTION] Running action for {:?} → {:?} on {:?}",
-                        source_state_id, target_state_id, event
-                    );
-                    action_fn(&mut temp_context, event);
-                }
-                let lca_for_entry = lca_id; // always use real LCA so ancestors stay suppressed
-                if entry_execution_list
-                    .push((target_state_id, lca_for_entry, active_leaf_for_this_trans))
-                    .is_err()
-                {
-                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                }
-            }
-        }
         #[cfg(feature = "std")]
         dbg!(&states_exited_this_step);
 
-        // Phase 2: Update active leaf states based on global exits (use current_active_leaves_snapshot)
-        let mut retained_leaves = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
-        if overall_transition_occurred {
-            for &leaf in &current_active_leaves_snapshot {
-                // Strict check: remove leaves that are self or descendant of any exited state
-                let mut should_remove = false;
-                for &exited in &states_exited_this_step {
-                    match self.is_descendant_or_self(leaf, exited) {
-                        Ok(is_descendant) => {
-                            if is_descendant {
-                                should_remove = true;
-                                break;
-                            }
-                        }
-                        Err(processing_error) => return SendResult::Error(processing_error),
-                    }
-                }
-                if !should_remove && retained_leaves.push(leaf).is_err() {
-                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                }
-            }
-            #[cfg(feature = "std")]
-            dbg!(&states_exited_this_step, &retained_leaves);
-            trace!("🧬 Retained leaves before merge: {:?}", retained_leaves);
-        }
+        // Phase 2: Commit entry plan
+        let only_leaves = match self.commit_entry_plan(
+            &entry_execution_list,
+            &mut entry_actions_run_vec,
+            event,
+            &mut temp_context,
+        ) {
+            Ok(leaves) => leaves,
+            Err(e) => return SendResult::Error(e),
+        };
 
-        // Phase 3: Process entries and add new leaves (use temp_context)
-        let mut new_leaves = heapless::Vec::<_, MAX_ACTIVE_REGIONS>::new();
-        for &(target_id, lca_id, source_id) in &entry_execution_list {
-            trace!(
-                "[TRACE] ENTRY EXEC: target_state_id = {:?}, lca_id = {:?}, ancestry = {:?}",
-                target_id,
-                lca_id,
-                self.get_ancestry(target_id)
-            );
-            match self.execute_entry_actions_from_lca_with_context(
-                target_id,
-                lca_id,
-                source_id, // Use source_id from the tuple
-                event,
-                &mut Scratch::<StateType, M> {
-                    entry_actions_run: &mut entry_actions_run_vec, // Pass the existing vec
-                },
-                &mut temp_context,
-            ) {
-                Ok(leaves_from_entry) => {
-                    for new_leaf in leaves_from_entry {
-                        if new_leaves.push(new_leaf).is_err() {
-                            return SendResult::Error(ProcessingError::CapacityExceeded);
-                        }
-                    }
-                }
-                Err(processing_error) => return SendResult::Error(processing_error),
-            }
-        }
-
-        // Filter: Only keep true leaves (not parents of any other in the set)
-        let mut only_leaves = heapless::Vec::<StateType, MAX_ACTIVE_REGIONS>::new();
-        'outer: for &candidate in &new_leaves {
-            for &other in &new_leaves {
-                if candidate != other && self.machine_def.get_parent_of(other) == Some(candidate) {
-                    continue 'outer; // candidate is a parent, not a leaf
-                }
-            }
-            if only_leaves.push(candidate).is_err() {
-                return SendResult::Error(ProcessingError::CapacityExceeded);
-            }
-        }
-
-        // --- Refactored atomic update of active_leaf_states ---
+        // Phase 3: Merge and reconcile active leaf states
         let entry_execution_list_fallback = entry_execution_list.clone();
-        let mut next_active_leaves = heapless::Vec::<StateType, MAX_ACTIVE_REGIONS>::new();
-
-        // --- Parallel-safe merge logic: retain unaffected, add new, fallback if empty ---
-        next_active_leaves.clear();
-
-        // Step 1: Retain active leaves that were not exited
-        for &leaf in &current_active_leaves_snapshot {
-            if !states_exited_this_step
-                .iter()
-                .any(|&exited| self.is_descendant_or_self(leaf, exited).unwrap_or(false))
-                && !next_active_leaves.contains(&leaf)
-                && next_active_leaves.push(leaf).is_err()
-            {
-                return SendResult::Error(ProcessingError::CapacityExceeded);
-            }
-        }
-        trace!(
-            "[TRACE] PATCH: Retained leaves after exit: {:?}",
-            next_active_leaves
-        );
-
-        // Step 2: Overwrite if all old leaves exited and new ones exist
-        if next_active_leaves.is_empty() && !only_leaves.is_empty() {
-            for &leaf in &only_leaves {
-                let resolved_leaf = match self.resolve_to_leaf(leaf) {
-                    Ok(leaf) => leaf,
-                    Err(e) => return SendResult::Error(e),
-                };
-                if !next_active_leaves.contains(&resolved_leaf)
-                    && next_active_leaves.push(resolved_leaf).is_err()
-                {
-                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                }
-            }
-            trace!(
-                "[TRACE] PATCH: All old leaves exited, overwriting with only_leaves: {:?}",
-                next_active_leaves
-            );
-        } else {
-            // Step 3: Merge new leaves into retained ones
-            for &leaf in &only_leaves {
-                let resolved_leaf = match self.resolve_to_leaf(leaf) {
-                    Ok(leaf) => leaf,
-                    Err(e) => return SendResult::Error(e),
-                };
-                if !next_active_leaves.contains(&resolved_leaf)
-                    && next_active_leaves.push(resolved_leaf).is_err()
-                {
-                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                }
-            }
-            trace!(
-                "[TRACE] PATCH: Added only_leaves to retained, next_active_leaves: {:?}",
-                next_active_leaves
-            );
-        }
-
-        // Step 4: Fallback to entry fallback state if necessary
-        if next_active_leaves.is_empty() && !entry_execution_list_fallback.is_empty() {
-            let (target_state_id, _, _) = entry_execution_list_fallback[0];
-            let fallback_leaf = match self.resolve_to_leaf(target_state_id) {
-                Ok(leaf) => leaf,
-                Err(e) => return SendResult::Error(e),
-            };
-            trace!(
-                "[TRACE] Fallback triggered for event {:?}: fallback_leaf = {:?}",
-                event, fallback_leaf
-            );
-            if next_active_leaves.push(fallback_leaf).is_err() {
-                return SendResult::Error(ProcessingError::CapacityExceeded);
-            }
-        }
+        let next_active_leaves = match self.merge_active_sets(
+            &current_active_leaves_snapshot,
+            &states_exited_this_step,
+            &only_leaves,
+            &entry_execution_list_fallback,
+        ) {
+            Ok(leaves) => leaves,
+            Err(e) => return SendResult::Error(e),
+        };
 
         trace!(
             "[TRACE] FINAL next_active_leaves to assign: {:?}",
@@ -1220,15 +1342,13 @@ where
             self.active_leaf_states
         );
 
-        // ... rest of send_internal ...
-        // Return SendResult as before
+        // Return SendResult based on whether transitions occurred
         if overall_transition_occurred {
             self.context = temp_context;
             SendResult::Transitioned
         } else {
             SendResult::NoMatch
         }
-        // ... existing code ...
     }
 
     // Cloned and modified version of execute_entry_actions_from_lca to accept context
