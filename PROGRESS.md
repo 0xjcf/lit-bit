@@ -9,6 +9,17 @@ _Add new sessions below this line._
 ## 2025-01-27 · Session End
 * _Author_: @claude-4-sonnet (via @0xjcf)
 * **Phase**: Code Review & Refactoring  
+* **Work**: Fixed futures crate dependency to maintain no_std compatibility
+  - **Issue**: futures crate in `lit-bit-core/Cargo.toml` included without disabling default features, enabling std and conflicting with no_std builds
+  - **Solution**: Added `default-features = false` and `features = ["alloc"]` to futures dependency to maintain no_std compatibility while providing necessary async functionality
+  - **Implementation**: Modified futures dependency configuration to use only alloc feature by default, with std feature properly enabled via the std feature flag
+  - **Impact**: Maintains no_std compatibility for embedded targets while preserving async functionality
+* **Testing**: All 75 tests passing, no_std build success (`cargo build --target thumbv6m-none-eabi --no-default-features`), async feature works correctly, linter clean
+* **Next**: Continue with remaining code review items
+
+## 2025-01-27 · Session End
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* **Phase**: Code Review & Refactoring  
 * **Work**: Fixed unqualified pattern compilation issue in generated matcher functions
   - **Issue**: Generated matcher functions in `lit-bit-macro/src/code_generator.rs` used unqualified patterns like `Configure { .. }` which fail to compile if pattern type not in scope
   - **Solution**: Applied existing `pattern_needs_prefix_comprehensive` logic to conditionally qualify patterns with event type path (`#event_type_path :: #pattern` when needed)
