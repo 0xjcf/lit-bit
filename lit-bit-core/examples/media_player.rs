@@ -154,7 +154,7 @@ statechart! {
         entry: entry_stopped;
         exit: exit_stopped;
         on MediaPlayerEvent::Play [guard is_track_loaded] => Playing [action do_play];
-        on LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track];
+        on MediaPlayerEvent::LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track];
     }
 
     state Loading {
