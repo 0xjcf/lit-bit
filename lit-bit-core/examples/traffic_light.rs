@@ -177,7 +177,8 @@ mod riscv_logic {
         let initial_event = TrafficLightEvent::TimerElapsed; // Initial event
         // Use the type alias
         let mut runtime: TrafficLightRuntime =
-            Runtime::new(&TRAFFIC_LIGHT_MACHINE_DEF, initial_context, &initial_event);
+            Runtime::new(&TRAFFIC_LIGHT_MACHINE_DEF, initial_context, &initial_event)
+                .expect("Failed to create traffic light state machine");
 
         unsafe {
             uart_print_str("UART: SM created.\n");

@@ -20,6 +20,7 @@ It aims to provide a similar developer experience to XState but within the Rust 
     *   States, events, transitions, entry/exit actions, initial states.
     *   Hierarchical states.
     *   Parallel states (supported).
+    *   Comprehensive event type support (both Copy and non-Copy types like `String`, `Vec`, custom structs).
     *   (Planned: History states, enhanced guards, advanced context/data management).
 *   **Compile-Time Safety:** Leverage Rust's type system to catch errors at compile time.
 *   **Minimal Footprint:** Designed to be lightweight in terms of code size and RAM usage for embedded targets.

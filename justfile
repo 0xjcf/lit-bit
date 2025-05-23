@@ -21,6 +21,9 @@ test-macro:
   @echo "🔬 Testing procedural macro crate (lit-bit-macro)..."
   @cargo test -p lit-bit-macro
 
+test-summary:
+  @cargo test 2>&1 | grep "test result"
+
 # --- Lint Tasks ---
 # Lint the entire workspace or a specific part (app parameter currently informational for workspace-wide script)
 # Usage: just lint [fix] OR just lint <app_name> [fix]

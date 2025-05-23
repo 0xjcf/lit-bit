@@ -148,7 +148,8 @@ fn main() {
     let mut machine = WrapperMachine::new(
         SystemContext::default(),
         &WrappedEvent::Start, // Initial event
-    );
+    )
+    .expect("Failed to create wrapper machine");
 
     println!("Initial state: {:?}", machine.state());
     println!("Initial context: {:?}\n", machine.context());

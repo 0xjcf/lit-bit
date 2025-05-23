@@ -34,6 +34,7 @@ pub use runtime::EntryExitActionFn;
 pub use runtime::GuardFn;
 pub use runtime::MAX_ACTIVE_REGIONS;
 pub use runtime::MachineDefinition; // If users need to construct this manually
+pub use runtime::ProcessingError; // Re-export ProcessingError for error handling
 pub use runtime::Runtime; // If users need to construct this manually
 pub use runtime::SendResult; // Re-export SendResult for public use
 pub use runtime::StateNode; // If users need to construct this manually
@@ -57,7 +58,7 @@ pub trait StateMachine {
 
     type Context: Clone + 'static;
 
-    fn send(&mut self, event: &Self::Event) -> crate::SendResult;
+    fn send(&mut self, event: &Self::Event) -> SendResult;
     fn state(&self) -> heapless::Vec<Self::State, MAX_ACTIVE_REGIONS>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;

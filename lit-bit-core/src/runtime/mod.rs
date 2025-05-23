@@ -398,17 +398,18 @@ where
 
     /// Creates a new runtime instance for the given machine definition and initial context.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// This function may panic under the following conditions:
+    /// This function returns an error under the following conditions:
     /// - If the `initial_leaf_state` specified in the `MachineDefinition` is not found in the `STATES` array.
     /// - If `MAX_ACTIVE_REGIONS` is exceeded while trying to push initial leaf states (e.g. for a parallel initial state).
-    /// - If `M` (formerly `MAX_HIERARCHY_DEPTH`) is exceeded during internal path calculations (via `expect` calls).
+    /// - If `M` (max hierarchy depth) is exceeded during internal path calculations.
+    /// - If entry logic fails due to cycles, state not found, or capacity exceeded.
     pub fn new(
         machine_def: &'static MachineDefinition<StateType, EventType, ContextType>,
         initial_context: ContextType,
         initial_event: &EventType,
-    ) -> Self {
+    ) -> Result<Self, ProcessingError> {
         let mut mutable_context = initial_context;
         let mut active_states_vec = heapless::Vec::new();
         let mut visited_for_initial_entry: heapless::Vec<StateType, M> = heapless::Vec::new();
@@ -417,7 +418,7 @@ where
         let top_level_initial_state_id = machine_def.initial_leaf_state;
 
         // Pass M explicitly if needed, or let it be inferred from the type of visited_for_initial_entry
-        if let Err(entry_error) = enter_state_recursive_logic::<_, _, _, M>(
+        enter_state_recursive_logic::<_, _, _, M>(
             machine_def,
             &mut mutable_context,
             top_level_initial_state_id,
@@ -427,20 +428,23 @@ where
                 entry_actions_run: &mut entry_actions_run_vec,
             },
             initial_event,
-        ) {
-            panic!("Failed to initialize state machine due to entry error: {entry_error:?}");
+        )
+        .map_err(|entry_error| match entry_error.kind {
+            EntryErrorKind::CycleDetected | EntryErrorKind::StateNotFound => {
+                ProcessingError::EntryLogicFailure
+            }
+            EntryErrorKind::CapacityExceeded => ProcessingError::CapacityExceeded,
+        })?;
+
+        if active_states_vec.is_empty() {
+            return Err(ProcessingError::EntryLogicFailure);
         }
 
-        assert!(
-            !active_states_vec.is_empty(),
-            "Initial state ID specified in MachineDefinition not found in STATES array, or initial state setup resulted in no active states (after successful entry logic completion implies this should not happen)."
-        );
-
-        Runtime {
+        Ok(Runtime {
             machine_def, // Assign the reference
             active_leaf_states: active_states_vec,
             context: mutable_context,
-        }
+        })
     }
 
     pub fn state(&self) -> heapless::Vec<StateType, MAX_ACTIVE_REGIONS> {
@@ -1132,7 +1136,10 @@ where
         // Step 2: Overwrite if all old leaves exited and new ones exist
         if next_active_leaves.is_empty() && !only_leaves.is_empty() {
             for &leaf in &only_leaves {
-                let resolved_leaf = self.resolve_to_leaf(leaf);
+                let resolved_leaf = match self.resolve_to_leaf(leaf) {
+                    Ok(leaf) => leaf,
+                    Err(e) => return SendResult::Error(e),
+                };
                 if !next_active_leaves.contains(&resolved_leaf)
                     && next_active_leaves.push(resolved_leaf).is_err()
                 {
@@ -1146,7 +1153,10 @@ where
         } else {
             // Step 3: Merge new leaves into retained ones
             for &leaf in &only_leaves {
-                let resolved_leaf = self.resolve_to_leaf(leaf);
+                let resolved_leaf = match self.resolve_to_leaf(leaf) {
+                    Ok(leaf) => leaf,
+                    Err(e) => return SendResult::Error(e),
+                };
                 if !next_active_leaves.contains(&resolved_leaf)
                     && next_active_leaves.push(resolved_leaf).is_err()
                 {
@@ -1162,7 +1172,10 @@ where
         // Step 4: Fallback to entry fallback state if necessary
         if next_active_leaves.is_empty() && !entry_execution_list_fallback.is_empty() {
             let (target_state_id, _, _) = entry_execution_list_fallback[0];
-            let fallback_leaf = self.resolve_to_leaf(target_state_id);
+            let fallback_leaf = match self.resolve_to_leaf(target_state_id) {
+                Ok(leaf) => leaf,
+                Err(e) => return SendResult::Error(e),
+            };
             trace!(
                 "[TRACE] Fallback triggered for event {:?}: fallback_leaf = {:?}",
                 event, fallback_leaf
@@ -1358,15 +1371,23 @@ where
     }
 
     /// Resolves a state to its true leaf by following `initial_child` recursively.
-    fn resolve_to_leaf(&self, mut state: StateType) -> StateType {
+    /// Returns an error if a cycle is detected in the `initial_child` references.
+    fn resolve_to_leaf(&self, mut state: StateType) -> Result<StateType, ProcessingError> {
+        let mut depth = 0;
+
         while let Some(child) = self
             .machine_def
             .get_state_node(state)
             .and_then(|n| n.initial_child)
         {
+            depth += 1;
+            if depth > M {
+                // Cycle detected or hierarchy too deep
+                return Err(ProcessingError::EntryLogicFailure);
+            }
             state = child;
         }
-        state
+        Ok(state)
     }
 
     // Add this helper for ancestry tracing
@@ -2083,7 +2104,8 @@ mod tests {
                 &PARALLEL_MACHINE_DEF,
                 initial_context,
                 &initial_event_for_test,
-            );
+            )
+            .expect("Failed to create runtime for test");
 
         let active_states = runtime.state();
         let mut sorted_active_states = active_states
@@ -2120,7 +2142,8 @@ mod tests {
                 &PARALLEL_MACHINE_DEF,
                 initial_context,
                 &initial_event_for_test,
-            );
+            )
+            .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let event_processed = runtime.send(&ParallelTestEvent::E1);
@@ -2181,7 +2204,8 @@ mod tests {
                 &PARALLEL_MACHINE_DEF,
                 initial_context,
                 &ParallelTestEvent::EventRegion1Only,
-            );
+            )
+            .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let event_processed = runtime.send(&ParallelTestEvent::EventRegion1Only);
@@ -2227,7 +2251,8 @@ mod tests {
                 &PARALLEL_MACHINE_DEF,
                 initial_context,
                 &ParallelTestEvent::EventRegion1Self,
-            );
+            )
+            .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let event_processed = runtime.send(&ParallelTestEvent::EventRegion1Self);
@@ -2270,7 +2295,8 @@ mod tests {
                 &PARALLEL_MACHINE_DEF,
                 initial_context,
                 &ParallelTestEvent::EventParallelSelf,
-            );
+            )
+            .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let send_result = runtime.send(&ParallelTestEvent::EventParallelSelf);

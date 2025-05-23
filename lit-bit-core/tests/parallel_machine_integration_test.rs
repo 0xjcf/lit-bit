@@ -170,7 +170,8 @@ mod parallel_integration_tests {
     #[test]
     fn test_parallel_machine_initialization() {
         let machine =
-            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
+            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel machine");
         let active_states = machine.state();
 
         // Directly use the StateId type from the generated machine
@@ -204,7 +205,8 @@ mod parallel_integration_tests {
     #[test]
     fn test_integration_parallel_independent_region_events() {
         let mut machine =
-            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
+            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel machine");
         machine.context_mut().log.clear();
 
         let transitioned = machine.send(&TestEvent::EvGlobal);
@@ -258,7 +260,8 @@ mod parallel_integration_tests {
     #[test]
     fn test_integration_parallel_self_transition_on_parallel_state() {
         let mut machine =
-            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
+            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel machine");
         // Initial state: ParallelState with R1A and R2X active.
         // Initial log: EnterP, EnterR1, EnterR1A, EnterR2, EnterR2X
         machine.context_mut().log.clear();
@@ -316,7 +319,8 @@ mod parallel_integration_tests {
     #[test]
     fn test_integration_transition_from_parallel_to_outer() {
         let mut machine =
-            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
+            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel machine");
         machine.context_mut().log.clear();
 
         let transitioned = machine.send(&TestEvent::EvToOuter);
@@ -362,7 +366,8 @@ mod parallel_integration_tests {
     #[test]
     fn test_integration_transition_from_outer_to_parallel() {
         let mut machine =
-            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
+            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel machine");
         // Initial state is ParallelState. Transition to OuterState first.
         let _ = machine.send(&TestEvent::EvToOuter); // Pass by reference
 
@@ -427,7 +432,8 @@ mod parallel_integration_tests {
     #[test]
     fn test_integration_event_targets_specific_region() {
         let mut machine =
-            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
+            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel machine");
         // Initial state: ParallelState with R1A and R2X active.
         machine.context_mut().log.clear();
 
@@ -469,7 +475,8 @@ mod parallel_integration_tests {
     #[test]
     fn test_event_on_region1_self_transition() {
         let mut machine =
-            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default());
+            IntegrationParallelMachine::new(TestLogContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel machine");
         machine.context_mut().log.clear();
 
         let event_to_send = TestEvent::EvR1;

@@ -230,7 +230,24 @@ pub enum MediaPlayerEvent {
     VolumeUp,
     VolumeDown,
 }
+
+// Event enums support both Copy and non-Copy types
+#[derive(Debug, Clone, PartialEq)]
+#[statechart_event]
+pub enum DataEvent {
+    Simple,                           // Copy variant
+    WithString(String),               // Non-Copy owned data
+    WithVec(Vec<u8>),                // Non-Copy owned data
+    WithCustomStruct { data: MyData }, // Non-Copy struct with owned fields
+}
 ```
+
+**Event Type Compatibility:**
+
+The library supports comprehensive event type compatibility:
+- **Copy types**: Simple enums, primitive data types, small structs that implement `Copy`
+- **Non-Copy types**: Enums with owned data like `String`, `Vec<T>`, custom structs with owned fields
+- **Mixed variants**: Event enums can contain both Copy and non-Copy variants in the same enum
 
 **Why is this attribute required?**
 
@@ -240,6 +257,7 @@ Rust's macro system operates on tokens and cannot introspect type information fr
 2. **Support pattern matching** in transition definitions (e.g., `on LoadTrack { path: _ } => ...`)
 3. **Enable exhaustive matching** for compile-time verification of handled events
 4. **Work with external enums** defined in other modules or crates
+5. **Handle both Copy and non-Copy event types** uniformly through reference-based matching
 
 This approach aligns with established Rust patterns used by popular crates like:
 - **Strum**: Requires `#[derive(EnumIter)]` for variant iteration

@@ -95,7 +95,8 @@ pub mod basic_machine_integration_test {
 
     #[test]
     fn test_basic_state_machine_transitions_and_actions() {
-        let mut machine = TestMachine::new(TestContext::default(), &TestEvent::default());
+        let mut machine = TestMachine::new(TestContext::default(), &TestEvent::default())
+            .expect("Failed to create test machine");
         assert_eq!(machine.state().as_slice(), &[TestMachineStateId::State1]);
         let expected_log_init: [String<ACTION_STRING_CAPACITY>; 1] = [hstr!("entry_s1")];
         assert_eq!(machine.context().action_log.as_slice(), &expected_log_init);
@@ -275,7 +276,8 @@ mod parallel_initial_state_test {
     #[test]
     fn test_initial_parallel_state_activation() {
         let machine =
-            ParallelInitialMachine::new(ParallelInitContext::default(), &TestEvent::default());
+            ParallelInitialMachine::new(ParallelInitContext::default(), &TestEvent::default())
+                .expect("Failed to create parallel initial machine");
         let active_states = machine.state();
 
         assert_eq!(
@@ -371,7 +373,8 @@ mod wildcard_pattern_test {
 
     #[test]
     fn test_wildcard_pattern_matching() {
-        let mut machine = WildcardMachine::new(WildcardContext::default(), &WildcardEvent::EventA);
+        let mut machine = WildcardMachine::new(WildcardContext::default(), &WildcardEvent::EventA)
+            .expect("Failed to create wildcard machine");
 
         // Test specific match takes precedence
         machine.context_mut().log.clear();
@@ -492,8 +495,10 @@ mod multiple_machines_test {
     #[test]
     fn test_multiple_machines_no_collision() {
         // Create both machines in the same scope
-        let mut machine_a = MachineA::new(ContextA::default(), &EventA::Go);
-        let mut machine_b = MachineB::new(ContextB::default(), &EventB::Start);
+        let mut machine_a =
+            MachineA::new(ContextA::default(), &EventA::Go).expect("Failed to create machine A");
+        let mut machine_b =
+            MachineB::new(ContextB::default(), &EventB::Start).expect("Failed to create machine B");
 
         // Verify initial states
         assert_eq!(machine_a.state().as_slice(), &[MachineAStateId::StateA1]);
@@ -544,7 +549,8 @@ mod public_api_test {
 
     #[test]
     fn test_uses_public_api() {
-        let mut machine = PublicApiMachine::new(PublicApiContext::default(), &PublicApiEvent::Test);
+        let mut machine = PublicApiMachine::new(PublicApiContext::default(), &PublicApiEvent::Test)
+            .expect("Failed to create public API machine");
 
         // This should compile and work correctly using the public API
         let result = machine.send(&PublicApiEvent::Test);

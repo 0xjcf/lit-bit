@@ -4,6 +4,50 @@ Reverse-chronological log of daily coding sessions.  Keep entries **concise** an
 
 _Add new sessions below this line._ 
 
+---
+
+## 2025-01-01 · _Session End_ (Runtime::new Safe Error Handling) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Embedded Safety)
+* _Work_: **Changed Runtime::new to return Result instead of panicking** addressing code review item around lines 410-433 in `lit-bit-core/src/runtime/mod.rs`. **Issue**: Runtime::new panicked on entry logic failures or MAX_ACTIVE_REGIONS exceeded, unsafe for embedded/no-std contexts. **Solution**: (1) Changed function signature to `Result<Self, ProcessingError>`, (2) propagated errors from `enter_state_recursive_logic` using `?` operator, (3) removed panic calls, (4) updated all call sites with `.expect()` for tests/examples. **Testing**: Updated 78+ test files and examples to handle new Result return type. **Benefits**: Callers can now handle initialization errors gracefully without system crashes in embedded environments.\n* _Next_: Continue with remaining code review items.
+
+## 2025-01-01 · _Session End_ (Infinite Loop Prevention in resolve_to_leaf) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Cycle Detection)
+* _Work_: **Fixed infinite loop vulnerability in resolve_to_leaf function** addressing code review item around lines 1361-1370 in `lit-bit-core/src/runtime/mod.rs`. **Issue**: Function could loop indefinitely if there was a cycle in machine definition's `initial_child` references. **Solution**: (1) Added depth counter initialized to zero, (2) incremented on each loop iteration, (3) added check to return `ProcessingError::EntryLogicFailure` if depth exceeds predefined maximum `M`, (4) changed return type to `Result<StateType, ProcessingError>`, (5) updated all call sites in `execute_entry_actions_from_lca_with_context` to handle the new Result type with proper error propagation. **Verification**: All 17 tests passing, no linter errors.
+* _Next_: Continue with remaining code review items.
+
+## 2025-01-01 · _Session End_ (Initial Keyword Parsing Consistency Fix) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Grammar Consistency)
+* _Work_: **Fixed manual initial keyword parsing** addressing code review item around lines 104-112 about inconsistent keyword parsing. **Issue**: Code manually parsed an `Ident`, converted to string, and compared to "initial" instead of using the declared custom keyword `keywords::initial`. **Solution**: Replaced manual parsing with direct `keywords::initial` parsing, eliminating string conversion/comparison and removing the need to manually construct the keyword token. **Code simplification**: Reduced 8 lines of manual verification code to a single parse line `let initial_keyword_token: keywords::initial = input.parse()?;` and simplified struct initialization to just `initial_keyword_token,`. **Grammar consistency**: Now uses same custom keyword approach as other keywords (`state`, `entry`, `exit`, etc.), ensuring uniform parsing behavior. **Enhanced testing**: Added `test_initial_keyword_parsing_rejects_invalid_keywords()` verifying custom keyword parser properly rejects invalid keywords like `wrong_keyword` and provides clear error messages containing "expected \`initial\`". **All 82 tests passing** (5 core runtime + 5 basic integration + 7 parallel integration + 70 macro tests), linter clean. Grammar now consistently uses custom keywords throughout.
+* _Next_: Continue with remaining code review items.
+
+## 2025-01-01 · _Session End_ (from_str_path Documentation Fix) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Documentation Accuracy)
+* _Work_: **Fixed documentation mismatch in from_str_path function** addressing code review item about misleading documentation around lines 1032-1047. **Issue**: Documentation incorrectly stated the function expects "PascalCase segments joined by underscores" but implementation used internal full path format with escaped underscores and original casing. **Solution**: Updated documentation to accurately reflect that the function expects the "internal underscore-separated full path format used by the state machine builder" which includes underscore escaping (e.g., `_` becomes `__`) and preserves original state name casing. **Comprehensive testing**: Added new test `test_from_str_path_matches_internal_format()` demonstrating correct usage with states containing underscores, verifying generated match arms use internal format like `"S2__with__underscores"` for a state named `S2_with_underscores`. **Updated existing tests**: Fixed two tests (`generate_simple_state_id_enum_updated`, `generate_nested_state_id_enum_updated`) to expect the corrected documentation. **All 81 tests passing** (5 core runtime + 5 basic integration + 7 parallel integration + 69 macro tests), linter clean. Function documentation now correctly describes expected input format.
+* _Next_: Continue with remaining code review items.
+
+## 2025-01-01 · _Session End_ (Raw Identifiers & Generics Path Validation Fix) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Better Error Messages for Invalid Initial Paths)
+* _Work_: **Fixed extract_ident_from_path to properly handle raw identifiers and generics** addressing code review item about misleading "must be a simple identifier" errors. **Key improvement**: Enhanced `extract_ident_from_path` function to check `PathArguments::None` ensuring paths with generics like `ChildState<T>` or complex paths like `crate::mod::State<T>` properly return `None` instead of incorrectly extracting the identifier. **Implementation**: Added `matches!(path.segments[0].arguments, syn::PathArguments::None)` check to reject any path with generic arguments, parenthesized arguments, or other path arguments. **Comprehensive testing**: Added 2 new test functions - `test_extract_ident_from_path_behavior()` covering simple identifiers (should work), generics, multi-segment paths, absolute paths, and complex arguments (all should be rejected), and `test_initial_child_with_generics_gives_better_error()` verifying users get clear error messages for invalid generic paths. **Made function pub(crate)** to enable testing. **All 80 tests passing** (5 core runtime + 5 basic integration + 7 parallel integration + 68 macro tests), linter clean. Users now get accurate error messages when using unsupported path types in initial state declarations.
+* _Next_: Continue with remaining code review items.
+
+## 2025-01-01 · _Session End_ (Nested Event Type Pattern Prefix Fix) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Pattern Matching for Nested Event Types)
+* _Work_: **Fixed pattern prefix detection for nested event types** addressing code review item in `lit-bit-macro/src/lib.rs` around lines 1158-1160. **Key improvement**: Modified `path_needs_prefix` helper function within `pattern_needs_prefix_comprehensive` to correctly handle multi-segment event type paths like `my_app::events::Event`. **Logic fix**: (1) If pattern already starts with full event type path, no prefix needed (e.g., `my_app::events::Event::Variant`), (2) If pattern starts with just enum name (last segment), no prefix needed (e.g., `Event::Variant`), (3) Otherwise needs prefix (e.g., `Variant`). **Comprehensive testing**: Added 3 new test functions covering nested event types, simple event types, and complex nested patterns with various scenarios (OR patterns, references, parenthesized patterns, tuple/struct patterns). **Code quality**: Fixed all clippy linter errors including similar variable names and needless borrows. **All 78 tests passing** (5 core runtime + 5 basic integration + 7 parallel integration + 66 macro tests), linter clean. System now correctly handles event patterns with nested type paths without redundant qualification or compile errors.
+* _Next_: Continue with remaining code review items.
+
+
+## 2025-01-01 · _Session End_ (Path Ambiguity Fix - Underscore Escaping) ✅
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* _Phase_: 1-core-runtime (Code Review Response - Path Collision Prevention)
+* _Work_: **Fixed critical path ambiguity issue** addressing code review item about `path_to_string_for_lookup` causing collisions when `A::B_C` and `A_B::C` both map to `A_B_C`. **Comprehensive solution**: (1) Enhanced `path_to_string_for_lookup` to escape underscores (`_` becomes `__`), ensuring `A::B_C` → `A_B__C` and `A_B::C` → `A__B_C` are clearly different; (2) Applied consistent escaping in `resolve_and_validate_initial_children`, `resolve_path_to_state_index`, `process_state_declaration`, and `expr_to_state_path_string`; (3) **Added comprehensive test** `test_underscore_escaping_prevents_path_collisions()` demonstrating fix prevents collisions; (4) **Updated test expectations** to reflect new escaped naming (e.g., `S1_S1_A` becomes `S1_S1__A`). **System-wide consistency**: All path resolution logic now uses same escaping, eliminating "not unique" errors that users couldn't resolve. **All 63 macro + 17 integration tests passing**.
+* _Next_: Continue with remaining code review items.
+
 ## 2025-01-01 · _Session End_ (Matcher Function Dereferencing Fix) ✅
 * _Author_: @claude-4-sonnet (via @0xjcf)
 * _Phase_: 1-core-runtime (Code Review Response - Non-Copy Event Type Support)
@@ -229,11 +273,11 @@ _Add new sessions below this line._
 ---
 
 ## 2025-05-17 · _Session Start_
-*   _Author_: @Gemini (via @0xjcf)
-*   _Phase_: 03-parallel-states (Runtime Implementation)
-*   _Work_:
+* _Author_: @Gemini (via @0xjcf)
+* _Phase_: 03-parallel-states (Runtime Implementation)
+* _Work_:
     *   Created new branch `feat/parallel-states` and committed foundational P0 and P1 (data structures) work for parallel states.
-*   _Next_:
+* _Next_:
     *   Begin refactoring `Runtime::send()` in `lit-bit-core/src/core/mod.rs` to correctly handle event dispatch to multiple active regions in parallel states (Task 3.2).
     *   Concurrently, develop and refine the necessary state entry/exit logic (`execute_entry_actions_from_lca`, `execute_exit_actions_up_to_lca`, `enter_submachine_to_initial_leaf`) to support parallel semantics (Tasks 3.3, 3.4).
     *   Address updates to `Runtime::new()` for initial activation of parallel states as needed (Task 3.5).

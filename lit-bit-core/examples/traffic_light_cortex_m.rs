@@ -106,7 +106,8 @@ mod cortex_m_logic {
             &BLINKY_MACHINE_DEF,
             initial_context,
             &initial_event,
-        );
+        )
+        .expect("Failed to create blinky state machine");
 
         match runtime.send(&LightEvent::Toggle) {
             SendResult::Transitioned => {

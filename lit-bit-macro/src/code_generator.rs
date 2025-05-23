@@ -33,10 +33,9 @@ pub(crate) fn generate_machine_struct_and_impl(
             >,
         }
         impl #machine_name {
-            pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Self {
-                Self {
-                    runtime: lit_bit_core::Runtime::new(&#machine_definition_const_ident, context, initial_event),
-                }
+            pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Result<Self, lit_bit_core::ProcessingError> {
+                let runtime = lit_bit_core::Runtime::new(&#machine_definition_const_ident, context, initial_event)?;
+                Ok(Self { runtime })
             }
             #inherent_send_method_body
             pub fn context(&self) -> &#context_type_path {

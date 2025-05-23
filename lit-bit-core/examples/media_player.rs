@@ -178,7 +178,8 @@ fn main() {
         current_track: None, // Some("initial_track.mp3".to_string()),
         volume: 50,
     };
-    let mut player = MediaPlayer::new(player_context.clone(), &MediaPlayerEvent::default());
+    let mut player = MediaPlayer::new(player_context.clone(), &MediaPlayerEvent::default())
+        .expect("Failed to create media player");
 
     println!("Initial state: {:?}", player.state());
     println!("Initial context: {:?}", player.context());

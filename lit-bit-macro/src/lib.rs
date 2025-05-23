@@ -101,16 +101,7 @@ impl Parse for StateChartInputAst {
         let event_type: Path = input.parse()?;
         let comma3: Token![,] = input.parse()?;
 
-        // Try parsing as Ident and verify
-        let initial_ident: Ident = input.parse()?;
-        let ident_str = initial_ident.to_string();
-        if ident_str != "initial" {
-            return Err(syn::Error::new(
-                initial_ident.span(),
-                format!("Expected 'initial' keyword, got '{ident_str}'"),
-            ));
-        }
-        let initial_keyword_token_span = initial_ident.span();
+        let initial_keyword_token: keywords::initial = input.parse()?;
 
         input.parse::<Token![:]>()?;
         let initial_target_expression: Path = input.parse()?;
@@ -140,9 +131,7 @@ impl Parse for StateChartInputAst {
             event_keyword_token,
             event_type,
             comma3,
-            initial_keyword_token: keywords::initial {
-                span: initial_keyword_token_span,
-            },
+            initial_keyword_token,
             initial_target_expression,
             comma4,
             top_level_states,
@@ -506,11 +495,15 @@ pub(crate) mod intermediate_tree {
             Ok(())
         }
 
-        fn extract_ident_from_path(path: &'ast Path) -> Option<&'ast Ident> {
-            if path.leading_colon.is_none() && path.segments.len() == 1 {
-                return Some(&path.segments[0].ident);
+        pub(crate) fn extract_ident_from_path(path: &'ast Path) -> Option<&'ast Ident> {
+            if path.leading_colon.is_none()
+                && path.segments.len() == 1
+                && matches!(path.segments[0].arguments, syn::PathArguments::None)
+            {
+                Some(&path.segments[0].ident)
+            } else {
+                None
             }
-            None
         }
 
         fn resolve_and_validate_initial_children(&mut self) -> SynResult<()> {
@@ -581,8 +574,11 @@ pub(crate) mod intermediate_tree {
                                 "'initial' state target must be a simple identifier (name of a direct child state)."))?;
 
                         let initial_child_local_name = initial_child_local_ident.to_string();
+                        // Apply the same escaping logic as used in process_state_declaration
+                        let escaped_initial_child_name =
+                            initial_child_local_name.replace('_', "__");
                         let expected_child_full_path =
-                            format!("{parent_state_full_path}_{initial_child_local_name}");
+                            format!("{parent_state_full_path}_{escaped_initial_child_name}");
 
                         let mut found_child_idx: Option<usize> = None;
                         for &child_idx_in_all_states in &self.all_states[i].children_indices {
@@ -615,7 +611,11 @@ pub(crate) mod intermediate_tree {
         pub(crate) fn path_to_string_for_lookup(path: &Path) -> String {
             path.segments
                 .iter()
-                .map(|segment| segment.ident.to_string())
+                .map(|segment| {
+                    // Escape existing underscores to prevent ambiguous mappings
+                    // A::B_C becomes "A_B__C" and A_B::C becomes "A__B_C" (clearly different)
+                    segment.ident.to_string().replace('_', "__")
+                })
                 .collect::<Vec<String>>()
                 .join("_")
         }
@@ -640,9 +640,13 @@ pub(crate) mod intermediate_tree {
 
             if target_path_ast.segments.len() == 1 {
                 let target_local_name = target_path_ast.segments[0].ident.to_string();
+                // Apply the same escaping logic for consistency
+                let escaped_target_name = target_local_name.replace('_', "__");
 
-                let direct_child_full_name =
-                    format!("{}_{}", current_tmp_state.full_path_name, target_local_name);
+                let direct_child_full_name = format!(
+                    "{}_{}",
+                    current_tmp_state.full_path_name, escaped_target_name
+                );
                 if let Some(idx) = self.state_full_path_to_idx_map.get(&direct_child_full_name) {
                     if current_tmp_state.children_indices.contains(idx) {
                         return Ok(*idx);
@@ -651,17 +655,18 @@ pub(crate) mod intermediate_tree {
 
                 // Corrected else if for clippy::collapsible_else_if
                 if let Some(parent_full_path) = &current_tmp_state.parent_full_path_name {
-                    let sibling_full_name = format!("{parent_full_path}_{target_local_name}");
+                    let sibling_full_name = format!("{parent_full_path}_{escaped_target_name}");
                     if let Some(idx) = self.state_full_path_to_idx_map.get(&sibling_full_name) {
                         return Ok(*idx);
                     }
-                } else if let Some(idx) = self.state_full_path_to_idx_map.get(&target_local_name) {
+                } else if let Some(idx) = self.state_full_path_to_idx_map.get(&escaped_target_name)
+                {
                     if self.all_states[*idx].parent_full_path_name.is_none() {
                         return Ok(*idx);
                     }
                 }
 
-                if let Some(idx) = self.state_full_path_to_idx_map.get(&target_local_name) {
+                if let Some(idx) = self.state_full_path_to_idx_map.get(&escaped_target_name) {
                     return Ok(*idx);
                 }
             }
@@ -722,9 +727,12 @@ pub(crate) mod intermediate_tree {
                 ));
             }
 
+            // Escape underscores in state names to prevent path ambiguity
+            // This ensures consistent mapping with path_to_string_for_lookup
+            let escaped_local_name = local_name_str.replace('_', "__");
             let full_path_name = match current_parent_full_path {
-                Some(parent_path) => format!("{parent_path}_{local_name_str}"),
-                None => local_name_str.clone(),
+                Some(parent_path) => format!("{parent_path}_{escaped_local_name}"),
+                None => escaped_local_name,
             };
 
             if self.defined_full_paths.contains(&full_path_name) {
@@ -898,14 +906,13 @@ pub(crate) mod code_generator {
             }
 
             impl #machine_name {
-                pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Self {
-                    Self {
-                        runtime: lit_bit_core::Runtime::new(
-                            &#machine_definition_const_ident,
-                            context,
-                            initial_event // Use the provided initial_event
-                        ),
-                    }
+                pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Result<Self, lit_bit_core::ProcessingError> {
+                    let runtime = lit_bit_core::Runtime::new(
+                        &#machine_definition_const_ident,
+                        context,
+                        initial_event // Use the provided initial_event
+                    )?;
+                    Ok(Self { runtime })
                 }
 
                 // Add inherent send method delegating to runtime
@@ -1019,10 +1026,15 @@ pub(crate) mod code_generator {
             }
 
             impl #state_id_enum_name {
-                /// Converts a string slice representing the full, underscore-separated path
-                /// of a state (e.g., "Parent_Child_Grandchild") to the corresponding state ID enum variant.
+                /// Converts a string slice representing the internal full path
+                /// of a state to the corresponding state ID enum variant.
                 ///
-                /// The matching is case-sensitive and expects paths as generated internally (typically PascalCase segments joined by underscores).
+                /// The input should match the internal underscore-separated full path format
+                /// used by the state machine builder, which preserves original state name casing
+                /// and includes escaped underscores (e.g., "Parent_Child_Grandchild" or "State__With__Underscores").
+                ///
+                /// For states with underscores in their names, underscores are escaped as double underscores
+                /// to prevent path collisions. For example, a state named "my_state" becomes "my__state".
                 pub fn from_str_path(path_str: &str) -> Option<Self> {
                     match path_str {
                         #(#match_arms)*
@@ -1215,14 +1227,8 @@ pub(crate) mod code_generator {
                 "Absolute paths (`::foo`) are not supported for initial state targets.",
             ));
         }
-        // qself check removed as it's not directly on syn::Path and less relevant for this simplified path usage.
-        // The main goal is to join segments.
-        Ok(path_expr
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect::<Vec<String>>()
-            .join("_"))
+        // Use the same escaping logic as everywhere else for consistency
+        Ok(crate::intermediate_tree::TmpStateTreeBuilder::path_to_string_for_lookup(path_expr))
     }
 
     #[allow(dead_code)]
@@ -1426,16 +1432,34 @@ pub(crate) mod code_generator {
                 .collect();
             let pat_segments: Vec<_> = path.segments.iter().map(|s| s.ident.to_string()).collect();
 
-            // If pattern has fewer segments than event type, it needs prefix
-            if pat_segments.len() < event_segments.len() {
-                return true;
+            // Empty pattern or event type should be handled by caller
+            if pat_segments.is_empty() || event_segments.is_empty() {
+                return false;
             }
 
-            // Check if pattern starts with event type segments
-            !event_segments
-                .iter()
-                .zip(&pat_segments)
-                .all(|(e, p)| e == p)
+            // Case 1: If pattern already starts with the full event type path, no prefix needed
+            // e.g., pattern "my_app::events::Event::Variant" with event type "my_app::events::Event"
+            if pat_segments.len() >= event_segments.len() {
+                let pattern_starts_with_full_event_path = event_segments
+                    .iter()
+                    .zip(&pat_segments)
+                    .all(|(e, p)| e == p);
+                if pattern_starts_with_full_event_path {
+                    return false;
+                }
+            }
+
+            // Case 2: If pattern starts with just the enum name (last segment of event type), no prefix needed
+            // e.g., pattern "Event::Variant" with event type "my_app::events::Event"
+            let event_enum_name = event_segments.last().unwrap();
+            let pattern_first_segment = &pat_segments[0];
+            if pattern_first_segment == event_enum_name {
+                return false;
+            }
+
+            // Case 3: Otherwise, pattern needs prefix
+            // e.g., pattern "Variant" with event type "my_app::events::Event"
+            true
         }
 
         // Handle special cases first
@@ -2191,7 +2215,8 @@ mod tests {
 
         assert_eq!(builder.all_states.len(), 3); // S1, S1_A, S1_B
         let s1_idx = builder.state_full_path_to_idx_map.get("S1").unwrap();
-        let s1_a_idx = builder.state_full_path_to_idx_map.get("S1_S1_A").unwrap();
+        // After escaping, S1_A becomes S1__A, so the full path is S1_S1__A
+        let s1_a_idx = builder.state_full_path_to_idx_map.get("S1_S1__A").unwrap();
 
         let s1_node = &builder.all_states[*s1_idx];
         assert_eq!(
@@ -2337,10 +2362,15 @@ mod tests {
             }
 
             impl TestSimpleStateId {
-                #[doc = r" Converts a string slice representing the full, underscore-separated path"]
-                #[doc = r#" of a state (e.g., "Parent_Child_Grandchild") to the corresponding state ID enum variant."#]
+                #[doc = r" Converts a string slice representing the internal full path"]
+                #[doc = r" of a state to the corresponding state ID enum variant."]
                 #[doc = r""]
-                #[doc = r" The matching is case-sensitive and expects paths as generated internally (typically PascalCase segments joined by underscores)."]
+                #[doc = r" The input should match the internal underscore-separated full path format"]
+                #[doc = r" used by the state machine builder, which preserves original state name casing"]
+                #[doc = r#" and includes escaped underscores (e.g., "Parent_Child_Grandchild" or "State__With__Underscores")."#]
+                #[doc = r""]
+                #[doc = r" For states with underscores in their names, underscores are escaped as double underscores"]
+                #[doc = r#" to prevent path collisions. For example, a state named "my_state" becomes "my__state"."#]
                 pub fn from_str_path(path_str: &str) -> Option<Self> {
                     match path_str {
                         "S1" => Some(Self::S1),
@@ -2417,10 +2447,15 @@ mod tests {
             }
 
             impl TestNestedStateId {
-                #[doc = r" Converts a string slice representing the full, underscore-separated path"]
-                #[doc = r#" of a state (e.g., "Parent_Child_Grandchild") to the corresponding state ID enum variant."#]
+                #[doc = r" Converts a string slice representing the internal full path"]
+                #[doc = r" of a state to the corresponding state ID enum variant."]
                 #[doc = r""]
-                #[doc = r" The matching is case-sensitive and expects paths as generated internally (typically PascalCase segments joined by underscores)."]
+                #[doc = r" The input should match the internal underscore-separated full path format"]
+                #[doc = r" used by the state machine builder, which preserves original state name casing"]
+                #[doc = r#" and includes escaped underscores (e.g., "Parent_Child_Grandchild" or "State__With__Underscores")."#]
+                #[doc = r""]
+                #[doc = r" For states with underscores in their names, underscores are escaped as double underscores"]
+                #[doc = r#" to prevent path collisions. For example, a state named "my_state" becomes "my__state"."#]
                 pub fn from_str_path(path_str: &str) -> Option<Self> {
                     match path_str {
                         "P1" => Some(Self::P1),
@@ -2745,10 +2780,11 @@ mod tests {
             "Expected error for initial target not being top-level "
         ); // Added space
         if let Err(e) = result {
+            // After escaping, S1_S1_Child becomes S1__S1__Child because each _ gets escaped to __
+            // This doesn't match the actual nested state path S1_S1__Child, so we get "not found"
             assert!(
-                e.to_string().contains(
-                    "Declared top-level initial state 'S1_S1_Child' is not a top-level state."
-                ),
+                e.to_string()
+                    .contains("Declared top-level initial state 'S1__S1__Child' not found."),
                 "Unexpected error message: {e}"
             ); // Ensured double quotes
         }
@@ -3453,17 +3489,17 @@ mod tests {
         let dsl = concat!(
             "name: NonCopyTestMachine, ",
             "context: Ctx, ",
-            "event: Ev, ", // Generic event type identifier
+            "event: Ev, ",
             "initial: S1, ",
             "state S1 { on Variant => S2; } ", // Simple identifier pattern that needs prefixing
             "state S2 {}"
         );
 
-        let ast = parse_dsl(dsl).expect("DSL parsing failed");
+        let ast = parse_dsl(dsl).expect("DSL parsing failed ");
         let mut builder = TmpStateTreeBuilder::new();
-        builder.build_from_ast(&ast).expect("Builder failed");
+        builder.build_from_ast(&ast).expect("Builder failed ");
         let ids_info =
-            generate_state_id_logic(&builder, &ast.name).expect("generate_state_id_logic failed");
+            generate_state_id_logic(&builder, &ast.name).expect("generate_state_id_logic failed ");
 
         let transitions_array_tokens = crate::code_generator::generate_transitions_array(
             &builder,
@@ -3471,20 +3507,20 @@ mod tests {
             &ast.event_type,
             &ast.context_type,
         )
-        .expect("generate_transitions_array failed");
+        .expect("generate_transitions_array failed ");
 
         let output = transitions_array_tokens.to_string();
 
         // The key thing we're testing: should NOT contain the problematic dereferencing pattern
         assert!(
-            !output.contains("matches!(*e"),
-            "Matcher function should not dereference event parameter"
+            !output.contains("matches!(*e "),
+            "Matcher function should not dereference event parameter "
         );
 
         // Should contain the generated matcher function with our parameter name 'e'
         assert!(
             output.contains("fn matches_") && output.contains("(e :"),
-            "Should contain generated matcher function with reference parameter"
+            "Should contain generated matcher function with reference parameter "
         );
 
         // Should contain the Variant pattern (verifies the pattern was processed)
@@ -3492,5 +3528,460 @@ mod tests {
             output.contains("Variant"),
             "Should contain the Variant pattern we specified, got: {output}"
         );
+    }
+
+    #[test]
+    fn test_underscore_escaping_prevents_path_collisions() {
+        use crate::intermediate_tree::TmpStateTreeBuilder;
+
+        // This test verifies that the underscore escaping prevents path collisions
+        // Example: A::B_C vs A_B::C should map to different lookup keys
+
+        // Test path_to_string_for_lookup directly
+        let path1: syn::Path = syn::parse_str("A::B_C").unwrap();
+        let path2: syn::Path = syn::parse_str("A_B::C").unwrap();
+
+        let lookup1 = TmpStateTreeBuilder::path_to_string_for_lookup(&path1);
+        let lookup2 = TmpStateTreeBuilder::path_to_string_for_lookup(&path2);
+
+        // Without escaping: both would be "A_B_C"
+        // With escaping: path1 -> "A_B__C", path2 -> "A__B_C"
+        assert_ne!(
+            lookup1, lookup2,
+            "Paths should map to different lookup keys after escaping"
+        );
+        assert_eq!(lookup1, "A_B__C", "A::B_C should become A_B__C");
+        assert_eq!(lookup2, "A__B_C", "A_B::C should become A__B_C");
+
+        // Test escaping with multiple underscores
+        let path3: syn::Path = syn::parse_str("A__B::C__D").unwrap();
+        let lookup3 = TmpStateTreeBuilder::path_to_string_for_lookup(&path3);
+        assert_eq!(
+            lookup3, "A____B_C____D",
+            "A__B::C__D should become A____B_C____D"
+        );
+
+        // Verify all lookups are unique
+        let lookup_set = vec![&lookup1, &lookup2, &lookup3];
+        let unique_lookups: std::collections::HashSet<_> = lookup_set.into_iter().collect();
+        assert_eq!(unique_lookups.len(), 3, "All path lookups should be unique");
+    }
+
+    #[test]
+    fn test_nested_event_type_pattern_prefix_detection() {
+        use crate::code_generator::pattern_needs_prefix_comprehensive;
+
+        // Test nested event type: my_app::events::Event
+        let nested_event_type: syn::Path = syn::parse_str("my_app::events::Event").unwrap();
+
+        // Case 1: Simple identifier should need prefix
+        let simple_pattern_str = "on Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(simple_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                needs_prefix,
+                "Simple identifier 'Variant' should need prefix with nested event type"
+            );
+        }
+
+        // Case 2: Pattern starting with enum name should NOT need prefix
+        let enum_qualified_pattern_str = "on Event::Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(enum_qualified_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                !needs_prefix,
+                "Pattern 'Event::Variant' should NOT need prefix with nested event type"
+            );
+        }
+
+        // Case 3: Pattern with full event type path should NOT need prefix
+        let fully_qualified_pattern_str = "on my_app::events::Event::Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(fully_qualified_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                !needs_prefix,
+                "Fully qualified pattern should NOT need prefix with nested event type"
+            );
+        }
+
+        // Case 4: Pattern with partial path that doesn't match should need prefix
+        let partial_wrong_pattern_str = "on events::Event::Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(partial_wrong_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                needs_prefix,
+                "Pattern 'events::Event::Variant' should need prefix with nested event type"
+            );
+        }
+
+        // Case 5: Tuple struct patterns
+        let tuple_enum_pattern_str = "on Event::DataVariant(data) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(tuple_enum_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                !needs_prefix,
+                "Tuple struct pattern 'Event::DataVariant(data)' should NOT need prefix"
+            );
+        }
+
+        let tuple_simple_pattern_str = "on DataVariant(data) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(tuple_simple_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                needs_prefix,
+                "Simple tuple struct pattern 'DataVariant(data)' should need prefix"
+            );
+        }
+
+        // Case 6: Struct patterns
+        let struct_enum_pattern_str = "on Event::DataVariant { field } => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(struct_enum_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                !needs_prefix,
+                "Struct pattern 'Event::DataVariant {{ field }}' should NOT need prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn test_simple_event_type_pattern_prefix_detection() {
+        use crate::code_generator::pattern_needs_prefix_comprehensive;
+
+        // Test simple event type: Event (single segment)
+        let simple_event_type: syn::Path = syn::parse_str("Event").unwrap();
+
+        // Case 1: Simple identifier should need prefix
+        let simple_pattern_str = "on Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(simple_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &simple_event_type);
+            assert!(
+                needs_prefix,
+                "Simple identifier 'Variant' should need prefix with simple event type"
+            );
+        }
+
+        // Case 2: Pattern starting with event type should NOT need prefix
+        let qualified_pattern_str = "on Event::Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(qualified_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &simple_event_type);
+            assert!(
+                !needs_prefix,
+                "Pattern 'Event::Variant' should NOT need prefix with simple event type"
+            );
+        }
+
+        // Case 3: Wrong enum name should need prefix
+        let wrong_enum_pattern_str = "on WrongEvent::Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(wrong_enum_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &simple_event_type);
+            assert!(
+                needs_prefix,
+                "Pattern 'WrongEvent::Variant' should need prefix with simple event type"
+            );
+        }
+    }
+
+    #[test]
+    fn test_complex_nested_patterns_with_nested_event_type() {
+        use crate::code_generator::pattern_needs_prefix_comprehensive;
+
+        let nested_event_type: syn::Path = syn::parse_str("crate::events::AppEvent").unwrap();
+
+        // Test OR patterns
+        let or_pattern_str = "on (AppEvent::Start | AppEvent::Stop) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(or_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                !needs_prefix,
+                "OR pattern with enum-qualified variants should NOT need prefix"
+            );
+        }
+
+        let or_unqualified_pattern_str = "on (Start | Stop) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(or_unqualified_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                needs_prefix,
+                "OR pattern with unqualified variants should need prefix"
+            );
+        }
+
+        // Test reference patterns
+        let ref_qualified_pattern_str = "on &AppEvent::Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(ref_qualified_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                !needs_prefix,
+                "Reference to enum-qualified pattern should NOT need prefix"
+            );
+        }
+
+        let ref_unqualified_pattern_str = "on &Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(ref_unqualified_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                needs_prefix,
+                "Reference to unqualified pattern should need prefix"
+            );
+        }
+
+        // Test parenthesized patterns
+        let paren_qualified_pattern_str = "on (AppEvent::Variant) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(paren_qualified_pattern_str) {
+            let needs_prefix =
+                pattern_needs_prefix_comprehensive(&ast.event_pattern, &nested_event_type);
+            assert!(
+                !needs_prefix,
+                "Parenthesized enum-qualified pattern should NOT need prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_ident_from_path_behavior() {
+        use crate::intermediate_tree::TmpStateTreeBuilder;
+
+        // Test 1: Regular simple identifier should work
+        let simple_path: syn::Path = syn::parse_str("ChildState").unwrap();
+        let result = TmpStateTreeBuilder::extract_ident_from_path(&simple_path);
+        assert!(
+            result.is_some(),
+            "Simple identifier should return Some(ident)"
+        );
+        assert_eq!(result.unwrap().to_string(), "ChildState");
+
+        // Test 2: Generic path should be rejected
+        let generic_path: syn::Path = syn::parse_str("ChildState<T>").unwrap();
+        let result = TmpStateTreeBuilder::extract_ident_from_path(&generic_path);
+        assert!(
+            result.is_none(),
+            "Generic path should return None to provide better error message"
+        );
+
+        // Test 3: Multi-segment path should be rejected
+        let multi_segment_path: syn::Path = syn::parse_str("module::ChildState").unwrap();
+        let result = TmpStateTreeBuilder::extract_ident_from_path(&multi_segment_path);
+        assert!(result.is_none(), "Multi-segment path should return None");
+
+        // Test 4: Absolute path should be rejected
+        let absolute_path: syn::Path = syn::parse_str("::ChildState").unwrap();
+        let result = TmpStateTreeBuilder::extract_ident_from_path(&absolute_path);
+        assert!(result.is_none(), "Absolute path should return None");
+
+        // Test 5: Path with angle-bracketed args should be rejected
+        let angle_bracket_path: syn::Path = syn::parse_str("State<String, i32>").unwrap();
+        let result = TmpStateTreeBuilder::extract_ident_from_path(&angle_bracket_path);
+        assert!(
+            result.is_none(),
+            "Path with angle-bracketed arguments should return None"
+        );
+
+        // Test 6: Path with parenthesized args should be rejected
+        // Note: We can't test parenthesized args directly as "StateFn()" isn't a valid Path
+        // Instead test with multiple segments which should also be rejected
+        let multi_path: syn::Path = syn::parse_str("crate::State").unwrap();
+        let result = TmpStateTreeBuilder::extract_ident_from_path(&multi_path);
+        assert!(
+            result.is_none(),
+            "Path with multiple segments should return None"
+        );
+    }
+
+    #[test]
+    fn test_initial_child_with_generics_gives_better_error() {
+        // This test verifies that the fixed extract_ident_from_path gives better error messages
+        // for initial child declarations with generics
+
+        let input_dsl = r"
+            name: TestMachine,
+            context: Ctx,
+            event: Ev,
+            initial: S1,
+            state S1 {
+                initial: ChildState<T>;
+                state ChildState {}
+            }
+        ";
+
+        let ast = parse_dsl(input_dsl).expect("DSL parsing should succeed");
+        let mut builder = TmpStateTreeBuilder::new();
+        let build_result = builder.build_from_ast(&ast);
+
+        // Should get an error about generic not being a simple identifier
+        assert!(
+            build_result.is_err(),
+            "Should fail with better error for generic path"
+        );
+        if let Err(e) = build_result {
+            assert!(
+                e.to_string()
+                    .contains("'initial' state target must be a simple identifier"),
+                "Should get 'simple identifier' error for generic path, got: {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_str_path_matches_internal_format() {
+        // This test verifies that from_str_path works with the internal full path format
+        // including escaped underscores as documented
+
+        let input_dsl = r"
+            name: TestMachine,
+            context: Ctx,
+            event: Ev,
+            initial: S1,
+            state S1 {}
+            state S2_with_underscores {
+                initial: Child_A;
+                state Child_A {}
+                state Child_B {}
+            }
+            state S3 {
+                initial: Nested;
+                state Nested {
+                    initial: Deep;
+                    state Deep {}
+                }
+            }
+        ";
+
+        let ast = parse_dsl(input_dsl).expect("DSL parsing should succeed");
+        let mut builder = TmpStateTreeBuilder::new();
+        builder
+            .build_from_ast(&ast)
+            .expect("Builder should succeed");
+        let ids_info = generate_state_id_logic(&builder, &ast.name)
+            .expect("generate_state_id_logic should succeed");
+
+        // Extract the generated enum definition and test from_str_path function
+        let enum_tokens = ids_info.enum_definition_tokens.to_string();
+
+        // Verify the function is generated
+        assert!(
+            enum_tokens.contains("pub fn from_str_path"),
+            "Should generate from_str_path function"
+        );
+        assert!(
+            enum_tokens.contains("match path_str"),
+            "Should have match statement"
+        );
+
+        // Test cases that should match the internal format:
+        // - S1 -> "S1"
+        // - S2_with_underscores -> "S2__with__underscores" (escaped underscores)
+        // - S2_with_underscores::Child_A -> "S2__with__underscores_Child__A"
+        // - S3::Nested -> "S3_Nested"
+        // - S3::Nested::Deep -> "S3_Nested_Deep"
+
+        // Check that the match arms contain the expected internal format strings
+        assert!(
+            enum_tokens.contains(r#""S1" => Some"#),
+            "Should contain S1 match arm"
+        );
+        assert!(
+            enum_tokens.contains(r#""S2__with__underscores" => Some"#),
+            "Should contain escaped underscores for S2_with_underscores"
+        );
+        assert!(
+            enum_tokens.contains(r#""S2__with__underscores_Child__A" => Some"#),
+            "Should contain nested state with escaped underscores"
+        );
+        assert!(
+            enum_tokens.contains(r#""S3_Nested" => Some"#),
+            "Should contain S3_Nested match arm"
+        );
+        assert!(
+            enum_tokens.contains(r#""S3_Nested_Deep" => Some"#),
+            "Should contain S3_Nested_Deep match arm"
+        );
+
+        // Verify mapping between internal paths and enum variants
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("S1")
+                .unwrap()
+                .to_string(),
+            "S1"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("S2__with__underscores")
+                .unwrap()
+                .to_string(),
+            "S2WithUnderscores"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("S2__with__underscores_Child__A")
+                .unwrap()
+                .to_string(),
+            "S2WithUnderscoresChildA"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("S3_Nested")
+                .unwrap()
+                .to_string(),
+            "S3Nested"
+        );
+        assert_eq!(
+            ids_info
+                .full_path_to_variant_ident
+                .get("S3_Nested_Deep")
+                .unwrap()
+                .to_string(),
+            "S3NestedDeep"
+        );
+    }
+
+    #[test]
+    fn test_initial_keyword_parsing_rejects_invalid_keywords() {
+        // This test verifies that the custom keyword parsing correctly rejects
+        // invalid initial keywords and provides appropriate error messages
+
+        // Test case 1: Wrong keyword
+        let invalid_dsl1 = "name: Test, context: Ctx, event: Ev, wrong_keyword: S1, state S1 {}";
+        let result1 = parse_dsl(invalid_dsl1);
+        assert!(
+            result1.is_err(),
+            "Should reject 'wrong_keyword' instead of 'initial'"
+        );
+        if let Err(e) = result1 {
+            // The custom keyword parser should provide a clear error
+            assert!(
+                e.to_string().contains("expected `initial`"),
+                "Should indicate 'initial' keyword was expected, got: {e}"
+            );
+        }
+
+        // Test case 2: Missing initial keyword
+        let invalid_dsl2 = "name: Test, context: Ctx, event: Ev, : S1, state S1 {}";
+        let result2 = parse_dsl(invalid_dsl2);
+        assert!(result2.is_err(), "Should reject missing initial keyword");
+
+        // Test case 3: Valid initial keyword should work
+        let valid_dsl = "name: Test, context: Ctx, event: Ev, initial: S1, state S1 {}";
+        let result3 = parse_dsl(valid_dsl);
+        assert!(result3.is_ok(), "Should accept valid 'initial' keyword");
     }
 }
