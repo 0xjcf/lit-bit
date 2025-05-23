@@ -10,20 +10,21 @@ pub(crate) fn generate_machine_struct_and_impl(
 ) -> TokenStream {
     let m_val = proc_macro2::Literal::usize_unsuffixed(builder.all_states.len());
     let max_nodes_for_computation_val = proc_macro2::Literal::usize_unsuffixed(
-        builder.all_states.len() * lit_bit_core::core::MAX_ACTIVE_REGIONS,
+        builder.all_states.len() * lit_bit_core::MAX_ACTIVE_REGIONS,
     );
 
     // --- Remove problematic match generation - delegate to Runtime instead ---
     let inherent_send_method_body = quote! {
-        pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::core::SendResult {
-            self.runtime.send_internal(event)
+        pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::SendResult {
+            use lit_bit_core::StateMachine;
+            self.runtime.send(event)
         }
     };
 
     let machine_struct_ts = quote! {
         #[derive(Debug)]
         pub struct #machine_name {
-            runtime: lit_bit_core::core::Runtime<
+            runtime: lit_bit_core::Runtime<
                 #state_id_enum_name,
                 #event_type_path,
                 #context_type_path,
@@ -34,7 +35,7 @@ pub(crate) fn generate_machine_struct_and_impl(
         impl #machine_name {
             pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Self {
                 Self {
-                    runtime: lit_bit_core::core::Runtime::new(&#machine_definition_const_ident, context, initial_event),
+                    runtime: lit_bit_core::Runtime::new(&#machine_definition_const_ident, context, initial_event),
                 }
             }
             #inherent_send_method_body
@@ -49,10 +50,10 @@ pub(crate) fn generate_machine_struct_and_impl(
             type State = #state_id_enum_name;
             type Event = #event_type_path;
             type Context = #context_type_path;
-            fn send(&mut self, event: &Self::Event) -> lit_bit_core::core::SendResult {
+            fn send(&mut self, event: &Self::Event) -> lit_bit_core::SendResult {
                 #machine_name::send(self, event)
             }
-            fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::core::MAX_ACTIVE_REGIONS}> {
+            fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::MAX_ACTIVE_REGIONS}> {
                 self.runtime.state()
             }
             fn context(&self) -> &Self::Context {
@@ -112,17 +113,17 @@ pub(crate) fn generate_states_array<'ast>(
 
         let entry_action_expr = tmp_state.entry_handler.map_or_else(
             || quote! { None },
-            |p_expr| quote! { Some(#p_expr as lit_bit_core::core::EntryExitActionFn<#context_type_path, #event_type_path>) },
+            |p_expr| quote! { Some(#p_expr as lit_bit_core::EntryExitActionFn<#context_type_path, #event_type_path>) },
         );
         let exit_action_expr = tmp_state.exit_handler.map_or_else(
             || quote! { None },
-            |p_expr| quote! { Some(#p_expr as lit_bit_core::core::EntryExitActionFn<#context_type_path, #event_type_path>) },
+            |p_expr| quote! { Some(#p_expr as lit_bit_core::EntryExitActionFn<#context_type_path, #event_type_path>) },
         );
 
         let is_parallel_literal = tmp_state.is_parallel;
 
         state_node_initializers.push(quote! {
-            lit_bit_core::core::StateNode {
+            lit_bit_core::StateNode {
                 id: #state_id_enum_name::#current_state_id_variant,
                 parent: #parent_id_expr,
                 initial_child: #initial_child_id_expr,
@@ -133,7 +134,7 @@ pub(crate) fn generate_states_array<'ast>(
         });
     }
     let states_array_ts = quote! {
-        const STATES: &[lit_bit_core::core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+        const STATES: &[lit_bit_core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
             #(#state_node_initializers),*
         ];
     };
@@ -203,15 +204,15 @@ pub(crate) fn generate_transitions_array<'ast>(
 
             let action_expr = trans_def_ast.action_handler.map_or_else(
                 || quote! { None },
-                |handler_expr| quote! { Some(#handler_expr as lit_bit_core::core::ActionFn<#context_type_path, #event_type_path>) },
+                |handler_expr| quote! { Some(#handler_expr as lit_bit_core::ActionFn<#context_type_path, #event_type_path>) },
             );
             let guard_expr = trans_def_ast.guard_handler.map_or_else(
                 || quote! { None },
-                |handler_expr| quote! { Some(#handler_expr as lit_bit_core::core::GuardFn<#context_type_path, #event_type_path>) },
+                |handler_expr| quote! { Some(#handler_expr as lit_bit_core::GuardFn<#context_type_path, #event_type_path>) },
             );
 
             transition_initializers.push(quote! {
-                lit_bit_core::core::Transition {
+                lit_bit_core::Transition {
                     from_state: #state_id_enum_name::#from_state_variant,
                     to_state: #state_id_enum_name::#to_state_variant,
                     action: #action_expr,
@@ -224,7 +225,7 @@ pub(crate) fn generate_transitions_array<'ast>(
 
     let transitions_array_ts = quote! {
         #(#matcher_fns)*
-        const TRANSITIONS: &[lit_bit_core::core::Transition<
+        const TRANSITIONS: &[lit_bit_core::Transition<
             #state_id_enum_name, #event_type_path, #context_type_path
         >] = &[
             #(#transition_initializers),*

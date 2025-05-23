@@ -89,13 +89,13 @@ statechart! {
     initial: Idle,
 
     state Idle {
-        on Start => Running;
+        on WrappedEvent::Start => Running;
         on Configure { setting: _ } => Idle [action configure_system];
     }
 
     state Running {
         entry: increment_count;
-        on Stop => Idle;
+        on WrappedEvent::Stop => Idle;
         on Configure { setting: _ } => Running [action configure_system];
     }
 }
@@ -125,15 +125,15 @@ fn process_external_event(
     // Convert external event to wrapped event
     let wrapped = WrappedEvent::from(external_event);
     match machine.send(&wrapped) {
-        lit_bit_core::core::SendResult::Transitioned => {
+        lit_bit_core::SendResult::Transitioned => {
             #[cfg(feature = "std")]
             println!("  -> Event handled: transition occurred");
         }
-        lit_bit_core::core::SendResult::NoMatch => {
+        lit_bit_core::SendResult::NoMatch => {
             #[cfg(feature = "std")]
             println!("  -> Event ignored: no matching transition");
         }
-        lit_bit_core::core::SendResult::Error(e) => {
+        lit_bit_core::SendResult::Error(e) => {
             #[cfg(feature = "std")]
             eprintln!("  -> Error processing event: {e:?}");
         }

@@ -22,24 +22,26 @@
 
 // No `use core::fmt` or `use ::core::fmt` needed here if we qualify directly in trait bounds.
 
-pub mod core;
+pub mod runtime;
 
 // Re-export macros from lit_bit_macro
 pub use lit_bit_macro::{statechart, statechart_event};
 
 // Re-export key types/traits for easier use by consumers of the crate.
-pub use core::DefaultContext;
-pub use core::MAX_ACTIVE_REGIONS;
-pub use core::MachineDefinition; // If users need to construct this manually
-pub use core::Runtime; // If users need to construct this manually
-pub use core::StateNode; // If users need to construct this manually
-pub use core::Transition; // If users need to construct this manually // Re-export this const
+pub use runtime::ActionFn; // Re-export function types for macro use
+pub use runtime::DefaultContext;
+pub use runtime::EntryExitActionFn;
+pub use runtime::GuardFn;
+pub use runtime::MAX_ACTIVE_REGIONS;
+pub use runtime::MachineDefinition; // If users need to construct this manually
+pub use runtime::Runtime; // If users need to construct this manually
+pub use runtime::SendResult; // Re-export SendResult for public use
+pub use runtime::StateNode; // If users need to construct this manually
+pub use runtime::Transition; // If users need to construct this manually
 
 pub mod prelude {
     // pub use crate::StateMachine;
 }
-
-use crate::core::SendResult;
 
 pub trait StateMachine {
     type State: Copy
@@ -55,7 +57,7 @@ pub trait StateMachine {
 
     type Context: Clone + 'static;
 
-    fn send(&mut self, event: &Self::Event) -> SendResult;
+    fn send(&mut self, event: &Self::Event) -> crate::SendResult;
     fn state(&self) -> heapless::Vec<Self::State, MAX_ACTIVE_REGIONS>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;

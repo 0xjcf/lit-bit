@@ -6,10 +6,10 @@ It aims to provide a similar developer experience to XState but within the Rust 
 
 ## Current Status
 
-*   **Phase:** 03 - Parallel States (In Progress)
+*   **Phase:** 03 - Parallel States (Completed)
 *   Core runtime for flat and basic hierarchical state machines is functional.
 *   Procedural macro (`statechart!`) for defining state machines is operational for flat and hierarchical structures.
-*   Parallel state machine logic is under active development.
+*   Parallel state machine support is implemented and functional.
 *   Examples for RISC-V (QEMU) and Cortex-M (QEMU/hardware) are available.
 
 

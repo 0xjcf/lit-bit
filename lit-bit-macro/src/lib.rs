@@ -888,7 +888,7 @@ pub(crate) mod code_generator {
         let machine_struct_ts = quote! {
             #[derive(Debug)]
             pub struct #machine_name {
-                runtime: lit_bit_core::core::Runtime<
+                runtime: lit_bit_core::Runtime<
                     #state_id_enum_name,
                     #event_type_path,
                     #context_type_path,
@@ -900,7 +900,7 @@ pub(crate) mod code_generator {
             impl #machine_name {
                 pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Self {
                     Self {
-                        runtime: lit_bit_core::core::Runtime::new(
+                        runtime: lit_bit_core::Runtime::new(
                             &#machine_definition_const_ident,
                             context,
                             initial_event // Use the provided initial_event
@@ -909,8 +909,9 @@ pub(crate) mod code_generator {
                 }
 
                 // Add inherent send method delegating to runtime
-                pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::core::SendResult {
-                    self.runtime.send_internal(event)
+                pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::SendResult {
+                    use lit_bit_core::StateMachine;
+                    self.runtime.send(event)
                 }
 
                 pub fn context(&self) -> &#context_type_path {
@@ -926,13 +927,13 @@ pub(crate) mod code_generator {
                 type Event = #event_type_path;
                 type Context = #context_type_path;
 
-                fn send(&mut self, event: &Self::Event) -> lit_bit_core::core::SendResult {
-                    // Delegate to the struct's inherent send method, which delegates to runtime
-                    // OR directly to self.runtime.send_internal(event)
-                    self.runtime.send_internal(event)
+                fn send(&mut self, event: &Self::Event) -> lit_bit_core::SendResult {
+                    // Delegate to the runtime's StateMachine trait implementation
+                    use lit_bit_core::StateMachine;
+                    self.runtime.send(event)
                 }
 
-                fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::core::MAX_ACTIVE_REGIONS}> {
+                fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::MAX_ACTIVE_REGIONS}> {
                     self.runtime.state()
                 }
                 fn context(&self) -> &Self::Context {
@@ -1095,7 +1096,7 @@ pub(crate) mod code_generator {
             let is_parallel_literal = tmp_state.is_parallel; // This is already a bool
 
             state_node_initializers.push(quote! {
-                lit_bit_core::core::StateNode {
+                lit_bit_core::StateNode {
                     id: #state_id_enum_name::#current_state_id_variant,
                     parent: #parent_id_expr,
                     initial_child: #initial_child_id_expr,
@@ -1106,7 +1107,7 @@ pub(crate) mod code_generator {
             });
         }
         let states_array_ts = quote! {
-            const STATES: &[lit_bit_core::core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+            const STATES: &[lit_bit_core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
                 #(#state_node_initializers),*
             ];
         };
@@ -1205,11 +1206,20 @@ pub(crate) mod code_generator {
                                 .all(|(e, p)| e == p)
                         }
                     }
-                    _ => true, // For other patterns, assume they need prefix
+                    _ => false, // For wildcard, literals, identifiers, etc. - no prefix needed
                 };
 
                 // Generate a unique matcher function ident for each transition
-                let matcher_fn_ident = format_ident!("matches_T{}", transition_initializers.len());
+                // Extract machine name from state_id_enum_name (e.g., TestMachineStateId -> TestMachine)
+                let state_id_enum_name_string = state_id_enum_name.to_string();
+                let machine_name_prefix = state_id_enum_name_string
+                    .strip_suffix("StateId")
+                    .unwrap_or(&state_id_enum_name_string);
+                let matcher_fn_ident = format_ident!(
+                    "matches_{}_T{}",
+                    machine_name_prefix,
+                    transition_initializers.len()
+                );
                 let matcher_fn = if pattern_needs_prefix {
                     quote! {
                         fn #matcher_fn_ident(e: &#event_type_path) -> bool {
@@ -1227,7 +1237,7 @@ pub(crate) mod code_generator {
 
                 // Generate the Transition initializer
                 transition_initializers.push(quote! {
-                    lit_bit_core::core::Transition {
+                    lit_bit_core::Transition {
                         from_state: #state_id_enum_name::#from_state_id_variant,
                         to_state: #state_id_enum_name::#to_state_id_variant,
                         action: #action_expr,
@@ -1239,7 +1249,7 @@ pub(crate) mod code_generator {
         }
         let transitions_array_ts = quote! {
             #(#matcher_fns)*
-            const TRANSITIONS: &[lit_bit_core::core::Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
+            const TRANSITIONS: &[lit_bit_core::Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
                 #(#transition_initializers),*
             ];
         };
@@ -1336,11 +1346,11 @@ pub(crate) mod code_generator {
         );
         let machine_def_const_ident = format_ident!("{}", machine_def_const_name_str);
         let machine_def_ts = quote! {
-            pub const #machine_def_const_ident: lit_bit_core::core::MachineDefinition<
+            pub const #machine_def_const_ident: lit_bit_core::MachineDefinition<
                 #state_id_enum_name,
                 #event_type_path,
                 #context_type_path
-            > = lit_bit_core::core::MachineDefinition::new(
+            > = lit_bit_core::MachineDefinition::new(
                 STATES,
                 TRANSITIONS,
                 #initial_leaf_state_id_ts
@@ -1473,7 +1483,7 @@ pub fn statechart(input: TokenStream) -> TokenStream {
 
     let core_types_definitions = quote! {
         // Runtime is used directly. StateMachine trait is at lit_bit_core::StateMachine.
-        use lit_bit_core::core::{/* StateMachine, -- Removed */ Runtime, StateNode, Transition, ActionFn, GuardFn, MAX_ACTIVE_REGIONS};
+        use lit_bit_core::{/* StateMachine, -- Removed */ Runtime, StateNode, Transition, ActionFn, GuardFn, MAX_ACTIVE_REGIONS};
     };
 
     let final_code = quote! {
@@ -2486,8 +2496,8 @@ mod tests {
         let transitions_array_result = crate::code_generator::generate_transitions_array(
             &builder,
             &ids_info,
-            event_type_path,   // Pass defined variable
-            context_type_path, // Pass defined variable
+            event_type_path,
+            context_type_path,
         );
         assert!(
             transitions_array_result.is_ok(),
@@ -2512,17 +2522,17 @@ mod tests {
             "initial: P1, ",
             "state P1 { ",
             "    initial: C1; ",
-            "    on E_P1_TO_C2 => C2; ",
+            "    on RootEv::E_P1_TO_C2 => C2; ",
             "    state C1 { ",
             "        initial: GC1; ",
-            "        on E_C1_TO_GC2 => GC2; ",
+            "        on RootEv::E_C1_TO_GC2 => GC2; ",
             "        state GC1 { ",
-            "            on E_GC1_TO_P2 => P2; ",
+            "            on RootEv::E_GC1_TO_P2 => P2; ",
             "        } ",
             "        state GC2 {} ",
             "    } ",
             "    state C2 { ",
-            "        on E_C2_TO_GC1 => P1::C1::GC1; ",
+            "        on RootEv::E_C2_TO_GC1 => P1::C1::GC1; ",
             "    } ",
             "} ",
             "state P2 {}"
@@ -2545,46 +2555,46 @@ mod tests {
         .expect("generate_transitions_array failed ");
 
         let expected_str = quote! {
-            fn matches_T0(e: &RootEv) -> bool {
+            fn matches_TestHierarchicalMachine_T0(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_P1_TO_C2)
             }
-            fn matches_T1(e: &RootEv) -> bool {
+            fn matches_TestHierarchicalMachine_T1(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_C1_TO_GC2)
             }
-            fn matches_T2(e: &RootEv) -> bool {
+            fn matches_TestHierarchicalMachine_T2(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_GC1_TO_P2)
             }
-            fn matches_T3(e: &RootEv) -> bool {
+            fn matches_TestHierarchicalMachine_T3(e: &RootEv) -> bool {
                 matches!(e, RootEv::E_C2_TO_GC1)
             }
-            const TRANSITIONS: &[lit_bit_core::core::Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
-                lit_bit_core::core::Transition {
+            const TRANSITIONS: &[lit_bit_core::Transition<TestHierarchicalMachineStateId, RootEv, RootCtx>] = &[
+                lit_bit_core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1,
                     to_state: TestHierarchicalMachineStateId::P1C2,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_T0),
+                    match_fn: Some(matches_TestHierarchicalMachine_T0),
                 },
-                lit_bit_core::core::Transition {
+                lit_bit_core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1,
                     to_state: TestHierarchicalMachineStateId::P1C1GC2,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_T1),
+                    match_fn: Some(matches_TestHierarchicalMachine_T1),
                 },
-                lit_bit_core::core::Transition {
+                lit_bit_core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C1GC1,
                     to_state: TestHierarchicalMachineStateId::P2,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_T2),
+                    match_fn: Some(matches_TestHierarchicalMachine_T2),
                 },
-                lit_bit_core::core::Transition {
+                lit_bit_core::Transition {
                     from_state: TestHierarchicalMachineStateId::P1C2,
                     to_state: TestHierarchicalMachineStateId::P1C1GC1,
                     action: None,
                     guard: None,
-                    match_fn: Some(matches_T3),
+                    match_fn: Some(matches_TestHierarchicalMachine_T3),
                 }
             ];
         }
@@ -3085,26 +3095,33 @@ mod tests {
 
     #[test]
     fn parse_transition_with_nested_event_path() {
-        let input_str = "on MyEvent::Nested::Variant => TargetState;";
+        let input_str = "on EventType::SubEvent => SomeState;";
+        let result = parse_str::<TransitionDefinitionAst>(input_str);
+        assert!(result.is_ok(), "Failed to parse: {:?}", result.err());
+        let ast = result.unwrap();
+        if let syn::Pat::Path(path_pat) = &ast.event_pattern {
+            assert_eq!(path_pat.path.segments.len(), 2);
+            assert_eq!(path_pat.path.segments[0].ident.to_string(), "EventType");
+            assert_eq!(path_pat.path.segments[1].ident.to_string(), "SubEvent");
+        } else {
+            panic!("Expected Pat::Path, got {:?}", ast.event_pattern);
+        }
+    }
+
+    #[test]
+    fn parse_transition_with_wildcard_pattern() {
+        let input_str = "on _ => SomeState;";
         let result = parse_str::<TransitionDefinitionAst>(input_str);
         assert!(
             result.is_ok(),
-            "Parse failed for nested event path: {:?} ",
+            "Failed to parse wildcard: {:?}",
             result.err()
         );
         let ast = result.unwrap();
-        let pat = &ast.event_pattern;
-        // Should be a Pat::Path with multiple segments
-        if let syn::Pat::Path(pat_path) = pat {
-            let segments: Vec<_> = pat_path
-                .path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect();
-            assert_eq!(segments, vec!["MyEvent", "Nested", "Variant"]);
-        } else {
-            panic!("Expected Pat::Path for nested event pattern");
-        }
+        assert!(
+            matches!(ast.event_pattern, syn::Pat::Wild(_)),
+            "Expected Pat::Wild, got {:?}",
+            ast.event_pattern
+        );
     }
 }

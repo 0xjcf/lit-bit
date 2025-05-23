@@ -66,11 +66,27 @@ fn is_track_loaded(context: &MediaPlayerContext, _event: &MediaPlayerEvent) -> b
 // -------------- guard & action for LoadTrack --------------
 fn guard_for_load_track(_ctx: &MediaPlayerContext, ev: &MediaPlayerEvent) -> bool {
     if let MediaPlayerEvent::LoadTrack { path } = ev {
-        // very naive "is this a file?" check
-        let ok = !path.is_empty() && path.contains('.');
+        // Robust path validation: check for valid file extension when std is available
         #[cfg(not(target_arch = "riscv32"))]
-        println!("[Guard] guard_for_load_track('{path}')? {ok}");
-        ok
+        {
+            use std::path::Path;
+            let ok = !path.is_empty() && Path::new(path.as_str()).extension().is_some();
+            println!("[Guard] guard_for_load_track('{path}')? {ok}");
+            ok
+        }
+
+        // Fallback validation for no_std environments (RISC-V)
+        #[cfg(target_arch = "riscv32")]
+        {
+            // More careful validation: check for valid file extension pattern
+            // Must be non-empty, contain a dot, and have content after the last dot
+            let ok = !path.is_empty()
+                && path.contains('.')
+                && path
+                    .rfind('.')
+                    .map_or(false, |dot_pos| dot_pos < path.len() - 1 && dot_pos > 0);
+            ok
+        }
     } else {
         false
     }
@@ -135,22 +151,22 @@ statechart! {
     state Stopped {
         entry: entry_stopped;
         exit: exit_stopped;
-        on Play [guard is_track_loaded] => Playing [action do_play];
+        on MediaPlayerEvent::Play [guard is_track_loaded] => Playing [action do_play];
         on LoadTrack { path: _ } [guard guard_for_load_track] => Loading [action action_for_load_track];
     }
 
     state Loading {
         entry: entry_loading;
         exit: exit_loading;
-        on Play [guard is_track_loaded] => Playing [action do_play];
+        on MediaPlayerEvent::Play [guard is_track_loaded] => Playing [action do_play];
     }
 
     state Playing {
         entry: entry_playing;
         exit: exit_playing;
-        on Stop => Stopped [action do_stop];
-        on VolumeUp => Playing [action action_volume_up];
-        on VolumeDown => Playing [action action_volume_down];
+        on MediaPlayerEvent::Stop => Stopped [action do_stop];
+        on MediaPlayerEvent::VolumeUp => Playing [action action_volume_up];
+        on MediaPlayerEvent::VolumeDown => Playing [action action_volume_down];
     }
 }
 
@@ -222,8 +238,4 @@ fn main() {
     */
 }
 
-#[cfg(target_arch = "riscv32")]
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
+// Panic handler is provided by panic_halt crate for RISC-V target

@@ -826,132 +826,24 @@ where
 
         // Error type is now ProcessingError by default
         // Phase 0: Collect potential transitions (read-only on context for guards)
-        let mut potential_transitions: heapless::Vec<
-            PotentialTransition<StateType, EventType, ContextType>,
-            MAX_NODES_FOR_COMPUTATION,
-        > = heapless::Vec::new();
         let current_active_leaves_snapshot = self.active_leaf_states.clone();
-        let mut potential_transitions_overflow = false;
 
-        for &active_leaf_id in &current_active_leaves_snapshot {
-            let mut check_state_id_opt = Some(active_leaf_id);
-            'hierarchy_search: while let Some(check_state_id) = check_state_id_opt {
-                if self.machine_def.get_state_node(check_state_id).is_some() {
-                    for t_def in self.machine_def.transitions {
-                        if t_def.from_state == check_state_id {
-                            // Check if event matches using match_fn if available
-                            if let Some(match_fn) = t_def.match_fn {
-                                if !match_fn(event) {
-                                    continue; // Skip this transition if event doesn't match
-                                }
-                            }
-                            // Now check the guard if any
-                            if let Some(guard_fn) = t_def.guard {
-                                if !guard_fn(&self.context, event) {
-                                    trace!(
-                                        "[GUARD FAILED] From {:?} on {:?} → {:?}",
-                                        t_def.from_state, event, t_def.to_state
-                                    );
-                                    continue;
-                                }
-                            }
-                            trace!(
-                                "[MATCH] From {:?} on {:?} → {:?}",
-                                t_def.from_state, event, t_def.to_state
-                            );
-                            let pot_trans = PotentialTransition {
-                                source_leaf_id: active_leaf_id,
-                                transition_from_state_id: check_state_id,
-                                target_state_id: t_def.to_state,
-                                transition_ref: t_def,
-                            };
-                            if potential_transitions.push(pot_trans).is_err() {
-                                potential_transitions_overflow = true;
-                                break 'hierarchy_search;
-                            }
-                            break 'hierarchy_search;
-                        }
-                    }
-                }
-                check_state_id_opt = self.machine_def.get_parent_of(check_state_id);
-            }
-            if potential_transitions_overflow {
-                break;
-            }
-        }
-
-        if potential_transitions_overflow {
-            return SendResult::Error(ProcessingError::CapacityExceeded);
-        }
+        let potential_transitions =
+            match self.collect_potential_transitions(event, &current_active_leaves_snapshot) {
+                Ok(transitions) => transitions,
+                Err(e) => return SendResult::Error(e),
+            };
 
         if potential_transitions.is_empty() {
             return SendResult::NoMatch;
         }
 
         // Phase 0.5: Arbitrate and de-duplicate transitions (still read-only on context)
-        let mut arbitrated_transitions: heapless::Vec<
-            PotentialTransition<StateType, EventType, ContextType>,
-            MAX_NODES_FOR_COMPUTATION,
-        > = heapless::Vec::new();
-        // ... (arbitration logic using self.is_proper_ancestor, which reads self.machine_def)
-        // Ensure errors from is_proper_ancestor are handled (e.g., return SendResult::Error)
-        'candidate_loop: for pt_candidate in &potential_transitions {
-            for other_pt in &potential_transitions {
-                if core::ptr::eq(pt_candidate, other_pt) {
-                    continue;
-                }
-                match self.is_proper_ancestor(
-                    pt_candidate.transition_from_state_id,
-                    other_pt.transition_from_state_id,
-                ) {
-                    Ok(is_ancestor) => {
-                        if is_ancestor {
-                            continue 'candidate_loop;
-                        }
-                    }
-                    Err(e) => return SendResult::Error(e), // Propagate ProcessingError from is_proper_ancestor
-                }
-            }
-            if arbitrated_transitions.push(pt_candidate.clone()).is_err() {
-                return SendResult::Error(ProcessingError::CapacityExceeded);
-            }
-        }
-
-        if arbitrated_transitions.is_empty() {
-            return SendResult::NoMatch;
-        }
-
-        let mut final_transitions_to_execute: heapless::Vec<
-            PotentialTransition<StateType, EventType, ContextType>,
-            MAX_NODES_FOR_COMPUTATION,
-        > = heapless::Vec::new();
-        let mut processed_transition_pointers: heapless::Vec<
-            *const Transition<StateType, EventType, ContextType>,
-            MAX_NODES_FOR_COMPUTATION,
-        > = heapless::Vec::new();
-
-        for trans_to_consider in &arbitrated_transitions {
-            let current_ref_ptr = trans_to_consider.transition_ref as *const _;
-            let mut already_processed = false;
-            for &seen_ptr in &processed_transition_pointers {
-                if seen_ptr == current_ref_ptr {
-                    already_processed = true;
-                    break;
-                }
-            }
-            if !already_processed {
-                if final_transitions_to_execute
-                    .push(trans_to_consider.clone())
-                    .is_ok()
-                {
-                    if processed_transition_pointers.push(current_ref_ptr).is_err() {
-                        return SendResult::Error(ProcessingError::CapacityExceeded);
-                    }
-                } else {
-                    return SendResult::Error(ProcessingError::CapacityExceeded);
-                }
-            }
-        }
+        let final_transitions_to_execute = match self.arbitrate_transitions(&potential_transitions)
+        {
+            Ok(transitions) => transitions,
+            Err(e) => return SendResult::Error(e),
+        };
 
         if final_transitions_to_execute.is_empty() {
             return SendResult::NoMatch;
@@ -1593,7 +1485,7 @@ where
 #[allow(clippy::trivially_copy_pass_by_ref)] // Allow for test events
 mod tests {
     use super::*; //Imports S, E, C types from parent
-    use crate::core::DefaultContext; // Ensure DefaultContext is in scope
+    use crate::runtime::DefaultContext; // Ensure DefaultContext is in scope
 
     // Define const M for tests, e.g., 8, matching old MAX_HIERARCHY_DEPTH for compatibility.
     const TEST_HIERARCHY_DEPTH_M: usize = 8;

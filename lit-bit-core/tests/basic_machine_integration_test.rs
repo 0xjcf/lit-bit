@@ -5,8 +5,8 @@
 pub mod basic_machine_integration_test {
     use core::convert::TryFrom;
     use heapless::String;
+    use lit_bit_core::SendResult;
     use lit_bit_core::StateMachine;
-    use lit_bit_core::core::SendResult;
     use lit_bit_macro::statechart;
 
     const ACTION_LOG_CAPACITY: usize = 20;
@@ -84,12 +84,12 @@ pub mod basic_machine_integration_test {
         state State1 {
             entry: entry_s1;
             exit: exit_s1;
-            on Increment [guard guard_for_increment] => State2 [action transition_action_for_increment];
-            on Decrement => State1;
+            on TestEvent::Increment [guard guard_for_increment] => State2 [action transition_action_for_increment];
+            on TestEvent::Decrement => State1;
         }
         state State2 {
-            on Reset => State1;
-            on Forbidden => State2;
+            on TestEvent::Reset => State1;
+            on TestEvent::Forbidden => State2;
         }
     }
 
@@ -312,5 +312,246 @@ mod parallel_initial_state_test {
         );
 
         // End of test
+    }
+}
+
+// --- Test for Wildcard Pattern Matching ---
+#[cfg(test)]
+#[allow(clippy::trivially_copy_pass_by_ref)]
+mod wildcard_pattern_test {
+    use lit_bit_core::SendResult;
+    use lit_bit_core::StateMachine;
+    use lit_bit_macro::statechart;
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    pub struct WildcardContext {
+        log: heapless::Vec<heapless::String<32>, 10>,
+    }
+
+    impl WildcardContext {
+        fn record(&mut self, action: &str) {
+            let s = heapless::String::try_from(action).expect("Failed to create heapless string");
+            self.log.push(s).unwrap_or_else(|_| {
+                panic!("WildcardContext log overflow");
+            });
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum WildcardEvent {
+        EventA,
+        EventB,
+        EventC,
+    }
+
+    fn log_wildcard_match(ctx: &mut WildcardContext, _event: &WildcardEvent) {
+        ctx.record("wildcard_match");
+    }
+
+    fn log_specific_match(ctx: &mut WildcardContext, _event: &WildcardEvent) {
+        ctx.record("specific_match");
+    }
+
+    statechart! {
+        name: WildcardMachine,
+        context: WildcardContext,
+        event: WildcardEvent,
+        initial: State1,
+        state State1 {
+            on WildcardEvent::EventA => State2 [action log_specific_match];
+            on _ => State3 [action log_wildcard_match];
+        }
+        state State2 {
+            on _ => State1;
+        }
+        state State3 {
+            on WildcardEvent::EventA => State1;
+        }
+    }
+
+    #[test]
+    fn test_wildcard_pattern_matching() {
+        let mut machine = WildcardMachine::new(WildcardContext::default(), &WildcardEvent::EventA);
+
+        // Test specific match takes precedence
+        machine.context_mut().log.clear();
+        let result = machine.send(&WildcardEvent::EventA);
+        assert_eq!(result, SendResult::Transitioned);
+        assert_eq!(
+            machine.state().as_slice(),
+            &[WildcardMachineStateId::State2]
+        );
+        assert_eq!(machine.context().log.len(), 1);
+        assert_eq!(machine.context().log[0].as_str(), "specific_match");
+
+        // Go back to State1
+        machine.send(&WildcardEvent::EventB);
+        assert_eq!(
+            machine.state().as_slice(),
+            &[WildcardMachineStateId::State1]
+        );
+
+        // Test wildcard match for EventB
+        machine.context_mut().log.clear();
+        let result = machine.send(&WildcardEvent::EventB);
+        assert_eq!(result, SendResult::Transitioned);
+        assert_eq!(
+            machine.state().as_slice(),
+            &[WildcardMachineStateId::State3]
+        );
+        assert_eq!(machine.context().log.len(), 1);
+        assert_eq!(machine.context().log[0].as_str(), "wildcard_match");
+
+        // Go back to State1
+        machine.send(&WildcardEvent::EventA);
+        assert_eq!(
+            machine.state().as_slice(),
+            &[WildcardMachineStateId::State1]
+        );
+
+        // Test wildcard match for EventC
+        machine.context_mut().log.clear();
+        let result = machine.send(&WildcardEvent::EventC);
+        assert_eq!(result, SendResult::Transitioned);
+        assert_eq!(
+            machine.state().as_slice(),
+            &[WildcardMachineStateId::State3]
+        );
+        assert_eq!(machine.context().log.len(), 1);
+        assert_eq!(machine.context().log[0].as_str(), "wildcard_match");
+    }
+}
+
+// --- Test for Multiple State Machines Without Name Collisions ---
+#[cfg(test)]
+mod multiple_machines_test {
+    use lit_bit_core::StateMachine;
+    use lit_bit_macro::statechart;
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    pub struct ContextA {
+        value: i32,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    pub struct ContextB {
+        value: i32,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum EventA {
+        Go,
+        Stop,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum EventB {
+        Start,
+        End,
+    }
+
+    // First state machine in its own module
+    mod machine_a_module {
+        use super::*;
+
+        statechart! {
+            name: MachineA,
+            context: ContextA,
+            event: EventA,
+            initial: StateA1,
+            state StateA1 {
+                on EventA::Go => StateA2;
+            }
+            state StateA2 {
+                on EventA::Stop => StateA1;
+            }
+        }
+    }
+
+    // Second state machine in its own module
+    mod machine_b_module {
+        use super::*;
+
+        statechart! {
+            name: MachineB,
+            context: ContextB,
+            event: EventB,
+            initial: StateB1,
+            state StateB1 {
+                on EventB::Start => StateB2;
+            }
+            state StateB2 {
+                on EventB::End => StateB1;
+            }
+        }
+    }
+
+    use machine_a_module::*;
+    use machine_b_module::*;
+
+    #[test]
+    fn test_multiple_machines_no_collision() {
+        // Create both machines in the same scope
+        let mut machine_a = MachineA::new(ContextA::default(), &EventA::Go);
+        let mut machine_b = MachineB::new(ContextB::default(), &EventB::Start);
+
+        // Verify initial states
+        assert_eq!(machine_a.state().as_slice(), &[MachineAStateId::StateA1]);
+        assert_eq!(machine_b.state().as_slice(), &[MachineBStateId::StateB1]);
+
+        // Test transitions on both machines
+        machine_a.send(&EventA::Go);
+        assert_eq!(machine_a.state().as_slice(), &[MachineAStateId::StateA2]);
+
+        machine_b.send(&EventB::Start);
+        assert_eq!(machine_b.state().as_slice(), &[MachineBStateId::StateB2]);
+
+        // Ensure they don't interfere with each other
+        machine_a.send(&EventA::Stop);
+        assert_eq!(machine_a.state().as_slice(), &[MachineAStateId::StateA1]);
+
+        machine_b.send(&EventB::End);
+        assert_eq!(machine_b.state().as_slice(), &[MachineBStateId::StateB1]);
+    }
+}
+
+// --- Test to verify public API usage ---
+#[cfg(test)]
+mod public_api_test {
+    use lit_bit_core::StateMachine;
+    use lit_bit_macro::statechart;
+
+    #[derive(Debug, Clone, PartialEq, Default)]
+    pub struct PublicApiContext {
+        call_count: i32,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum PublicApiEvent {
+        Test,
+    }
+
+    statechart! {
+        name: PublicApiMachine,
+        context: PublicApiContext,
+        event: PublicApiEvent,
+        initial: State1,
+        state State1 {
+            on PublicApiEvent::Test => State2;
+        }
+        state State2 {}
+    }
+
+    #[test]
+    fn test_uses_public_api() {
+        let mut machine = PublicApiMachine::new(PublicApiContext::default(), &PublicApiEvent::Test);
+
+        // This should compile and work correctly using the public API
+        let result = machine.send(&PublicApiEvent::Test);
+        assert_eq!(result, lit_bit_core::SendResult::Transitioned);
+
+        // Also test the trait method directly
+        let result2 = <PublicApiMachine as StateMachine>::send(&mut machine, &PublicApiEvent::Test);
+        assert_eq!(result2, lit_bit_core::SendResult::NoMatch);
     }
 }
