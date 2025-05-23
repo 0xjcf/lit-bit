@@ -44,7 +44,7 @@ pub mod prelude {
     // pub use crate::StateMachine;
 }
 
-pub trait StateMachine {
+pub trait StateMachine<const N_ACTIVE: usize = MAX_ACTIVE_REGIONS> {
     type State: Copy
         + Clone
         + PartialEq
@@ -59,7 +59,7 @@ pub trait StateMachine {
     type Context: Clone + 'static;
 
     fn send(&mut self, event: &Self::Event) -> SendResult;
-    fn state(&self) -> heapless::Vec<Self::State, MAX_ACTIVE_REGIONS>;
+    fn state(&self) -> heapless::Vec<Self::State, N_ACTIVE>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;
 }

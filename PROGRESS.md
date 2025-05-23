@@ -6,6 +6,20 @@ _Add new sessions below this line._
 
 ---
 
+## 2025-01-27 · Session End
+* **Author**: @assistant (AI-agent)  
+* **Phase**: Code Review & Refactoring
+* **Work**: Successfully completed const generic refactor of `MAX_ACTIVE_REGIONS` → `N_ACTIVE` parameter
+  - **Core Changes**: Added `N_ACTIVE` const generic to `Runtime<StateType, EventType, ContextType, M, N_ACTIVE, MAX_NODES_FOR_COMPUTATION>`
+  - **API Enhancement**: Updated `StateMachine<N_ACTIVE>` trait to support customizable active region limits
+  - **Backward Compatibility**: Created `DefaultRuntime` type alias maintaining existing API
+  - **Macro Updates**: Fixed both `code_generator.rs` and `lib.rs` to generate correct 6-parameter Runtime instantiations
+  - **Test Updates**: Fixed all 87+ test instantiations and example code
+  - **Error Handling**: Updated return types from `MAX_ACTIVE_REGIONS` to `N_ACTIVE` in entry logic functions
+* **Testing**: All 87 tests passing (17 runtime + 70 macro tests), clean compilation, zero linter errors
+* **Benefits**: Users can now specify max active regions at compile-time (e.g., `Runtime<..., 8, ...>` for 8 regions vs default 4), eliminating runtime panics and enabling embedded customization
+* **Next**: Ready for commit and next code review item
+
 ## 2025-01-01 · _Session End_ (Runtime::new Safe Error Handling) ✅
 * _Author_: @claude-4-sonnet (via @0xjcf)
 * _Phase_: 1-core-runtime (Code Review Response - Embedded Safety)

@@ -147,6 +147,15 @@ where
 // Make MAX_ACTIVE_REGIONS public so it can be accessed by lib.rs
 pub const MAX_ACTIVE_REGIONS: usize = 4; // Max parallel regions/active states we can track
 
+/// Type alias for Runtime with default active regions capacity
+pub type DefaultRuntime<
+    StateType,
+    EventType,
+    ContextType,
+    const M: usize,
+    const MAX_NODES_FOR_COMPUTATION: usize,
+> = Runtime<StateType, EventType, ContextType, M, MAX_ACTIVE_REGIONS, MAX_NODES_FOR_COMPUTATION>;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ProcessingError {
     PathTooLong,        // Replaces PathTooLongError struct
@@ -233,8 +242,9 @@ pub enum SendResult {
 /// - `EventType`: The type representing event IDs (usually an enum).
 /// - `ContextType`: The user-defined context struct.
 /// - `M`: Const generic for maximum hierarchy depth of a single state path.
+/// - `N_ACTIVE`: Const generic for maximum number of active parallel regions/states.
 /// - `MAX_NODES_FOR_COMPUTATION`: Const generic for buffer sizes needed for computations involving
-///   multiple hierarchy branches, typically `M * MAX_ACTIVE_REGIONS`. This is used for temporary
+///   multiple hierarchy branches, typically `M * N_ACTIVE`. This is used for temporary
 ///   collections during transition processing (e.g. exit sets).
 #[derive(Debug)]
 pub struct Runtime<
@@ -242,6 +252,7 @@ pub struct Runtime<
     EventType,
     ContextType,
     const M: usize,
+    const N_ACTIVE: usize,
     const MAX_NODES_FOR_COMPUTATION: usize,
 > where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + 'static,
@@ -249,7 +260,7 @@ pub struct Runtime<
     ContextType: Clone + 'static,
 {
     machine_def: &'static MachineDefinition<StateType, EventType, ContextType>,
-    pub active_leaf_states: heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
+    pub active_leaf_states: heapless::Vec<StateType, N_ACTIVE>,
     context: ContextType,
 }
 
@@ -265,11 +276,17 @@ where
 
 // Helper function, can be outside impl Runtime or a static method if preferred.
 // Making it a free function for now to ensure no `self` issues initially.
-fn enter_state_recursive_logic<StateType, EventType, ContextType, const M: usize>(
+fn enter_state_recursive_logic<
+    StateType,
+    EventType,
+    ContextType,
+    const M: usize,
+    const N_ACTIVE: usize,
+>(
     machine_def: &MachineDefinition<StateType, EventType, ContextType>,
     context: &mut ContextType,
     state_id_to_enter: StateType,
-    accumulator: &mut heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
+    accumulator: &mut heapless::Vec<StateType, N_ACTIVE>,
     visited_during_entry: &mut heapless::Vec<StateType, M>,
     scratch: &mut Scratch<'_, StateType, M>, // ← NEW
     event: &EventType,
@@ -337,7 +354,7 @@ where
                             kind: EntryErrorKind::StateNotFound,
                         }
                     })?;
-                    enter_state_recursive_logic::<_, _, _, M>(
+                    enter_state_recursive_logic::<_, _, _, M, N_ACTIVE>(
                         machine_def,
                         context,
                         initial_child_of_region,
@@ -349,7 +366,7 @@ where
                 }
             }
         } else if let Some(initial_child_id) = node.initial_child {
-            enter_state_recursive_logic::<_, _, _, M>(
+            enter_state_recursive_logic::<_, _, _, M, N_ACTIVE>(
                 machine_def,
                 context,
                 initial_child_id,
@@ -387,8 +404,14 @@ where
     transition_ref: &'static Transition<StateType, EventType, ContextType>,
 }
 
-impl<StateType, EventType, ContextType, const M: usize, const MAX_NODES_FOR_COMPUTATION: usize>
-    Runtime<StateType, EventType, ContextType, M, MAX_NODES_FOR_COMPUTATION>
+impl<
+    StateType,
+    EventType,
+    ContextType,
+    const M: usize,
+    const N_ACTIVE: usize,
+    const MAX_NODES_FOR_COMPUTATION: usize,
+> Runtime<StateType, EventType, ContextType, M, N_ACTIVE, MAX_NODES_FOR_COMPUTATION>
 where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     EventType: Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static, // Removed Copy
@@ -418,7 +441,7 @@ where
         let top_level_initial_state_id = machine_def.initial_leaf_state;
 
         // Pass M explicitly if needed, or let it be inferred from the type of visited_for_initial_entry
-        enter_state_recursive_logic::<_, _, _, M>(
+        enter_state_recursive_logic::<_, _, _, M, N_ACTIVE>(
             machine_def,
             &mut mutable_context,
             top_level_initial_state_id,
@@ -447,7 +470,7 @@ where
         })
     }
 
-    pub fn state(&self) -> heapless::Vec<StateType, MAX_ACTIVE_REGIONS> {
+    pub fn state(&self) -> heapless::Vec<StateType, N_ACTIVE> {
         self.active_leaf_states.clone()
     }
     pub fn context(&self) -> &ContextType {
@@ -741,7 +764,7 @@ where
     fn collect_potential_transitions(
         &self,
         event: &EventType,
-        current_active_leaves_snapshot: &heapless::Vec<StateType, MAX_ACTIVE_REGIONS>,
+        current_active_leaves_snapshot: &heapless::Vec<StateType, N_ACTIVE>,
     ) -> Result<
         heapless::Vec<
             PotentialTransition<StateType, EventType, ContextType>,
@@ -1219,7 +1242,7 @@ where
         event: &EventType,
         scratch: &mut Scratch<'_, StateType, M>,
         context: &mut ContextType,
-    ) -> Result<heapless::Vec<StateType, MAX_ACTIVE_REGIONS>, ProcessingError> {
+    ) -> Result<heapless::Vec<StateType, N_ACTIVE>, ProcessingError> {
         trace!(
             "[TRACE] ENTER execute_entry_actions_from_lca_with_context: target_state_id = {:?}, lca_id = {:?}",
             target_state_id, lca_id
@@ -1284,7 +1307,7 @@ where
             }
             // Recursion into children always happens for parallel states
             if node.is_parallel && state_to_enter != target_state_id {
-                if let Err(entry_error) = enter_state_recursive_logic::<_, _, _, M>(
+                if let Err(entry_error) = enter_state_recursive_logic::<_, _, _, M, N_ACTIVE>(
                     self.machine_def,
                     context,
                     state_to_enter,
@@ -1343,7 +1366,7 @@ where
             .get_state_node(target_state_id)
             .ok_or(ProcessingError::EntryLogicFailure)?;
         if node.is_parallel || node.initial_child.is_some() {
-            if let Err(entry_error) = enter_state_recursive_logic::<_, _, _, M>(
+            if let Err(entry_error) = enter_state_recursive_logic::<_, _, _, M, N_ACTIVE>(
                 self.machine_def,
                 context,
                 target_state_id,
@@ -1475,8 +1498,15 @@ where
     }
 }
 
-impl<StateType, EventType, ContextType, const M: usize, const MAX_NODES_FOR_COMPUTATION: usize>
-    StateMachine for Runtime<StateType, EventType, ContextType, M, MAX_NODES_FOR_COMPUTATION>
+impl<
+    StateType,
+    EventType,
+    ContextType,
+    const M: usize,
+    const N_ACTIVE: usize,
+    const MAX_NODES_FOR_COMPUTATION: usize,
+> StateMachine<N_ACTIVE>
+    for Runtime<StateType, EventType, ContextType, M, N_ACTIVE, MAX_NODES_FOR_COMPUTATION>
 where
     StateType: Copy + Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static,
     EventType: Clone + PartialEq + Eq + core::hash::Hash + core::fmt::Debug + 'static, // Removed Copy
@@ -1490,7 +1520,7 @@ where
         self.send_internal(event)
     }
 
-    fn state(&self) -> heapless::Vec<Self::State, MAX_ACTIVE_REGIONS> {
+    fn state(&self) -> heapless::Vec<Self::State, N_ACTIVE> {
         self.active_leaf_states.clone()
     }
 
@@ -2099,13 +2129,19 @@ mod tests {
     fn test_parallel_initial_activation_and_entry_order() {
         let initial_context = ParallelActionLogContext::default(); // unused_mut: removed mut
         let initial_event_for_test = ParallelTestEvent::E1; // Corrected to ParallelTestEvent
-        let runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &PARALLEL_MACHINE_DEF,
-                initial_context,
-                &initial_event_for_test,
-            )
-            .expect("Failed to create runtime for test");
+        let runtime = Runtime::<
+            _,
+            _,
+            _,
+            TEST_HIERARCHY_DEPTH_M,
+            MAX_ACTIVE_REGIONS,
+            TEST_MAX_NODES_FOR_COMPUTATION,
+        >::new(
+            &PARALLEL_MACHINE_DEF,
+            initial_context,
+            &initial_event_for_test,
+        )
+        .expect("Failed to create runtime for test");
 
         let active_states = runtime.state();
         let mut sorted_active_states = active_states
@@ -2137,13 +2173,19 @@ mod tests {
     fn test_parallel_independent_region_transitions() {
         let initial_context = ParallelActionLogContext::default();
         let initial_event_for_test = ParallelTestEvent::E1; // Corrected to ParallelTestEvent
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &PARALLEL_MACHINE_DEF,
-                initial_context,
-                &initial_event_for_test,
-            )
-            .expect("Failed to create runtime for test");
+        let mut runtime = Runtime::<
+            _,
+            _,
+            _,
+            TEST_HIERARCHY_DEPTH_M,
+            MAX_ACTIVE_REGIONS,
+            TEST_MAX_NODES_FOR_COMPUTATION,
+        >::new(
+            &PARALLEL_MACHINE_DEF,
+            initial_context,
+            &initial_event_for_test,
+        )
+        .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let event_processed = runtime.send(&ParallelTestEvent::E1);
@@ -2199,13 +2241,19 @@ mod tests {
     #[test]
     fn test_parallel_transition_one_region_no_effect_on_other() {
         let initial_context = ParallelActionLogContext::default();
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &PARALLEL_MACHINE_DEF,
-                initial_context,
-                &ParallelTestEvent::EventRegion1Only,
-            )
-            .expect("Failed to create runtime for test");
+        let mut runtime = Runtime::<
+            _,
+            _,
+            _,
+            TEST_HIERARCHY_DEPTH_M,
+            MAX_ACTIVE_REGIONS,
+            TEST_MAX_NODES_FOR_COMPUTATION,
+        >::new(
+            &PARALLEL_MACHINE_DEF,
+            initial_context,
+            &ParallelTestEvent::EventRegion1Only,
+        )
+        .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let event_processed = runtime.send(&ParallelTestEvent::EventRegion1Only);
@@ -2246,13 +2294,19 @@ mod tests {
     #[test]
     fn test_parallel_self_transition_on_region_leaf() {
         let initial_context = ParallelActionLogContext::default(); // Needs mut for clear()
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &PARALLEL_MACHINE_DEF,
-                initial_context,
-                &ParallelTestEvent::EventRegion1Self,
-            )
-            .expect("Failed to create runtime for test");
+        let mut runtime = Runtime::<
+            _,
+            _,
+            _,
+            TEST_HIERARCHY_DEPTH_M,
+            MAX_ACTIVE_REGIONS,
+            TEST_MAX_NODES_FOR_COMPUTATION,
+        >::new(
+            &PARALLEL_MACHINE_DEF,
+            initial_context,
+            &ParallelTestEvent::EventRegion1Self,
+        )
+        .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let event_processed = runtime.send(&ParallelTestEvent::EventRegion1Self);
@@ -2290,13 +2344,19 @@ mod tests {
     #[test]
     fn test_parallel_self_transition_on_parallel_state_itself() {
         let initial_context = ParallelActionLogContext::default();
-        let mut runtime =
-            Runtime::<_, _, _, TEST_HIERARCHY_DEPTH_M, TEST_MAX_NODES_FOR_COMPUTATION>::new(
-                &PARALLEL_MACHINE_DEF,
-                initial_context,
-                &ParallelTestEvent::EventParallelSelf,
-            )
-            .expect("Failed to create runtime for test");
+        let mut runtime = Runtime::<
+            _,
+            _,
+            _,
+            TEST_HIERARCHY_DEPTH_M,
+            MAX_ACTIVE_REGIONS,
+            TEST_MAX_NODES_FOR_COMPUTATION,
+        >::new(
+            &PARALLEL_MACHINE_DEF,
+            initial_context,
+            &ParallelTestEvent::EventParallelSelf,
+        )
+        .expect("Failed to create runtime for test");
         runtime.context_mut().log.clear();
 
         let send_result = runtime.send(&ParallelTestEvent::EventParallelSelf);

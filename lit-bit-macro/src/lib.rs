@@ -901,6 +901,7 @@ pub(crate) mod code_generator {
                     #event_type_path,
                     #context_type_path,
                     #m_val,
+                    {lit_bit_core::MAX_ACTIVE_REGIONS}, // N_ACTIVE const generic for Runtime
                     #max_nodes_for_computation_val
                 >,
             }
@@ -929,7 +930,7 @@ pub(crate) mod code_generator {
                 }
             }
 
-            impl lit_bit_core::StateMachine for #machine_name {
+            impl lit_bit_core::StateMachine<{lit_bit_core::MAX_ACTIVE_REGIONS}> for #machine_name {
                 type State = #state_id_enum_name;
                 type Event = #event_type_path;
                 type Context = #context_type_path;
