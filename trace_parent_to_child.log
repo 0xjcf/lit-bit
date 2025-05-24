@@ -1,0 +1,20 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running unittests src/lib.rs (target/debug/deps/lit_bit_core-3d98caafdb816052)
+
+running 1 test
+
+thread 'core::tests::test_parent_to_child_transition' panicked at lit-bit-core/src/core/mod.rs:2157:9:
+assertion `left == right` failed
+  left: [GrandchildOneAlphaXray]
+ right: [ChildOneBravo]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test core::tests::test_parent_to_child_transition ... FAILED
+
+failures:
+
+failures:
+    core::tests::test_parent_to_child_transition
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p lit-bit-core --lib`

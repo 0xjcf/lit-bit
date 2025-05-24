@@ -32,4 +32,20 @@ else
     cargo clippy --workspace --all-targets --all-features -- -W clippy::pedantic -D warnings
 fi
 
+# Check if nightly toolchain is available and run nightly clippy
+echo ""
+echo "🌙 Checking nightly clippy for future compatibility..."
+if rustup toolchain list | grep -q "nightly"; then
+    if cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings; then
+        echo "✅ Nightly clippy passed - CI should be happy!"
+    else
+        echo "⚠️  Nightly clippy found issues. These will cause CI failures."
+        echo "   Consider fixing with 'cargo +nightly clippy --fix' or adding #[allow] attributes"
+        # Don't exit 1 here - this is informational for now
+    fi
+else
+    echo "ℹ️  Nightly toolchain not installed - skipping nightly clippy check"
+    echo "   Install with: rustup toolchain install nightly"
+fi
+
 echo "✅ $ACTION_DESCRIPTION complete for $APP_NAME (workspace)." 

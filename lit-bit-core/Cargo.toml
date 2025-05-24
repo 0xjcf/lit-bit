@@ -18,17 +18,19 @@ categories = ["embedded", "no-std", "algorithms"]
 [dependencies]
 # Core dependencies (keep minimal for no_std focus)
 # We might add `heapless` later if needed for no_std collections.
-heapless = "0.8" # Added for hierarchical path tracking in Runtime
+heapless = { version = "0.8.0", default-features = false }
+lit-bit-macro = { workspace = true }
 
 # Optional dependencies for features (generally std-related or host tools)
 anyhow = { version = "1.0", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
+serde_json = { version = "1.0", default-features = false, features = ["alloc", "raw_value"], optional = true }
 thiserror = { version = "1.0", optional = true }
 tracing = { version = "0.1", optional = true }
-futures = { version = "0.3", optional = true, default-features = false }
+futures = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
 async-trait = { version = "0.1", optional = true }
-tokio = { version = "1", features = ["rt", "macros", "time"], optional = true }
-lit-bit-macro = { path = "../lit-bit-macro", version = "0.1.0" }
+tokio = { version = "1.42", features = ["macros", "rt", "sync", "time"], optional = true }
+log = { version = "0.4", optional = true }
 
 # Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
 # MOVED TO TARGET-SPECIFIC BELOW
@@ -63,11 +65,12 @@ once_cell = { version = "1.19.0", default-features = false, features = ["critica
 [features]
 default = [] # Keep default empty for no_std focus
 
-std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "futures/std"]
-# The `async` feature implies `alloc` (via async-trait/futures)
-# and if `std` is also active, can pull in tokio.
-async = ["dep:async-trait", "dep:futures"]
+std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "dep:futures", "futures/std"]
+# The `async` feature requires `std` because tokio's runtime features (rt, time) require std
+async = ["std", "dep:async-trait", "dep:futures", "dep:tokio"]
 diagram = ["dep:serde"] # For serializing statechart structure
 
 # Example of combining features for specific use cases:
 # async-std = ["async", "std", "dep:tokio"]
+
+debug-log = ["dep:log"]

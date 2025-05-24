@@ -1,0 +1,578 @@
+    Checking lit-bit-core v0.0.1-alpha.0 (/Users/joseflores/Development/lit-bit/lit-bit-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
+
+#![feature(prelude_import)]
+#[prelude_import]
+use std::prelude::rust_2024::*;
+#[macro_use]
+extern crate std;
+use lit_bit_core::StateMachine;
+use lit_bit_macro::statechart;
+use heapless::String;
+const _LOG_CAPACITY: usize = 64;
+const _ACTION_LOG_STRING_CAPACITY: usize = 64;
+const TRACK_ID_CAPACITY: usize = 64;
+const _STATUS_MSG_CAPACITY: usize = 128;
+pub struct MediaPlayerContext {
+    pub current_track: Option<String<TRACK_ID_CAPACITY>>,
+    pub volume: u8,
+}
+#[automatically_derived]
+impl ::core::fmt::Debug for MediaPlayerContext {
+    #[inline]
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        ::core::fmt::Formatter::debug_struct_field2_finish(
+            f,
+            "MediaPlayerContext",
+            "current_track",
+            &self.current_track,
+            "volume",
+            &&self.volume,
+        )
+    }
+}
+#[automatically_derived]
+impl ::core::clone::Clone for MediaPlayerContext {
+    #[inline]
+    fn clone(&self) -> MediaPlayerContext {
+        MediaPlayerContext {
+            current_track: ::core::clone::Clone::clone(&self.current_track),
+            volume: ::core::clone::Clone::clone(&self.volume),
+        }
+    }
+}
+#[automatically_derived]
+impl ::core::default::Default for MediaPlayerContext {
+    #[inline]
+    fn default() -> MediaPlayerContext {
+        MediaPlayerContext {
+            current_track: ::core::default::Default::default(),
+            volume: ::core::default::Default::default(),
+        }
+    }
+}
+pub enum MediaPlayerEvent {
+    #[default]
+    Play,
+    Stop,
+    VolumeUp,
+    VolumeDown,
+    NextTrack,
+    PrevTrack,
+    PowerOff,
+}
+#[automatically_derived]
+impl ::core::fmt::Debug for MediaPlayerEvent {
+    #[inline]
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        ::core::fmt::Formatter::write_str(
+            f,
+            match self {
+                MediaPlayerEvent::Play => "Play",
+                MediaPlayerEvent::Stop => "Stop",
+                MediaPlayerEvent::VolumeUp => "VolumeUp",
+                MediaPlayerEvent::VolumeDown => "VolumeDown",
+                MediaPlayerEvent::NextTrack => "NextTrack",
+                MediaPlayerEvent::PrevTrack => "PrevTrack",
+                MediaPlayerEvent::PowerOff => "PowerOff",
+            },
+        )
+    }
+}
+#[automatically_derived]
+impl ::core::default::Default for MediaPlayerEvent {
+    #[inline]
+    fn default() -> MediaPlayerEvent {
+        Self::Play
+    }
+}
+#[automatically_derived]
+impl ::core::clone::Clone for MediaPlayerEvent {
+    #[inline]
+    fn clone(&self) -> MediaPlayerEvent {
+        match self {
+            MediaPlayerEvent::Play => MediaPlayerEvent::Play,
+            MediaPlayerEvent::Stop => MediaPlayerEvent::Stop,
+            MediaPlayerEvent::VolumeUp => MediaPlayerEvent::VolumeUp,
+            MediaPlayerEvent::VolumeDown => MediaPlayerEvent::VolumeDown,
+            MediaPlayerEvent::NextTrack => MediaPlayerEvent::NextTrack,
+            MediaPlayerEvent::PrevTrack => MediaPlayerEvent::PrevTrack,
+            MediaPlayerEvent::PowerOff => MediaPlayerEvent::PowerOff,
+        }
+    }
+}
+#[automatically_derived]
+impl ::core::marker::StructuralPartialEq for MediaPlayerEvent {}
+#[automatically_derived]
+impl ::core::cmp::PartialEq for MediaPlayerEvent {
+    #[inline]
+    fn eq(&self, other: &MediaPlayerEvent) -> bool {
+        let __self_discr = ::core::intrinsics::discriminant_value(self);
+        let __arg1_discr = ::core::intrinsics::discriminant_value(other);
+        __self_discr == __arg1_discr
+    }
+}
+#[automatically_derived]
+impl ::core::cmp::Eq for MediaPlayerEvent {
+    #[inline]
+    #[doc(hidden)]
+    #[coverage(off)]
+    fn assert_receiver_is_total_eq(&self) -> () {}
+}
+#[automatically_derived]
+impl ::core::hash::Hash for MediaPlayerEvent {
+    #[inline]
+    fn hash<__H: ::core::hash::Hasher>(&self, state: &mut __H) -> () {
+        let __self_discr = ::core::intrinsics::discriminant_value(self);
+        ::core::hash::Hash::hash(&__self_discr, state)
+    }
+}
+fn do_play(context: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    if let Some(track) = &context.current_track {
+        {
+            ::std::io::_print(format_args!("[Action] do_play - Track: {0:?}\n", track));
+        };
+    }
+}
+fn do_stop(_context: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    {
+        ::std::io::_print(format_args!("Stopping playback.\n"));
+    };
+}
+fn is_track_loaded(context: &MediaPlayerContext, _event: &MediaPlayerEvent) -> bool {
+    let loaded = context.current_track.is_some();
+    {
+        ::std::io::_print(format_args!("[Guard] is_track_loaded? {0}\n", loaded));
+    };
+    loaded
+}
+fn entry_stopped(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    {
+        ::std::io::_print(
+            format_args!("Entering Stopped state. Track: {0:?}\n", ctx.current_track),
+        );
+    };
+}
+fn exit_stopped(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    {
+        ::std::io::_print(
+            format_args!("Exiting Stopped state. Track: {0:?}\n", ctx.current_track),
+        );
+    };
+}
+fn entry_loading(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    {
+        ::std::io::_print(
+            format_args!("Entering Loading state. Track: {0:?}\n", ctx.current_track),
+        );
+    };
+}
+fn exit_loading(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    {
+        ::std::io::_print(
+            format_args!("Exiting Loading state. Track: {0:?}\n", ctx.current_track),
+        );
+    };
+}
+fn entry_playing(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    {
+        ::std::io::_print(
+            format_args!("Entering Playing state. Track: {0:?}\n", ctx.current_track),
+        );
+    };
+}
+fn exit_playing(ctx: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
+    {
+        ::std::io::_print(
+            format_args!("Exiting Playing state. Track: {0:?}\n", ctx.current_track),
+        );
+    };
+}
+mod generated_state_machine {
+    use lit_bit_core::core::{
+        Runtime, StateNode, Transition, ActionFn, GuardFn, MAX_ACTIVE_REGIONS,
+    };
+    #[allow(unused_imports)]
+    use super::*;
+    pub enum MediaPlayerStateId {
+        Loading,
+        Playing,
+        Stopped,
+    }
+    #[automatically_derived]
+    impl ::core::fmt::Debug for MediaPlayerStateId {
+        #[inline]
+        fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+            ::core::fmt::Formatter::write_str(
+                f,
+                match self {
+                    MediaPlayerStateId::Loading => "Loading",
+                    MediaPlayerStateId::Playing => "Playing",
+                    MediaPlayerStateId::Stopped => "Stopped",
+                },
+            )
+        }
+    }
+    #[automatically_derived]
+    impl ::core::marker::Copy for MediaPlayerStateId {}
+    #[automatically_derived]
+    impl ::core::clone::Clone for MediaPlayerStateId {
+        #[inline]
+        fn clone(&self) -> MediaPlayerStateId {
+            *self
+        }
+    }
+    #[automatically_derived]
+    impl ::core::marker::StructuralPartialEq for MediaPlayerStateId {}
+    #[automatically_derived]
+    impl ::core::cmp::PartialEq for MediaPlayerStateId {
+        #[inline]
+        fn eq(&self, other: &MediaPlayerStateId) -> bool {
+            let __self_discr = ::core::intrinsics::discriminant_value(self);
+            let __arg1_discr = ::core::intrinsics::discriminant_value(other);
+            __self_discr == __arg1_discr
+        }
+    }
+    #[automatically_derived]
+    impl ::core::cmp::Eq for MediaPlayerStateId {
+        #[inline]
+        #[doc(hidden)]
+        #[coverage(off)]
+        fn assert_receiver_is_total_eq(&self) -> () {}
+    }
+    #[automatically_derived]
+    impl ::core::hash::Hash for MediaPlayerStateId {
+        #[inline]
+        fn hash<__H: ::core::hash::Hasher>(&self, state: &mut __H) -> () {
+            let __self_discr = ::core::intrinsics::discriminant_value(self);
+            ::core::hash::Hash::hash(&__self_discr, state)
+        }
+    }
+    #[automatically_derived]
+    impl ::core::cmp::PartialOrd for MediaPlayerStateId {
+        #[inline]
+        fn partial_cmp(
+            &self,
+            other: &MediaPlayerStateId,
+        ) -> ::core::option::Option<::core::cmp::Ordering> {
+            let __self_discr = ::core::intrinsics::discriminant_value(self);
+            let __arg1_discr = ::core::intrinsics::discriminant_value(other);
+            ::core::cmp::PartialOrd::partial_cmp(&__self_discr, &__arg1_discr)
+        }
+    }
+    #[automatically_derived]
+    impl ::core::cmp::Ord for MediaPlayerStateId {
+        #[inline]
+        fn cmp(&self, other: &MediaPlayerStateId) -> ::core::cmp::Ordering {
+            let __self_discr = ::core::intrinsics::discriminant_value(self);
+            let __arg1_discr = ::core::intrinsics::discriminant_value(other);
+            ::core::cmp::Ord::cmp(&__self_discr, &__arg1_discr)
+        }
+    }
+    impl MediaPlayerStateId {
+        /// Converts a string slice representing the full, underscore-separated path
+        /// of a state (e.g., "Parent_Child_Grandchild") to the corresponding state ID enum variant.
+        ///
+        /// The matching is case-sensitive and expects paths as generated internally (typically PascalCase segments joined by underscores).
+        pub fn from_str_path(path_str: &str) -> Option<Self> {
+            match path_str {
+                "Loading" => Some(Self::Loading),
+                "Playing" => Some(Self::Playing),
+                "Stopped" => Some(Self::Stopped),
+                _ => None,
+            }
+        }
+    }
+    const STATES: &[StateNode<
+        MediaPlayerStateId,
+        MediaPlayerContext,
+        MediaPlayerEvent,
+    >] = &[
+        StateNode {
+            id: MediaPlayerStateId::Stopped,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(
+                entry_stopped as ActionFn<MediaPlayerContext, MediaPlayerEvent>,
+            ),
+            exit_action: Some(
+                exit_stopped as ActionFn<MediaPlayerContext, MediaPlayerEvent>,
+            ),
+            is_parallel: false,
+        },
+        StateNode {
+            id: MediaPlayerStateId::Loading,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(
+                entry_loading as ActionFn<MediaPlayerContext, MediaPlayerEvent>,
+            ),
+            exit_action: Some(
+                exit_loading as ActionFn<MediaPlayerContext, MediaPlayerEvent>,
+            ),
+            is_parallel: false,
+        },
+        StateNode {
+            id: MediaPlayerStateId::Playing,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(
+                entry_playing as ActionFn<MediaPlayerContext, MediaPlayerEvent>,
+            ),
+            exit_action: Some(
+                exit_playing as ActionFn<MediaPlayerContext, MediaPlayerEvent>,
+            ),
+            is_parallel: false,
+        },
+    ];
+    const TRANSITIONS: &[Transition<
+        MediaPlayerStateId,
+        MediaPlayerEvent,
+        MediaPlayerContext,
+    >] = &[
+        Transition {
+            from_state: MediaPlayerStateId::Stopped,
+            event: MediaPlayerEvent::Play,
+            to_state: MediaPlayerStateId::Playing,
+            action: Some(do_play as ActionFn<MediaPlayerContext, MediaPlayerEvent>),
+            guard: Some(is_track_loaded as GuardFn<MediaPlayerContext, MediaPlayerEvent>),
+        },
+        Transition {
+            from_state: MediaPlayerStateId::Loading,
+            event: MediaPlayerEvent::Play,
+            to_state: MediaPlayerStateId::Playing,
+            action: Some(do_play as ActionFn<MediaPlayerContext, MediaPlayerEvent>),
+            guard: None,
+        },
+        Transition {
+            from_state: MediaPlayerStateId::Playing,
+            event: MediaPlayerEvent::Stop,
+            to_state: MediaPlayerStateId::Stopped,
+            action: Some(do_stop as ActionFn<MediaPlayerContext, MediaPlayerEvent>),
+            guard: None,
+        },
+        Transition {
+            from_state: MediaPlayerStateId::Playing,
+            event: MediaPlayerEvent::VolumeUp,
+            to_state: MediaPlayerStateId::Playing,
+            action: None,
+            guard: None,
+        },
+        Transition {
+            from_state: MediaPlayerStateId::Playing,
+            event: MediaPlayerEvent::VolumeDown,
+            to_state: MediaPlayerStateId::Playing,
+            action: None,
+            guard: None,
+        },
+    ];
+    pub const MEDIAPLAYER_MACHINE_DEFINITION: lit_bit_core::core::MachineDefinition<
+        MediaPlayerStateId,
+        MediaPlayerEvent,
+        MediaPlayerContext,
+    > = lit_bit_core::core::MachineDefinition::new(
+        STATES,
+        TRANSITIONS,
+        MediaPlayerStateId::Stopped,
+    );
+    pub struct MediaPlayer {
+        runtime: lit_bit_core::core::Runtime<
+            MediaPlayerStateId,
+            MediaPlayerEvent,
+            MediaPlayerContext,
+            8,
+            32,
+        >,
+    }
+    #[automatically_derived]
+    impl ::core::fmt::Debug for MediaPlayer {
+        #[inline]
+        fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+            ::core::fmt::Formatter::debug_struct_field1_finish(
+                f,
+                "MediaPlayer",
+                "runtime",
+                &&self.runtime,
+            )
+        }
+    }
+    impl MediaPlayer {
+        pub fn new(context: MediaPlayerContext) -> Self {
+            let initial_event_value = MediaPlayerEvent::default();
+            Self {
+                runtime: lit_bit_core::core::Runtime::new(
+                    &MEDIAPLAYER_MACHINE_DEFINITION,
+                    context,
+                    &initial_event_value,
+                ),
+            }
+        }
+        pub fn send(&mut self, event: &MediaPlayerEvent) -> bool {
+            match event {
+                MediaPlayerEvent::Play => {
+                    if (is_track_loaded)(&self.context(), event) {
+                        (do_play)(&mut self.context_mut(), event);
+                        {
+                            ::std::io::_print(
+                                format_args!(
+                                    "Transitioning to State::{0} due to event {1:?}\n",
+                                    "Playing",
+                                    event,
+                                ),
+                            );
+                        };
+                        self.runtime.active_leaf_states = heapless::Vec::from_slice(
+                                &[MediaPlayerStateId::Playing],
+                            )
+                            .unwrap();
+                        return true;
+                    }
+                }
+                MediaPlayerEvent::Play => {
+                    (do_play)(&mut self.context_mut(), event);
+                    {
+                        ::std::io::_print(
+                            format_args!(
+                                "Transitioning to State::{0} due to event {1:?}\n",
+                                "Playing",
+                                event,
+                            ),
+                        );
+                    };
+                    self.runtime.active_leaf_states = heapless::Vec::from_slice(
+                            &[MediaPlayerStateId::Playing],
+                        )
+                        .unwrap();
+                    return true;
+                }
+                MediaPlayerEvent::Stop => {
+                    (do_stop)(&mut self.context_mut(), event);
+                    {
+                        ::std::io::_print(
+                            format_args!(
+                                "Transitioning to State::{0} due to event {1:?}\n",
+                                "Stopped",
+                                event,
+                            ),
+                        );
+                    };
+                    self.runtime.active_leaf_states = heapless::Vec::from_slice(
+                            &[MediaPlayerStateId::Stopped],
+                        )
+                        .unwrap();
+                    return true;
+                }
+                MediaPlayerEvent::VolumeUp => {
+                    {
+                        ::std::io::_print(
+                            format_args!(
+                                "Transitioning to State::{0} due to event {1:?}\n",
+                                "Playing",
+                                event,
+                            ),
+                        );
+                    };
+                    self.runtime.active_leaf_states = heapless::Vec::from_slice(
+                            &[MediaPlayerStateId::Playing],
+                        )
+                        .unwrap();
+                    return true;
+                }
+                MediaPlayerEvent::VolumeDown => {
+                    {
+                        ::std::io::_print(
+                            format_args!(
+                                "Transitioning to State::{0} due to event {1:?}\n",
+                                "Playing",
+                                event,
+                            ),
+                        );
+                    };
+                    self.runtime.active_leaf_states = heapless::Vec::from_slice(
+                            &[MediaPlayerStateId::Playing],
+                        )
+                        .unwrap();
+                    return true;
+                }
+                _ => {
+                    return false;
+                }
+            }
+        }
+        pub fn context(&self) -> &MediaPlayerContext {
+            self.runtime.context()
+        }
+        pub fn context_mut(&mut self) -> &mut MediaPlayerContext {
+            self.runtime.context_mut()
+        }
+    }
+    impl lit_bit_core::StateMachine for MediaPlayer {
+        type State = MediaPlayerStateId;
+        type Event = MediaPlayerEvent;
+        type Context = MediaPlayerContext;
+        fn send(&mut self, event: &Self::Event) -> bool {
+            self.send(event)
+        }
+        fn state(
+            &self,
+        ) -> heapless::Vec<Self::State, { lit_bit_core::core::MAX_ACTIVE_REGIONS }> {
+            self.runtime.state()
+        }
+        fn context(&self) -> &Self::Context {
+            self.context()
+        }
+        fn context_mut(&mut self) -> &mut Self::Context {
+            self.context_mut()
+        }
+    }
+}
+pub use generated_state_machine::*;
+fn main() {
+    let player_context = MediaPlayerContext {
+        current_track: None,
+        volume: 50,
+    };
+    let mut player = MediaPlayer::new(player_context.clone());
+    {
+        ::std::io::_print(format_args!("Initial state: {0:?}\n", player.state()));
+    };
+    {
+        ::std::io::_print(format_args!("Initial context: {0:?}\n", player.context()));
+    };
+    {
+        ::std::io::_print(
+            format_args!(
+                "Sending Stop (should do nothing if already stopped or no track):\n",
+            ),
+        );
+    };
+    player.send(&MediaPlayerEvent::Stop);
+    {
+        ::std::io::_print(format_args!("State after Stop: {0:?}\n", player.state()));
+    };
+    {
+        ::std::io::_print(
+            format_args!("Sending Play (should fail guard if no track):\n"),
+        );
+    };
+    player.send(&MediaPlayerEvent::Play);
+    {
+        ::std::io::_print(
+            format_args!("State after Play (no track): {0:?}\n", player.state()),
+        );
+    };
+    {
+        ::std::io::_print(format_args!("Sending Play (track was never loaded):\n"));
+    };
+    player.send(&MediaPlayerEvent::Play);
+    {
+        ::std::io::_print(format_args!("State after Play: {0:?}\n", player.state()));
+    };
+    {
+        ::std::io::_print(format_args!("Sending Stop:\n"));
+    };
+    player.send(&MediaPlayerEvent::Stop);
+    {
+        ::std::io::_print(format_args!("State after Stop: {0:?}\n", player.state()));
+    };
+}

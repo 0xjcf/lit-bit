@@ -11,7 +11,10 @@ mod riscv_logic {
     use riscv_rt::entry;
     use semihosting::println;
 
-    use lit_bit_core::core::{ActionFn, MachineDefinition, Runtime, StateNode, Transition};
+    use lit_bit_core::{
+        ActionFn, MAX_ACTIVE_REGIONS, MachineDefinition, Runtime, SendResult, StateMachine,
+        StateNode, Transition,
+    };
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
     #[repr(u8)]
@@ -48,34 +51,31 @@ mod riscv_logic {
         }
     }
 
-    fn log_red(_context: &mut TrafficLightContext) {
+    fn log_red(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
             uart_print_str("U: Light is now RED.\n");
         }
     }
 
-    fn log_green(_context: &mut TrafficLightContext) {
+    fn log_green(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
             uart_print_str("U: Light is now GREEN.\n");
         }
     }
 
-    fn log_yellow(_context: &mut TrafficLightContext) {
+    fn log_yellow(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
             uart_print_str("U: Light is now YELLOW.\n");
         }
     }
 
-    fn increment_cycle(context: &mut TrafficLightContext) {
+    fn increment_cycle(context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         context.cycle_count += 1;
     }
 
-    fn transition_to_red_action(context: &mut TrafficLightContext) {
-        log_red(context);
-        increment_cycle(context);
-        unsafe {
-            uart_print_str("U: Cycle to RED action done.\n");
-        }
+    // Match function for timer elapsed event
+    fn matches_timer_elapsed(event: &TrafficLightEvent) -> bool {
+        matches!(event, TrafficLightEvent::TimerElapsed)
     }
 
     // Define the transitions
@@ -86,29 +86,59 @@ mod riscv_logic {
     >] = &[
         Transition {
             from_state: TrafficLightState::Red,
-            event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Green,
-            action: Some(log_green as ActionFn<TrafficLightContext>),
+            action: None,
             guard: None,
+            match_fn: Some(matches_timer_elapsed),
         },
         Transition {
             from_state: TrafficLightState::Green,
-            event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Yellow,
-            action: Some(log_yellow as ActionFn<TrafficLightContext>),
+            action: None,
             guard: None,
+            match_fn: Some(matches_timer_elapsed),
         },
         Transition {
             from_state: TrafficLightState::Yellow,
-            event: TrafficLightEvent::TimerElapsed,
             to_state: TrafficLightState::Red,
-            action: Some(transition_to_red_action as ActionFn<TrafficLightContext>),
+            action: Some(increment_cycle as ActionFn<TrafficLightContext, TrafficLightEvent>),
             guard: None,
+            match_fn: Some(matches_timer_elapsed),
         },
     ];
 
     // Define the states (even if simple, the definition needs an array)
-    const TRAFFIC_LIGHT_STATENODES: &[StateNode<TrafficLightState, TrafficLightContext>] = &[];
+    #[allow(dead_code)] // Suppress dead code warning as it's used via TRAFFIC_LIGHT_MACHINE_DEF
+    const TRAFFIC_LIGHT_STATENODES: &[StateNode<
+        TrafficLightState,
+        TrafficLightContext,
+        TrafficLightEvent,
+    >] = &[
+        StateNode {
+            id: TrafficLightState::Red,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(log_red as ActionFn<TrafficLightContext, TrafficLightEvent>),
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TrafficLightState::Green,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(log_green as ActionFn<TrafficLightContext, TrafficLightEvent>),
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: TrafficLightState::Yellow,
+            parent: None,
+            initial_child: None,
+            entry_action: Some(log_yellow as ActionFn<TrafficLightContext, TrafficLightEvent>),
+            exit_action: None,
+            is_parallel: false,
+        },
+    ];
 
     // Create the machine definition
     // This is what the `statechart!` macro would generate.
@@ -122,6 +152,19 @@ mod riscv_logic {
         TrafficLightState::Red, // Initial state
     );
 
+    const M: usize = 2; // Max hierarchy depth for this simple machine (flat = 1, 2 is safe)
+    const MAX_NODES_CALC: usize = M * MAX_ACTIVE_REGIONS;
+
+    // Type alias for this specific Runtime configuration
+    type TrafficLightRuntime = Runtime<
+        TrafficLightState,
+        TrafficLightEvent,
+        TrafficLightContext,
+        M,
+        MAX_ACTIVE_REGIONS,
+        MAX_NODES_CALC,
+    >;
+
     #[entry]
     fn main_riscv_entry() -> ! {
         unsafe {
@@ -134,24 +177,32 @@ mod riscv_logic {
         }
 
         let initial_context = TrafficLightContext { cycle_count: 0 };
-        let mut runtime = Runtime::new(TRAFFIC_LIGHT_MACHINE_DEF.clone(), initial_context);
+        let initial_event = TrafficLightEvent::TimerElapsed; // Initial event
+        // Use the type alias
+        let mut runtime: TrafficLightRuntime =
+            Runtime::new(&TRAFFIC_LIGHT_MACHINE_DEF, initial_context, &initial_event)
+                .expect("Failed to create traffic light state machine");
 
         unsafe {
             uart_print_str("UART: SM created.\n");
         }
 
-        for _i in 0..7 {
+        for _ in 0..7 {
             unsafe {
                 uart_print_str("\nUART: Event -> ");
             }
-            let transitioned = runtime.send(TrafficLightEvent::TimerElapsed);
-            if transitioned {
-                unsafe {
+            match runtime.send(&TrafficLightEvent::TimerElapsed) {
+                SendResult::Transitioned => unsafe {
                     uart_print_str("UART: Transitioned.\n");
-                }
-            } else {
-                unsafe {
+                },
+                SendResult::NoMatch => unsafe {
                     uart_print_str("UART: No Transition.\n");
+                },
+                SendResult::Error(e) => {
+                    println!("SEMI: Runtime error: {e:?}");
+                    unsafe {
+                        uart_print_str("UART: ERROR during transition!\n");
+                    }
                 }
             }
         }

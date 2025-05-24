@@ -22,27 +22,44 @@
 
 // No `use core::fmt` or `use ::core::fmt` needed here if we qualify directly in trait bounds.
 
-pub mod core;
+pub mod runtime;
+
+// Re-export macros from lit_bit_macro
+pub use lit_bit_macro::{statechart, statechart_event};
+
+// Re-export key types/traits for easier use by consumers of the crate.
+pub use runtime::ActionFn; // Re-export function types for macro use
+pub use runtime::DefaultContext;
+pub use runtime::EntryExitActionFn;
+pub use runtime::GuardFn;
+pub use runtime::MAX_ACTIVE_REGIONS;
+pub use runtime::MachineDefinition; // If users need to construct this manually
+pub use runtime::ProcessingError; // Re-export ProcessingError for error handling
+pub use runtime::Runtime; // If users need to construct this manually
+pub use runtime::SendResult; // Re-export SendResult for public use
+pub use runtime::StateNode; // If users need to construct this manually
+pub use runtime::Transition; // If users need to construct this manually
 
 pub mod prelude {
     // pub use crate::StateMachine;
 }
 
-pub trait StateMachine {
-    #[cfg(not(feature = "std"))]
-    type State: Copy + Clone + PartialEq + ::core::fmt::Debug;
-    #[cfg(feature = "std")]
-    type State: Copy + Clone + PartialEq + std::fmt::Debug;
+pub trait StateMachine<const N_ACTIVE: usize = MAX_ACTIVE_REGIONS> {
+    type State: Copy
+        + Clone
+        + PartialEq
+        + Eq
+        + ::core::hash::Hash
+        + ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
+        + 'static;
 
-    #[cfg(not(feature = "std"))]
-    type Event: Copy + Clone + PartialEq + ::core::fmt::Debug;
-    #[cfg(feature = "std")]
-    type Event: Copy + Clone + PartialEq + std::fmt::Debug;
+    type Event: ::core::fmt::Debug // Use ::core::fmt::Debug for all builds
+        + 'static; // Removed Clone, PartialEq, Eq, Hash
 
-    type Context;
+    type Context: Clone + 'static;
 
-    fn send(&mut self, event: Self::Event) -> bool;
-    fn state(&self) -> heapless::Vec<Self::State, 4>;
+    fn send(&mut self, event: &Self::Event) -> SendResult;
+    fn state(&self) -> heapless::Vec<Self::State, N_ACTIVE>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;
 }

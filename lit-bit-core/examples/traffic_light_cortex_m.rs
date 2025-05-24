@@ -10,13 +10,17 @@ mod cortex_m_logic {
     // If we want to see output during size check (optional, adds size)
     // use cortex_m_semihosting::{debug, hprintln};
 
-    use lit_bit_core::core::{
-        // StateMachine, // This will be removed
-        DefaultContext,
-        MachineDefinition,
-        Runtime,
-        StateNode,
-        Transition,
+    use lit_bit_core::{
+        StateMachine,
+        runtime::{
+            DefaultContext,
+            MAX_ACTIVE_REGIONS, // Use re-exported version
+            MachineDefinition,
+            Runtime,
+            SendResult,
+            StateNode,
+            Transition,
+        },
     };
 
     // Define states for the traffic light
@@ -35,25 +39,47 @@ mod cortex_m_logic {
     // For this example, we'll use the DefaultContext since actions don't modify a specific context.
     type BlinkyContext = DefaultContext;
 
+    // Match function for toggle event
+    fn matches_toggle(event: &LightEvent) -> bool {
+        matches!(event, LightEvent::Toggle)
+    }
+
     const LIGHT_TRANSITIONS: &[Transition<LightState, LightEvent, BlinkyContext>] = &[
         Transition {
             from_state: LightState::Off,
-            event: LightEvent::Toggle,
             to_state: LightState::On,
             action: None,
             guard: None,
+            match_fn: Some(matches_toggle),
         },
         Transition {
             from_state: LightState::On,
-            event: LightEvent::Toggle,
             to_state: LightState::Off,
             action: None,
             guard: None,
+            match_fn: Some(matches_toggle),
         },
     ];
 
     // Define the states (even if simple, the definition needs an array)
-    const LIGHT_STATENODES: &[StateNode<LightState, BlinkyContext>] = &[];
+    const LIGHT_STATENODES: &[StateNode<LightState, BlinkyContext, LightEvent>] = &[
+        StateNode {
+            id: LightState::Off,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+        StateNode {
+            id: LightState::On,
+            parent: None,
+            initial_child: None,
+            entry_action: None,
+            exit_action: None,
+            is_parallel: false,
+        },
+    ];
 
     #[allow(dead_code)]
     const BLINKY_MACHINE_DEF: MachineDefinition<LightState, LightEvent, BlinkyContext> =
@@ -63,14 +89,51 @@ mod cortex_m_logic {
             LightState::Off, // Initial state
         );
 
+    // Define M and MAX_NODES_FOR_COMPUTATION for the Runtime instantiation
+    // M: Represents the maximum expected hierarchy depth of any state path in this specific machine.
+    // For this simple blinky machine, depth is 1 (only top-level states). Value 2 provides a small buffer.
+    const M: usize = 2;
+    // MAX_NODES_FOR_COMPUTATION: Buffer for computations involving multiple hierarchy branches.
+    // Calculated as M * MAX_ACTIVE_REGIONS.
+    const MAX_NODES_CALC: usize = M * MAX_ACTIVE_REGIONS;
+
     #[entry]
     fn main_cortex_m_entry() -> ! {
-        // Renamed to avoid conflict if main is defined outside
         let initial_context = DefaultContext::default();
-        let mut runtime = Runtime::new(BLINKY_MACHINE_DEF.clone(), initial_context);
+        let initial_event = LightEvent::Toggle;
+        // Use turbofish for const generics, allowing type inference for State, Event, Context
+        let mut runtime = Runtime::<_, _, _, M, MAX_ACTIVE_REGIONS, MAX_NODES_CALC>::new(
+            &BLINKY_MACHINE_DEF,
+            initial_context,
+            &initial_event,
+        )
+        .expect("Failed to create blinky state machine");
 
-        runtime.send(LightEvent::Toggle);
-        runtime.send(LightEvent::Toggle);
+        match runtime.send(&LightEvent::Toggle) {
+            SendResult::Transitioned => {
+                // Success - state transition occurred
+            }
+            SendResult::NoMatch => {
+                // No matching transition found
+            }
+            SendResult::Error(_e) => {
+                // Runtime error occurred - in a real application this might
+                // trigger a system reset or enter a safe mode
+            }
+        }
+
+        match runtime.send(&LightEvent::Toggle) {
+            SendResult::Transitioned => {
+                // Success - state transition occurred
+            }
+            SendResult::NoMatch => {
+                // No matching transition found
+            }
+            SendResult::Error(_e) => {
+                // Runtime error occurred
+            }
+        }
+
         let _ = runtime.state();
         let _ = runtime.context();
 

@@ -1,13 +1,11 @@
 # Root Cargo.toml for the lit-bit workspace
 [workspace]
 resolver = "2"
-members = [
-    "lit-bit-core",   # The main library
-    "lit-bit-macro"   # The procedural macro crate
-]
+members = ["lit-bit-core", "lit-bit-macro"]
 
-# Optional: Default members for commands like `cargo run` without -p
-# default-members = ["lit-bit-core"]
+# Workspace dependencies - centrally managed versions for publishing compatibility
+[workspace.dependencies]
+lit-bit-macro = { path = "lit-bit-macro", version = "0.1.0" }
 
 # Shared workspace-level profile settings
 [profile.dev]
@@ -19,8 +17,4 @@ codegen-units = 1
 strip = true 
 panic = "abort"
 
-#[profile.test]
-# The panic strategy cannot currently be overridden for the test profile on stable Rust.
-# It's best to let tests panic normally. If specific panic behavior is needed for tests,
-# it's usually handled via features or test-specific configurations if possible.
-# panic = "abort" # This would cause a warning if uncommented 
+# Optional: Default members for commands like `cargo run`

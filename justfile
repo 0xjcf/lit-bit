@@ -21,11 +21,33 @@ test-macro:
   @echo "🔬 Testing procedural macro crate (lit-bit-macro)..."
   @cargo test -p lit-bit-macro
 
+test-summary:
+  @cargo test 2>&1 | grep "test result"
+
 # --- Lint Tasks ---
 # Lint the entire workspace or a specific part (app parameter currently informational for workspace-wide script)
 # Usage: just lint [fix] OR just lint <app_name> [fix]
 lint app='workspace' fix='':
   ./scripts/lint_app.sh {{app}} {{fix}}
+
+# Nightly-specific lint tasks for catching CI issues early
+lint-nightly app='workspace' fix='':
+  #!/usr/bin/env bash
+  set -e
+  echo "🌙 Running nightly clippy checks..."
+  if ! rustup toolchain list | grep -q "nightly"; then
+    echo "❌ Nightly toolchain not installed. Install with: rustup toolchain install nightly"
+    exit 1
+  fi
+  
+  if [[ "{{fix}}" == "fix" ]]; then
+    echo "🔧 Fixing nightly clippy issues..."
+    cargo +nightly clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings
+  else
+    echo "🔍 Checking for nightly clippy issues..."
+    cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+  fi
+  echo "✅ Nightly clippy check complete."
 
 # Build all workspace members for release
 build:

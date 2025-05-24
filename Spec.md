@@ -214,6 +214,68 @@ pub enum TrafficLightEvent {
 }
 ```
 
+#### Event Enum Requirements
+
+To enable robust pattern matching on events (including variants with payloads) in the `statechart!` macro, event enums **must** be annotated with the `#[statechart_event]` attribute:
+
+```rust
+use lit_bit_macro::statechart_event;
+
+#[derive(Debug, Clone, PartialEq)]
+#[statechart_event]  // Required for pattern matching support
+pub enum MediaPlayerEvent {
+    Play,
+    Stop,
+    LoadTrack { path: String<64> },  // Variants with payloads are fully supported
+    VolumeUp,
+    VolumeDown,
+}
+
+// Event enums support both Copy and non-Copy types
+#[derive(Debug, Clone, PartialEq)]
+#[statechart_event]
+pub enum DataEvent {
+    Simple,                           // Copy variant
+    WithString(String),               // Non-Copy owned data
+    WithVec(Vec<u8>),                // Non-Copy owned data
+    WithCustomStruct { data: MyData }, // Non-Copy struct with owned fields
+}
+```
+
+**Event Type Compatibility:**
+
+The library supports comprehensive event type compatibility:
+- **Copy types**: Simple enums, primitive data types, small structs that implement `Copy`
+- **Non-Copy types**: Enums with owned data like `String`, `Vec<T>`, custom structs with owned fields
+- **Mixed variants**: Event enums can contain both Copy and non-Copy variants in the same enum
+
+**Why is this attribute required?**
+
+Rust's macro system operates on tokens and cannot introspect type information from external modules or crates. The `#[statechart_event]` attribute enables the macro to:
+
+1. **Generate metadata** about enum variants and their payload types at compile time
+2. **Support pattern matching** in transition definitions (e.g., `on LoadTrack { path: _ } => ...`)
+3. **Enable exhaustive matching** for compile-time verification of handled events
+4. **Work with external enums** defined in other modules or crates
+5. **Handle both Copy and non-Copy event types** uniformly through reference-based matching
+
+This approach aligns with established Rust patterns used by popular crates like:
+- **Strum**: Requires `#[derive(EnumIter)]` for variant iteration
+- **Serde**: Requires `#[derive(Serialize, Deserialize)]` for serialization
+- **enum_dispatch**: Requires attributes for trait delegation
+
+The single attribute annotation provides maximum functionality with minimal user burden, enabling features that would be impossible without it on stable Rust.
+
+**External Event Enums:**
+
+If your event enum is defined in an external crate that you cannot modify, you have several options:
+
+1. **Request upstream support**: Ask the crate maintainer to add `#[statechart_event]`
+2. **Create a wrapper enum**: Define a local enum that wraps the external one
+3. **Use newtype pattern**: Wrap the external enum in a newtype struct
+
+See the examples directory for demonstrations of these patterns.
+
 ### 3.3. Context Data
 
 _How context data is defined in the macro and accessed/modified._
