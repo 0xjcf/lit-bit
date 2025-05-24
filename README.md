@@ -269,10 +269,10 @@ println!("{:?}", player.state());
 #### When to Use Parallel States
 
 Parallel states are ideal for modeling:
-- **Audio/Video Systems**: Playback control + volume control + display settings
-- **IoT Devices**: Connectivity status + sensor readings + user interface
-- **Game Systems**: Player movement + inventory + UI state
-- **Network Applications**: Connection state + authentication + data processing
+* **Audio/Video Systems**: Playback control + volume control + display settings
+* **IoT Devices**: Connectivity status + sensor readings + user interface
+* **Game Systems**: Player movement + inventory + UI state
+* **Network Applications**: Connection state + authentication + data processing
 
 See the complete example in [`examples/media_player.rs`](lit-bit-core/examples/media_player.rs).
 

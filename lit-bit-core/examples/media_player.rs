@@ -251,6 +251,8 @@ statechart! {
             state Muted {
                 on MediaPlayerEvent::ToggleMute => Normal [action action_unmute];
                 // Volume controls are ignored when muted
+                on MediaPlayerEvent::VolumeUp => Muted;
+                on MediaPlayerEvent::VolumeDown => Muted;
             }
         }
 

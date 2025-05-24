@@ -10,16 +10,16 @@ _Add new sessions below this line._
 * _Author_: @claude-4-sonnet (via @0xjcf)  
 * **Phase**: 03-Parallel-States (FINAL COMPLETION)  
 * **Work**: ✅ **PHASE 03 FULLY COMPLETED** - Finished the final 5% polish tasks for parallel states
-  - **Priority 1 - Example**: Completely rewrote `lit-bit-core/examples/media_player.rs` to be a proper parallel states showcase
+  * **Priority 1 - Example**: Completely rewrote `lit-bit-core/examples/media_player.rs` to be a proper parallel states showcase
     * **Before**: Simple hierarchical state machine (Stopped → Loading → Playing)  
     * **After**: 3 orthogonal parallel regions (PlaybackControl + AudioSettings + DisplayState)
     * **Demonstrates**: `[parallel]` attribute, concurrent state management, region independence, global transitions  
     * **Validation**: Runs perfectly with comprehensive output showing state combinations like "Playing + Muted + ScreenOff"
-  - **Priority 2 - User Documentation**: Added comprehensive "Usage Guide" section to README.md
+  * **Priority 2 - User Documentation**: Added comprehensive "Usage Guide" section to README.md
     * **Coverage**: Basic states, hierarchical states, **parallel states** (full section), actions/guards, entry/exit hooks
     * **Parallel States Section**: Syntax examples, key concepts, runtime behavior, when to use, real-world use cases  
     * **References**: Links to complete example in `media_player.rs`
-  - **Priority 3 - API Documentation**: Enhanced rustdoc coverage for parallel states APIs
+  * **Priority 3 - API Documentation**: Enhanced rustdoc coverage for parallel states APIs
     * **`MAX_ACTIVE_REGIONS`**: Comprehensive documentation with usage examples and capacity guidance  
     * **`StateNode::is_parallel`**: Clear explanation of field purpose and automatic macro setting
     * **Generated**: Complete rustdoc site with `cargo doc --document-private-items --open`  
