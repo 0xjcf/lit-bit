@@ -333,6 +333,7 @@ where
         if node.is_parallel {
             for s_node_in_def in machine_def.states {
                 if s_node_in_def.parent == Some(state_id_to_enter) {
+                    #[allow(clippy::collapsible_if)]
                     if let Some(region_entry_fn) = s_node_in_def.entry_action {
                         if !scratch.entry_actions_run.contains(&s_node_in_def.id) {
                             region_entry_fn(context, event);
@@ -749,6 +750,7 @@ where
     fn get_region_root(&self, state_id: StateType) -> Option<StateType> {
         let mut current = state_id;
         while let Some(parent) = self.machine_def.get_parent_of(current) {
+            #[allow(clippy::collapsible_if)]
             if let Some(parent_node) = self.machine_def.get_state_node(parent) {
                 if parent_node.is_parallel {
                     return Some(current);
@@ -784,12 +786,14 @@ where
                     for t_def in self.machine_def.transitions {
                         if t_def.from_state == check_state_id {
                             // Check if event matches using match_fn if available
+                            #[allow(clippy::collapsible_if)]
                             if let Some(match_fn) = t_def.match_fn {
                                 if !match_fn(event) {
                                     continue; // Skip this transition if event doesn't match
                                 }
                             }
                             // Now check the guard if any
+                            #[allow(clippy::collapsible_if)]
                             if let Some(guard_fn) = t_def.guard {
                                 if !guard_fn(&self.context, event) {
                                     trace!(
@@ -838,6 +842,7 @@ where
         let source_state_id = trans_info.transition_from_state_id;
         let active_leaf_for_this_trans = trans_info.source_leaf_id;
 
+        #[allow(clippy::collapsible_if)]
         if let Some(node) = self.machine_def.get_state_node(source_state_id) {
             if !states_exited_this_step.contains(&source_state_id) {
                 if let Some(exit_fn) = node.exit_action {
@@ -1426,6 +1431,7 @@ where
                     .map_err(|_| ProcessingError::CapacityExceeded)?;
             }
             // Recursion into children always happens for parallel states
+            #[allow(clippy::collapsible_if)]
             if node.is_parallel && state_to_enter != target_state_id {
                 if let Err(entry_error) = enter_state_recursive_logic::<_, _, _, M, N_ACTIVE>(
                     self.machine_def,
