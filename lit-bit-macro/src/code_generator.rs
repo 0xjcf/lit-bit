@@ -202,7 +202,7 @@ pub(crate) fn generate_transitions_array<'ast>(
             let matcher_fn = if pattern_needs_prefix {
                 quote! {
                     fn #matcher_fn_ident(e: &#event_type_path) -> bool {
-                        matches!(e, #event_type_path :: #event_pattern_tokens)
+                        matches!(e, &#event_type_path :: #event_pattern_tokens)
                     }
                 }
             } else {

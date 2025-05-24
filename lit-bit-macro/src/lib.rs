@@ -1180,9 +1180,10 @@ pub(crate) mod code_generator {
                     transition_initializers.len()
                 );
                 let matcher_fn = if pattern_needs_prefix {
+                    let prefixed_pattern = apply_prefix_to_pattern(event_pattern, event_type_path);
                     quote! {
                         fn #matcher_fn_ident(e: &#event_type_path) -> bool {
-                            matches!(e, #event_type_path :: #event_pattern_tokens)
+                            matches!(e, #prefixed_pattern)
                         }
                     }
                 } else {
@@ -1351,6 +1352,110 @@ pub(crate) mod code_generator {
             quote! { <_ as ::core::default::Default>::default() }
         } else {
             quote! { <_ as ::core::default::Default>::default() }
+        }
+    }
+
+    // Helper function to intelligently apply event type prefix to patterns
+    // This handles wrapper patterns like references and parentheses correctly
+    pub(crate) fn apply_prefix_to_pattern(
+        pattern: &syn::Pat,
+        event_type_path: &syn::Path,
+    ) -> proc_macro2::TokenStream {
+        match pattern {
+            syn::Pat::Reference(pat_ref) => {
+                // For &Pattern, we want &EventType::Pattern
+                let inner_prefixed = apply_prefix_to_pattern(&pat_ref.pat, event_type_path);
+                let mutability = &pat_ref.mutability;
+                quote! { & #mutability #inner_prefixed }
+            }
+            syn::Pat::Paren(pat_paren) => {
+                // For (Pattern), we want (EventType::Pattern)
+                let inner_prefixed = apply_prefix_to_pattern(&pat_paren.pat, event_type_path);
+                quote! { ( #inner_prefixed ) }
+            }
+            syn::Pat::Path(pat_path) => {
+                // For simple path, prefix it: Pattern -> EventType::Pattern
+                let path = &pat_path.path;
+                quote! { #event_type_path :: #path }
+            }
+            syn::Pat::Ident(pat_ident) => {
+                // For simple identifier, prefix it: ident -> EventType::ident
+                let ident = &pat_ident.ident;
+                let subpat = &pat_ident.subpat;
+                if let Some((at_token, subpat)) = subpat {
+                    // Handle @ patterns: ident @ subpattern -> EventType::ident @ subpattern
+                    let prefixed_subpat = apply_prefix_to_pattern(subpat, event_type_path);
+                    quote! { #event_type_path :: #ident #at_token #prefixed_subpat }
+                } else {
+                    quote! { #event_type_path :: #ident }
+                }
+            }
+            syn::Pat::TupleStruct(pat_tuple) => {
+                // For TupleStruct(args), check if the path needs prefixing
+                if pat_tuple.qself.is_none() {
+                    let path = &pat_tuple.path;
+                    let elems = &pat_tuple.elems;
+                    quote! { #event_type_path :: #path ( #elems ) }
+                } else {
+                    // If there's a qself, just return as-is
+                    quote! { #pattern }
+                }
+            }
+            syn::Pat::Struct(pat_struct) => {
+                // For Struct { fields }, check if the path needs prefixing
+                if pat_struct.qself.is_none() {
+                    let path = &pat_struct.path;
+                    let fields = &pat_struct.fields;
+                    let rest = &pat_struct.rest;
+                    if let Some(rest_token) = rest {
+                        quote! { #event_type_path :: #path { #fields #rest_token } }
+                    } else {
+                        quote! { #event_type_path :: #path { #fields } }
+                    }
+                } else {
+                    // If there's a qself, just return as-is
+                    quote! { #pattern }
+                }
+            }
+            syn::Pat::Or(pat_or) => {
+                // For (Pattern1 | Pattern2), apply prefix to each case
+                let prefixed_cases: Vec<_> = pat_or
+                    .cases
+                    .iter()
+                    .map(|case| apply_prefix_to_pattern(case, event_type_path))
+                    .collect();
+                quote! { #(#prefixed_cases)|* }
+            }
+            syn::Pat::Type(pat_type) => {
+                // For Pattern: Type, apply prefix to the pattern part
+                let prefixed_pat = apply_prefix_to_pattern(&pat_type.pat, event_type_path);
+                let ty = &pat_type.ty;
+                let colon_token = &pat_type.colon_token;
+                quote! { #prefixed_pat #colon_token #ty }
+            }
+            syn::Pat::Tuple(pat_tuple) => {
+                // For tuple patterns, apply prefix to each element that needs it
+                let prefixed_elems: Vec<_> = pat_tuple
+                    .elems
+                    .iter()
+                    .map(|elem| apply_prefix_to_pattern(elem, event_type_path))
+                    .collect();
+                quote! { ( #(#prefixed_elems),* ) }
+            }
+            syn::Pat::Slice(pat_slice) => {
+                // For slice patterns, apply prefix to each element that needs it
+                let prefixed_elems: Vec<_> = pat_slice
+                    .elems
+                    .iter()
+                    .map(|elem| apply_prefix_to_pattern(elem, event_type_path))
+                    .collect();
+                quote! { [ #(#prefixed_elems),* ] }
+            }
+            _ => {
+                // For other patterns (Wild, Lit, Const, Range, Rest, Macro, Verbatim),
+                // just return as-is since they don't need prefixing
+                quote! { #pattern }
+            }
         }
     }
 
@@ -3984,5 +4089,131 @@ mod tests {
         let valid_dsl = "name: Test, context: Ctx, event: Ev, initial: S1, state S1 {}";
         let result3 = parse_dsl(valid_dsl);
         assert!(result3.is_ok(), "Should accept valid 'initial' keyword");
+    }
+
+    #[test]
+    fn test_apply_prefix_to_pattern_handles_wrappers_correctly() {
+        // This test verifies that the apply_prefix_to_pattern function
+        // correctly handles wrapper patterns like references and parentheses
+
+        use crate::code_generator::apply_prefix_to_pattern;
+
+        let event_type_path: syn::Path = syn::parse_str("EventType").unwrap();
+
+        // Test case 1: Reference pattern &Variant -> &EventType::Variant
+        let ref_pattern_str = "on &Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(ref_pattern_str) {
+            let prefixed = apply_prefix_to_pattern(&ast.event_pattern, &event_type_path);
+            let prefixed_str = prefixed.to_string();
+
+            // Should generate &EventType::Variant, not EventType::&Variant
+            assert!(
+                prefixed_str.contains("&")
+                    && prefixed_str.contains("EventType")
+                    && prefixed_str.contains("::")
+                    && prefixed_str.contains("Variant"),
+                "Reference pattern should be prefixed correctly, got: {prefixed_str}"
+            );
+            assert!(
+                !prefixed_str.contains("EventType") || !prefixed_str.contains(":: &"),
+                "Should not have invalid prefix placement, got: {prefixed_str}"
+            );
+        }
+
+        // Test case 2: Parenthesized pattern (Variant) -> (EventType::Variant)
+        let paren_pattern_str = "on (Variant) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(paren_pattern_str) {
+            let prefixed = apply_prefix_to_pattern(&ast.event_pattern, &event_type_path);
+            let prefixed_str = prefixed.to_string();
+
+            // Should generate (EventType::Variant) - allow for spacing variations
+            assert!(
+                prefixed_str.contains("(")
+                    && prefixed_str.contains("EventType")
+                    && prefixed_str.contains("::")
+                    && prefixed_str.contains("Variant")
+                    && prefixed_str.contains(")"),
+                "Parenthesized pattern should be prefixed correctly, got: {prefixed_str}"
+            );
+        }
+
+        // Test case 3: OR pattern (A | B) -> (EventType::A | EventType::B)
+        let or_pattern_str = "on (A | B) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(or_pattern_str) {
+            let prefixed = apply_prefix_to_pattern(&ast.event_pattern, &event_type_path);
+            let prefixed_str = prefixed.to_string();
+
+            // Should prefix both sides of the OR
+            assert!(
+                prefixed_str.contains("EventType")
+                    && prefixed_str.contains("A")
+                    && prefixed_str.contains("B")
+                    && prefixed_str.contains("::"),
+                "OR pattern should prefix both cases, got: {prefixed_str}"
+            );
+        }
+
+        // Test case 4: Tuple struct pattern DataEvent(data) -> EventType::DataEvent(data)
+        let tuple_pattern_str = "on DataEvent(data) => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(tuple_pattern_str) {
+            let prefixed = apply_prefix_to_pattern(&ast.event_pattern, &event_type_path);
+            let prefixed_str = prefixed.to_string();
+
+            // Should generate EventType::DataEvent(data)
+            assert!(
+                prefixed_str.contains("EventType")
+                    && prefixed_str.contains("::")
+                    && prefixed_str.contains("DataEvent")
+                    && prefixed_str.contains("data"),
+                "Tuple struct pattern should be prefixed correctly, got: {prefixed_str}"
+            );
+        }
+
+        // Test case 5: Struct pattern DataEvent { field } -> EventType::DataEvent { field }
+        let struct_pattern_str = "on DataEvent { field } => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(struct_pattern_str) {
+            let prefixed = apply_prefix_to_pattern(&ast.event_pattern, &event_type_path);
+            let prefixed_str = prefixed.to_string();
+
+            // Should generate EventType::DataEvent { field }
+            assert!(
+                prefixed_str.contains("EventType")
+                    && prefixed_str.contains("::")
+                    && prefixed_str.contains("DataEvent")
+                    && prefixed_str.contains("field"),
+                "Struct pattern should be prefixed correctly, got: {prefixed_str}"
+            );
+        }
+
+        // Test case 6: Mutable reference pattern &mut Variant -> &mut EventType::Variant
+        let mut_ref_pattern_str = "on &mut Variant => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(mut_ref_pattern_str) {
+            let prefixed = apply_prefix_to_pattern(&ast.event_pattern, &event_type_path);
+            let prefixed_str = prefixed.to_string();
+
+            // Should generate &mut EventType::Variant
+            assert!(
+                prefixed_str.contains("&")
+                    && prefixed_str.contains("mut")
+                    && prefixed_str.contains("EventType")
+                    && prefixed_str.contains("::")
+                    && prefixed_str.contains("Variant"),
+                "Mutable reference pattern should be prefixed correctly, got: {prefixed_str}"
+            );
+        }
+
+        // Test case 7: Wildcard pattern should not be modified
+        let wildcard_pattern_str = "on _ => SomeState;";
+        if let Ok(ast) = syn::parse_str::<TransitionDefinitionAst>(wildcard_pattern_str) {
+            let prefixed = apply_prefix_to_pattern(&ast.event_pattern, &event_type_path);
+            let prefixed_str = prefixed.to_string();
+
+            // Should remain as just _
+            assert_eq!(
+                prefixed_str.trim(),
+                "_",
+                "Wildcard pattern should not be modified, got: {prefixed_str}"
+            );
+        }
     }
 }

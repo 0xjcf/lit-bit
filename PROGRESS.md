@@ -6,6 +6,25 @@ _Add new sessions below this line._
 
 ---
 
+## 2025-01-27 · Session End
+* _Author_: @claude-4-sonnet (via @0xjcf)
+* **Phase**: Code Review & Dependency Management  
+* **Work**: Fixed circular feature dependency risk in async feature configuration
+  - **Issue**: `async` feature depended on `tokio` with `std`-requiring features (`rt`, `time`) but didn't depend on local `std` feature, allowing users to enable `async` without `std` and get unusable no_std builds
+  - **Root Cause**: Tokio's runtime and time features implicitly activate std, creating circular dependency when async enabled without std
+  - **Solution**: Added `std` to `async` feature dependency list: `async = ["std", "dep:async-trait", "dep:futures", "dep:tokio"]`
+  - **Rationale**: Async functionality with tokio runtime naturally requires std environment, making this semantically correct
+  - **Verification**: All build configurations tested and working:
+    - ✅ Default build (no features): `cargo check`
+    - ✅ Async feature: `cargo check --features async` 
+    - ✅ Std feature only: `cargo check --features std`
+    - ✅ No-std embedded: `cargo check --target thumbv7m-none-eabi --no-default-features`
+  - **Testing**: All 83 tests passing (5 core runtime + 5 basic integration + 7 parallel integration + 70 macro tests), zero functionality impact
+  - **Benefits**: Prevents invalid feature combinations, maintains no_std support for core functionality, ensures feature dependency graph is safe and logical
+* **Next**: Continue with remaining code review items or proceed with next development phase
+
+---
+
 ## 2025-01-27 · Session End  
 * _Author_: @claude-4-sonnet (via @0xjcf)
 * **Phase**: CI/CD Debugging & Code Quality

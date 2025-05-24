@@ -484,23 +484,22 @@ where
     // --- Helper methods for hierarchical transitions ---
 
     /// Collects the path from a leaf state up to the root, including the leaf itself.
-    /// The path is returned with the leaf state at index 0 and ancestors following.
-    fn get_path_to_root(
+    /// The path is filled in the provided buffer with the leaf state at index 0 and ancestors following.
+    /// The buffer is cleared before filling.
+    fn fill_path_to_root(
         &self,
         leaf_state_id: StateType,
-    ) -> Result<heapless::Vec<StateType, M>, ProcessingError> {
-        // Changed error type
-        // Changed return type
-        let mut path: heapless::Vec<StateType, M> = heapless::Vec::new();
+        path_buffer: &mut heapless::Vec<StateType, M>,
+    ) -> Result<(), ProcessingError> {
+        path_buffer.clear();
         let mut current_id = Some(leaf_state_id);
         while let Some(id) = current_id {
-            if path.push(id).is_err() {
-                // Changed from expect to check Result
+            if path_buffer.push(id).is_err() {
                 return Err(ProcessingError::PathTooLong);
             }
             current_id = self.machine_def.get_parent_of(id);
         }
-        Ok(path)
+        Ok(())
     }
 
     /// Finds the Least Common Ancestor (LCA) of two states.
@@ -514,8 +513,11 @@ where
             return Ok(Some(state1_id));
         }
 
-        let path1 = self.get_path_to_root(state1_id)?; // Path from state1 up to root
-        let path2 = self.get_path_to_root(state2_id)?; // Path from state2 up to root
+        let mut path1: heapless::Vec<StateType, M> = heapless::Vec::new();
+        let mut path2: heapless::Vec<StateType, M> = heapless::Vec::new();
+
+        self.fill_path_to_root(state1_id, &mut path1)?; // Path from state1 up to root
+        self.fill_path_to_root(state2_id, &mut path2)?; // Path from state2 up to root
 
         // Iterate through path1 (from state1 towards root).
         // The first element of path1 also found in path2 is the LCA.
@@ -539,16 +541,12 @@ where
         if ancestor_candidate_id == descendant_candidate_id {
             return Ok(false);
         }
-        match self.get_path_to_root(descendant_candidate_id) {
-            Ok(path_from_descendant) => Ok(path_from_descendant
-                .iter()
-                .skip(1)
-                .any(|&p_state| p_state == ancestor_candidate_id)),
-            Err(e) => {
-                // Propagate ProcessingError
-                Err(e)
-            }
-        }
+        let mut path_from_descendant: heapless::Vec<StateType, M> = heapless::Vec::new();
+        self.fill_path_to_root(descendant_candidate_id, &mut path_from_descendant)?;
+        Ok(path_from_descendant
+            .iter()
+            .skip(1)
+            .any(|&p_state| p_state == ancestor_candidate_id))
     }
 
     // Helper to find the direct child of parent_id that is currently active or an ancestor of an active leaf.
@@ -556,14 +554,15 @@ where
         &self,
         parent_id: StateType,
     ) -> Result<Option<StateType>, ProcessingError> {
+        let mut path_buffer: heapless::Vec<StateType, M> = heapless::Vec::new();
         for &leaf_id in &self.active_leaf_states {
             if leaf_id == parent_id {
                 continue;
             }
-            let path_from_leaf_to_root = self.get_path_to_root(leaf_id)?;
-            for i in 1..path_from_leaf_to_root.len() {
-                if path_from_leaf_to_root[i] == parent_id {
-                    return Ok(Some(path_from_leaf_to_root[i - 1]));
+            self.fill_path_to_root(leaf_id, &mut path_buffer)?;
+            for i in 1..path_buffer.len() {
+                if path_buffer[i] == parent_id {
+                    return Ok(Some(path_buffer[i - 1]));
                 }
             }
         }
@@ -1290,10 +1289,8 @@ where
         }
 
         // --- Context and State Commit Logic ---
-        // Clone context here before any mutations by actions/entry/exit handlers.
-        let temp_context = self.context.clone();
-
         // Phase 1: Apply transitions (exits and actions)
+        // Clone context only when we're about to mutate it
         let (
             overall_transition_occurred,
             states_exited_this_step,
@@ -1303,11 +1300,16 @@ where
             &final_transitions_to_execute,
             &current_active_leaves_snapshot,
             event,
-            temp_context,
+            self.context.clone(), // Clone here, right before mutations
         ) {
             Ok(result) => result,
             Err(e) => return SendResult::Error(e),
         };
+
+        // Early return if no transitions actually occurred (avoids unnecessary work)
+        if !overall_transition_occurred {
+            return SendResult::NoMatch;
+        }
 
         #[cfg(feature = "std")]
         dbg!(&states_exited_this_step);
@@ -1347,13 +1349,9 @@ where
             self.active_leaf_states
         );
 
-        // Return SendResult based on whether transitions occurred
-        if overall_transition_occurred {
-            self.context = temp_context;
-            SendResult::Transitioned
-        } else {
-            SendResult::NoMatch
-        }
+        // Commit the mutated context since we know transitions occurred
+        self.context = temp_context;
+        SendResult::Transitioned
     }
 
     // Cloned and modified version of execute_entry_actions_from_lca to accept context
@@ -1373,7 +1371,8 @@ where
             target_state_id, lca_id
         );
         let mut new_active_leaf_states = heapless::Vec::new();
-        let path_from_target_to_root = self.get_path_to_root(target_state_id)?;
+        let mut path_from_target_to_root: heapless::Vec<StateType, M> = heapless::Vec::new();
+        self.fill_path_to_root(target_state_id, &mut path_from_target_to_root)?;
         trace!(
             "[TRACE] path_from_target_to_root for {:?}: {:?}",
             target_state_id, path_from_target_to_root

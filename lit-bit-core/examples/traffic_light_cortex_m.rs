@@ -12,7 +12,7 @@ mod cortex_m_logic {
 
     use lit_bit_core::{
         StateMachine,
-        core::{
+        runtime::{
             DefaultContext,
             MAX_ACTIVE_REGIONS, // Use re-exported version
             MachineDefinition,
@@ -102,7 +102,7 @@ mod cortex_m_logic {
         let initial_context = DefaultContext::default();
         let initial_event = LightEvent::Toggle;
         // Use turbofish for const generics, allowing type inference for State, Event, Context
-        let mut runtime = Runtime::<_, _, _, M, MAX_NODES_CALC>::new(
+        let mut runtime = Runtime::<_, _, _, M, MAX_ACTIVE_REGIONS, MAX_NODES_CALC>::new(
             &BLINKY_MACHINE_DEF,
             initial_context,
             &initial_event,

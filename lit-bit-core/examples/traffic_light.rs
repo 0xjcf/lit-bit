@@ -12,11 +12,8 @@ mod riscv_logic {
     use semihosting::println;
 
     use lit_bit_core::{
-        StateMachine,
-        core::{
-            ActionFn, MAX_ACTIVE_REGIONS, MachineDefinition, Runtime, SendResult, StateNode,
-            Transition,
-        },
+        ActionFn, MAX_ACTIVE_REGIONS, MachineDefinition, Runtime, SendResult, StateMachine,
+        StateNode, Transition,
     };
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -159,8 +156,14 @@ mod riscv_logic {
     const MAX_NODES_CALC: usize = M * MAX_ACTIVE_REGIONS;
 
     // Type alias for this specific Runtime configuration
-    type TrafficLightRuntime =
-        Runtime<TrafficLightState, TrafficLightEvent, TrafficLightContext, M, MAX_NODES_CALC>;
+    type TrafficLightRuntime = Runtime<
+        TrafficLightState,
+        TrafficLightEvent,
+        TrafficLightContext,
+        M,
+        MAX_ACTIVE_REGIONS,
+        MAX_NODES_CALC,
+    >;
 
     #[entry]
     fn main_riscv_entry() -> ! {
