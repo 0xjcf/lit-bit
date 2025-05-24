@@ -75,7 +75,15 @@ where
     pub initial_child: Option<StateType>, // ID of the initial child state, if this is a composite state
     pub entry_action: Option<EntryExitActionFn<ContextType, EventType>>,
     pub exit_action: Option<EntryExitActionFn<ContextType, EventType>>,
-    pub is_parallel: bool, // New field
+    /// Indicates whether this state is a parallel state containing orthogonal regions.
+    ///
+    /// When `true`, this state's direct children are treated as independent parallel
+    /// regions that are active concurrently. When `false`, this is either an atomic
+    /// state or a hierarchical state with sequential child states.
+    ///
+    /// This field is set automatically by the `statechart!` macro when the `[parallel]`
+    /// attribute is used in the state definition.
+    pub is_parallel: bool,
 }
 
 #[derive(Clone)]
@@ -144,8 +152,28 @@ where
 
 // Placeholder for hierarchy depth, make configurable or detect via macro later.
 // const MAX_HIERARCHY_DEPTH: usize = 8; // Will be replaced by const generic M
-// Make MAX_ACTIVE_REGIONS public so it can be accessed by lib.rs
-pub const MAX_ACTIVE_REGIONS: usize = 4; // Max parallel regions/active states we can track
+/// Maximum number of active parallel regions/states that can be tracked simultaneously.
+///
+/// This constant defines the capacity limit for:
+/// - The number of concurrent parallel regions that can be active
+/// - The number of leaf states returned by `StateMachine::state()`
+/// - Internal buffers used for parallel state management
+///
+/// When defining parallel states with the `[parallel]` attribute, ensure that the total
+/// number of orthogonal regions does not exceed this value. For most use cases, the
+/// default value of 4 is sufficient.
+///
+/// # Examples
+///
+/// ```ignore
+/// // This parallel state has 3 regions - within the MAX_ACTIVE_REGIONS limit
+/// state MediaPlayer [parallel] {
+///     state PlaybackControl { /* ... */ }   // Region 1
+///     state AudioSettings { /* ... */ }     // Region 2  
+///     state DisplayState { /* ... */ }      // Region 3
+/// }
+/// ```
+pub const MAX_ACTIVE_REGIONS: usize = 4;
 
 /// Type alias for Runtime with default active regions capacity
 pub type DefaultRuntime<
