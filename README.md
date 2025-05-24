@@ -76,6 +76,269 @@ just test
 just test-core
 ```
 
+## 📚 Usage Guide
+
+### Basic State Machine Definition
+
+Define a state machine using the `statechart!` macro:
+
+```rust
+use lit_bit_core::StateMachine;
+use lit_bit_macro::statechart;
+
+#[derive(Debug, Clone, Default)]
+struct Context {
+    count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+enum Event {
+    #[default]
+    Start,
+    Stop,
+    Reset,
+}
+
+fn increment_counter(ctx: &mut Context, _event: &Event) {
+    ctx.count += 1;
+}
+
+fn reset_counter(ctx: &mut Context, _event: &Event) {
+    ctx.count = 0;
+}
+
+statechart! {
+    name: BasicMachine,
+    context: Context,
+    event: Event,
+    initial: Idle,
+
+    state Idle {
+        on Event::Start => Running [action increment_counter];
+    }
+
+    state Running {
+        on Event::Stop => Idle;
+        on Event::Reset => Idle [action reset_counter];
+    }
+}
+
+fn main() {
+    let mut machine = BasicMachine::new(Context::default(), &Event::default())
+        .expect("Failed to create machine");
+    
+    machine.send(&Event::Start);
+    println!("State: {:?}", machine.state()); // [Running]
+}
+```
+
+### Hierarchical States
+
+Create nested states with parent-child relationships:
+
+```rust
+statechart! {
+    name: HierarchicalMachine,
+    context: Context,
+    event: Event,
+    initial: SystemActive,
+
+    state SystemActive {
+        initial: OperatingNormally;
+        
+        // Parent-level transitions
+        on Event::PowerOff => SystemOff;
+        
+        state OperatingNormally {
+            on Event::Error => ErrorRecovery;
+        }
+        
+        state ErrorRecovery {
+            on Event::Recover => OperatingNormally;
+        }
+    }
+
+    state SystemOff {
+        on Event::PowerOn => SystemActive;
+    }
+}
+```
+
+### 🎯 Parallel States
+
+**Parallel states** allow your state machine to be in multiple orthogonal (independent) states simultaneously. This is perfect for modeling systems with concurrent concerns.
+
+#### Defining Parallel States
+
+Use the `[parallel]` attribute to create a state with multiple independent regions:
+
+```rust
+statechart! {
+    name: MediaPlayer,
+    context: MediaPlayerContext,
+    event: MediaPlayerEvent,
+    initial: Operational,
+
+    // Main parallel state with 3 independent regions
+    state Operational [parallel] {
+        // Global transitions affect all regions
+        on MediaPlayerEvent::PowerOff => PoweredOff;
+        
+        // REGION 1: Playback Control
+        state PlaybackControl {
+            initial: Stopped;
+            
+            state Stopped {
+                on MediaPlayerEvent::Play => Playing;
+            }
+            
+            state Playing {
+                on MediaPlayerEvent::Pause => Paused;
+                on MediaPlayerEvent::Stop => Stopped;
+            }
+            
+            state Paused {
+                on MediaPlayerEvent::Play => Playing;
+                on MediaPlayerEvent::Stop => Stopped;
+            }
+        }
+        
+        // REGION 2: Audio Settings
+        state AudioSettings {
+            initial: Normal;
+            
+            state Normal {
+                on MediaPlayerEvent::Mute => Muted;
+            }
+            
+            state Muted {
+                on MediaPlayerEvent::Unmute => Normal;
+            }
+        }
+        
+        // REGION 3: Display State  
+        state DisplayState {
+            initial: ScreenOn;
+            
+            state ScreenOn {
+                on MediaPlayerEvent::ScreenOff => ScreenOff;
+            }
+            
+            state ScreenOff {
+                on MediaPlayerEvent::ScreenOn => ScreenOn;
+            }
+        }
+    }
+
+    state PoweredOff {
+        on MediaPlayerEvent::PowerOn => Operational;
+    }
+}
+```
+
+#### Key Parallel States Concepts
+
+1. **Orthogonal Regions**: Each direct child of a `[parallel]` state is an independent region
+2. **Concurrent Activity**: You can be in multiple states simultaneously (e.g., `Playing + Muted + ScreenOff`)
+3. **Independent Events**: Events can affect one region while others remain unchanged
+4. **Global Transitions**: Transitions defined on the parallel state itself affect all regions
+
+#### Parallel States Runtime Behavior
+
+```rust
+let mut player = MediaPlayer::new(context, &MediaPlayerEvent::default())?;
+
+// Initial state: All regions start in their initial states
+println!("{:?}", player.state()); 
+// Output: [PlaybackControlStopped, AudioSettingsNormal, DisplayStateScreenOn]
+
+// Events can affect specific regions independently
+player.send(&MediaPlayerEvent::Play);        // Only affects PlaybackControl
+player.send(&MediaPlayerEvent::Mute);        // Only affects AudioSettings  
+player.send(&MediaPlayerEvent::ScreenOff);   // Only affects DisplayState
+
+println!("{:?}", player.state());
+// Output: [PlaybackControlPlaying, AudioSettingsMuted, DisplayStateScreenOff]
+
+// Global events affect all regions
+player.send(&MediaPlayerEvent::PowerOff);    // Exits all regions
+println!("{:?}", player.state());
+// Output: [PoweredOff]
+```
+
+#### When to Use Parallel States
+
+Parallel states are ideal for modeling:
+- **Audio/Video Systems**: Playback control + volume control + display settings
+- **IoT Devices**: Connectivity status + sensor readings + user interface
+- **Game Systems**: Player movement + inventory + UI state
+- **Network Applications**: Connection state + authentication + data processing
+
+See the complete example in [`examples/media_player.rs`](lit-bit-core/examples/media_player.rs).
+
+### Actions and Guards
+
+Add behavior to your state transitions:
+
+```rust
+fn is_valid_input(ctx: &Context, event: &Event) -> bool {
+    // Guard condition logic
+    ctx.count < 100
+}
+
+fn log_transition(ctx: &mut Context, _event: &Event) {
+    println!("Transitioning at count: {}", ctx.count);
+}
+
+statechart! {
+    name: GuardedMachine,
+    context: Context,
+    event: Event,
+    initial: Waiting,
+
+    state Waiting {
+        // Transition only happens if guard returns true
+        on Event::Proceed [guard is_valid_input] => Processing [action log_transition];
+    }
+
+    state Processing {
+        on Event::Complete => Waiting;
+    }
+}
+```
+
+### Entry and Exit Actions
+
+Execute code when entering or exiting states:
+
+```rust
+fn on_enter_active(ctx: &mut Context, _event: &Event) {
+    println!("System is now active");
+}
+
+fn on_exit_active(ctx: &mut Context, _event: &Event) {
+    println!("System shutting down");
+}
+
+statechart! {
+    name: LifecycleMachine,
+    context: Context,
+    event: Event,
+    initial: Active,
+
+    state Active {
+        entry: on_enter_active;
+        exit: on_exit_active;
+        
+        on Event::Shutdown => Inactive;
+    }
+
+    state Inactive {
+        on Event::Startup => Active;
+    }
+}
+```
+
 ## 🛠️ Key Dependencies & Tools
 
 *   **Core Logic:** `lit-bit-core` (the `no_std` runtime)
