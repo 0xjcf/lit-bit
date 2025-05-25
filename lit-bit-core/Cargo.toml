@@ -69,6 +69,7 @@ std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "dep:futures",
 # The `async` feature requires `std` because tokio's runtime features (rt, time) require std
 async = ["std", "dep:async-trait", "dep:futures", "dep:tokio"]
 diagram = ["dep:serde"] # For serializing statechart structure
+embassy = [] # Feature flag for Embassy executor support (no dependencies, just cfg gates)
 
 # Example of combining features for specific use cases:
 # async-std = ["async", "std", "dep:tokio"]

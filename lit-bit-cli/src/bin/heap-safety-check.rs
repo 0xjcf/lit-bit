@@ -1,5 +1,5 @@
 //! Heap/Unsafe Safety Check Script
-//! Parses geiger_report.json and fails if any unsafe code is used in lit-bit-core itself.
+//! Parses `geiger_report.json` and fails if any unsafe code is used in lit-bit-core itself.
 
 use std::fs::File;
 use std::io::BufReader;
