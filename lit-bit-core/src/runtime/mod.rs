@@ -1275,7 +1275,7 @@ where
     /// This function may panic if:
     /// - Output stream operations fail when `std` feature is enabled (due to `unwrap()` calls)
     pub fn send_internal(&mut self, event: &EventType) -> SendResult {
-        #[cfg(feature = "debug-log")]
+        #[cfg(all(feature = "debug-log", feature = "std"))]
         {
             println!("COMPILE-TIME DEBUG-LOG FEATURE IS ACTIVE");
         }

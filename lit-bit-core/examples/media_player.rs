@@ -6,11 +6,11 @@
 //! This example demonstrates the use of **parallel states** in a media player.
 //! The media player has three orthogonal (independent) regions that operate concurrently:
 //!
-//! 1. **PlaybackControl**: Manages play/pause/stop functionality
-//! 2. **AudioSettings**: Manages volume and mute state
-//! 3. **DisplayState**: Manages screen brightness and power
+//! 1. **`PlaybackControl`**: Manages play/pause/stop functionality
+//! 2. **`AudioSettings`**: Manages volume and mute state
+//! 3. **`DisplayState`**: Manages screen brightness and power
 //!
-//! These regions are independent - you can be Playing + Muted + ScreenOff simultaneously,
+//! These regions are independent - you can be Playing + Muted + `ScreenOff` simultaneously,
 //! or any other combination. This showcases how parallel states enable modeling
 //! complex systems with multiple concurrent concerns.
 
@@ -93,7 +93,7 @@ fn action_load_track(context: &mut MediaPlayerContext, event: &MediaPlayerEvent)
         context.current_track = Some(path.clone());
         context.log_action("LoadedTrack");
         #[cfg(not(target_arch = "riscv32"))]
-        println!("🎵 Loaded track: {}", path);
+        println!("🎵 Loaded track: {path}");
     }
 }
 
@@ -101,7 +101,7 @@ fn action_start_playback(context: &mut MediaPlayerContext, _event: &MediaPlayerE
     context.log_action("StartedPlayback");
     #[cfg(not(target_arch = "riscv32"))]
     if let Some(track) = &context.current_track {
-        println!("▶️  Playing: {}", track);
+        println!("▶️  Playing: {track}");
     }
 }
 
@@ -269,6 +269,8 @@ statechart! {
             state ScreenOff {
                 on MediaPlayerEvent::ScreenToggle => ScreenOn [action action_screen_on];
                 // Brightness controls are ignored when screen is off
+                on MediaPlayerEvent::BrightnessUp => ScreenOff;
+                on MediaPlayerEvent::BrightnessDown => ScreenOff;
             }
         }
     }

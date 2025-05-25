@@ -1,15 +1,17 @@
 # lit-bit: A `#![no_std]` Statechart Library for Rust
 
+[![Heap/Unsafe-Free CI](https://img.shields.io/badge/heap--unsafe--free-checked-brightgreen?logo=rust&label=Heap%2FUnsafe%20Scan)](https://github.com/0xjcf/lit-bit/actions)
+
 **`lit-bit` is a lightweight, procedural macro-driven statechart library for Rust, designed for correctness, ease of use, and suitability for embedded systems (`#![no_std]`) as well as general applications.**
 
 It aims to provide a similar developer experience to XState but within the Rust ecosystem, focusing on compile-time safety and minimal resource footprint for bare-metal targets like RISC-V and ARM Cortex-M.
 
 ## Current Status
 
-*   **Phase:** 03 - Parallel States (Completed)
-*   Core runtime for flat and basic hierarchical state machines is functional.
-*   Procedural macro (`statechart!`) for defining state machines is operational for flat and hierarchical structures.
-*   Parallel state machine support is implemented and functional.
+*   **Phase:** 04 - Minimal Actor Layer (In Progress)
+*   Core runtime for flat, hierarchical, and parallel state machines is functional.
+*   Procedural macro (`statechart!`) for defining state machines is operational for flat, hierarchical, and parallel structures.
+*   Minimal actor system and mailbox integration is in progress (see below).
 *   Examples for RISC-V (QEMU) and Cortex-M (QEMU/hardware) are available.
 
 
@@ -359,3 +361,42 @@ Please open an issue to discuss any significant changes or new features before s
 ## 📝 License
 
 This project is licensed under the terms of the MIT license and the Apache License (Version 2.0). See [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE) for details. You may use this project under either license.
+
+## 🧵 Actor Layer (Phase 04: Minimal Actor System — In Progress)
+
+**lit-bit** is gaining a minimal actor model layer to enable safe, single-threaded event loops and mailbox-based communication for both embedded and async Rust environments.
+
+- **Purpose:** Integrate statecharts into concurrent systems (embedded or async) using message-passing actors.
+- **APIs:**
+    - `Actor` trait: implement for your state machine or use the provided wrapper.
+    - `Address<Event>`: type-safe handle for sending events/messages.
+    - **Mailboxes:**
+        - `heapless::spsc::Queue` for `no_std`/embedded (fail-fast, zero-alloc)
+        - `tokio::sync::mpsc` for `std`/async (await-based back-pressure)
+    - **Spawning:**
+        - `spawn_actor_embassy!` for Embassy/embedded
+        - `spawn_actor_tokio!` for async/Tokio
+- **Supervision:** Hierarchical parent/child actors and restart strategies (inspired by Akka/OTP/XState).
+- **Direct Integration:** You can `impl Actor for MyStateMachine` for zero-cost event forwarding.
+
+**Example (embedded):**
+```rust
+let (addr, _inbox) = heapless::spsc::Queue::new().split();
+addr.try_send(MyEvent::Start).unwrap();
+```
+
+**Example (Tokio):**
+```rust
+let (addr, _inbox) = tokio::sync::mpsc::channel(8);
+addr.send(MyEvent::Start).await.unwrap();
+```
+
+See the [Spec](./Spec.md#7-actor-model-phase-4-target) for full API and design details.
+
+### 🛡️ Heapless Guarantees
+
+- All embedded (`no_std`) code is designed to be heapless.
+- A dummy global allocator is used in embedded examples to satisfy the linker, but any attempt to allocate heap memory will crash at runtime.
+- **CI runs [`cargo geiger`](https://github.com/rust-secure-code/cargo-geiger) to scan for accidental heap/alloc/unsafe usage on Cortex-M and RISC-V targets.**
+- The badge above means every PR is checked for heap/unsafe regressions before merge.
+- See [`examples/heap_crash.rs`](lit-bit-core/examples/heap_crash.rs) for a runtime canary that will crash if heap allocation is attempted on either RISC-V or Cortex-M targets, proving the dummy allocator is active and effective.

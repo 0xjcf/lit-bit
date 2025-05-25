@@ -4108,7 +4108,7 @@ mod tests {
 
             // Should generate &EventType::Variant, not EventType::&Variant
             assert!(
-                prefixed_str.contains("&")
+                prefixed_str.contains('&')
                     && prefixed_str.contains("EventType")
                     && prefixed_str.contains("::")
                     && prefixed_str.contains("Variant"),
@@ -4128,11 +4128,11 @@ mod tests {
 
             // Should generate (EventType::Variant) - allow for spacing variations
             assert!(
-                prefixed_str.contains("(")
+                prefixed_str.contains('(')
                     && prefixed_str.contains("EventType")
                     && prefixed_str.contains("::")
                     && prefixed_str.contains("Variant")
-                    && prefixed_str.contains(")"),
+                    && prefixed_str.contains(')'),
                 "Parenthesized pattern should be prefixed correctly, got: {prefixed_str}"
             );
         }
@@ -4146,8 +4146,8 @@ mod tests {
             // Should prefix both sides of the OR
             assert!(
                 prefixed_str.contains("EventType")
-                    && prefixed_str.contains("A")
-                    && prefixed_str.contains("B")
+                    && prefixed_str.contains('A')
+                    && prefixed_str.contains('B')
                     && prefixed_str.contains("::"),
                 "OR pattern should prefix both cases, got: {prefixed_str}"
             );
@@ -4193,7 +4193,7 @@ mod tests {
 
             // Should generate &mut EventType::Variant
             assert!(
-                prefixed_str.contains("&")
+                prefixed_str.contains('&')
                     && prefixed_str.contains("mut")
                     && prefixed_str.contains("EventType")
                     && prefixed_str.contains("::")

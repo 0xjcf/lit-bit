@@ -44,6 +44,8 @@ pub mod prelude {
     // pub use crate::StateMachine;
 }
 
+pub mod actor;
+
 pub trait StateMachine<const N_ACTIVE: usize = MAX_ACTIVE_REGIONS> {
     type State: Copy
         + Clone

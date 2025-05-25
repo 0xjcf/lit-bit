@@ -562,27 +562,71 @@ The `diagram` feature enables the generation of visual representations of the st
 
 _(Phase 4 Target)_
 
-To facilitate integration into concurrent applications, especially when using the `std` or `async` features, `lit-bit` provides an actor model layer. This wraps the core state machine logic, providing a message-passing interface.
+To facilitate integration into concurrent applications, especially when using the `std` or `async` features, **lit-bit** provides an actor model layer. This wraps the core state machine logic, providing a message-passing interface and supervision tree.
 
-1.  **Core Traits (Conceptual - Specific names TBD)**:
-    *   `Actor`: Represents the running state machine instance within the actor system. It encapsulates the state machine, its context, and a mailbox.
-    *   `Mailbox`: An interface for sending events asynchronously to the actor's internal queue. Implementations will vary based on features (`heapless::spsc::Queue<Event, const N: usize>` for `no_std` with generic capacity `N`, potentially `tokio::sync::mpsc::channel` when used with an `std` async runtime like Tokio).
-2.  **Event Processing Loop**:
-    *   The `Actor` runs an internal processing loop (potentially on a spawned task if `async` is enabled).
-    *   This loop dequeues events one at a time from the `Mailbox`.
-    *   Each dequeued event is processed by calling the core state machine's `send()` method.
-    *   **Single-threaded Guarantee**: Crucially, the actor ensures that `send()` is called sequentially for each event. Even if actions involve `async` operations, the actor `await`s their completion *before* processing the next event in the queue, maintaining the state machine's synchronous execution semantics internally.
-3.  **Interface**:
-    *   Instead of calling `send()` directly, users interact with the `Actor` via its `Mailbox`.
-    *   `try_send(event)`: Attempts to queue an event immediately, returning `Err(event)` if the mailbox is full (providing back-pressure). This is suitable for synchronous or `no_std` contexts.
-    *   `send(event).await`: (Requires `async` feature) Asynchronously sends an event, potentially waiting if the mailbox is full until space becomes available.
-4.  **`no_std` Considerations**:
-    *   The actor model in `no_std` environments will rely on `heapless` queues with fixed capacities, making `try_send` the primary interaction method.
-    *   No dynamic memory allocation (global alloc) will be used in the `no_std` actor implementation.
-5.  **Instrumentation**:
-    *   (Requires `trace` feature, TBD) The actor layer may provide hooks or emit trace events (e.g., using the `tracing` crate) for state transitions (`on_transition(old_state, event, new_state)`), mailbox status, and event processing, allowing users to observe the actor's behavior.
+### 7.1. Actor Trait and Supervision
 
-This optional layer provides a standardized way to integrate the state machine into larger concurrent systems while preserving its core execution guarantees. The specific implementation details are targeted for Phase 4.
+```rust
+pub trait Actor {
+    type Message: Send + 'static;
+    async fn on_event(&mut self, msg: Self::Message);
+    // Supervision hooks (OTP-inspired)
+    async fn on_start(&mut self) -> Result<(), ActorError> { Ok(()) }
+    async fn on_stop(self) -> Result<(), ActorError> { Ok(()) }
+    fn on_panic(&self, info: &PanicInfo) -> RestartStrategy { RestartStrategy::OneForOne }
+}
+
+#[derive(Debug, Clone)]
+pub enum RestartStrategy {
+    OneForOne,
+    OneForAll,
+    RestForOne,
+}
+```
+- **Direct StateMachine Integration:**
+    ```rust
+    impl Actor for MyStateMachine {
+        type Message = MyEvent;
+        async fn on_event(&mut self, event: MyEvent) {
+            self.send(&event);
+        }
+    }
+    ```
+- **Supervision:** Hierarchical parent/child actors, restart strategies, and panic isolation (Akka/OTP/XState-inspired).
+
+### 7.2. Address and Mailbox API
+
+- **Address<Event>:** Type-safe handle for sending events/messages to an actor.
+    - Embedded: `heapless::spsc::Queue` (fail-fast, zero-alloc)
+    - Std/async: `tokio::sync::mpsc` (await-based back-pressure)
+- **API:**
+    ```rust
+    // Embedded
+    addr.try_send(MyEvent::Start).unwrap();
+    // Async
+    addr.send(MyEvent::Start).await.unwrap();
+    ```
+- **Spawning:**
+    - `spawn_actor_embassy!` for Embassy/embedded
+    - `spawn_actor_tokio!` for async/Tokio
+
+### 7.3. Event Loop and Platform Differences
+
+- **Single-threaded guarantee:** Each event is processed to completion before the next is dequeued.
+- **Back-pressure:**
+    - Embedded: fail-fast if mailbox full (`try_send` returns `Err`)
+    - Std/async: await until space is available (`send().await`)
+- **No global alloc in no_std:** All embedded mailboxes are fixed-size, zero-alloc.
+
+### 7.4. Research-Driven Design
+
+- **Conditional mailbox selection:** Compile-time selection for platform, no trait abstraction needed.
+- **Direct event type integration:** Use the state machine's event type as the actor message for zero-cost forwarding.
+- **Supervision and restart:** Parent/child relationships, restart on panic, and clean shutdown patterns.
+- **Performance targets:** ≤512B RAM overhead per actor, ≥1M events/sec (Tokio), <200ns/message (desktop).
+
+### 7.5. References
+- See `prompts/phases/04-minimal-actor-layer/04_checklist.md` and `prompts/decomposition/04_minimal_actor_layer_tasks.md` for implementation details and research rationale.
 
 ---
 

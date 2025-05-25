@@ -1,7 +1,7 @@
 # Root Cargo.toml for the lit-bit workspace
 [workspace]
 resolver = "2"
-members = ["lit-bit-core", "lit-bit-macro"]
+members = [ "lit-bit-cli","lit-bit-core", "lit-bit-macro"]
 
 # Workspace dependencies - centrally managed versions for publishing compatibility
 [workspace.dependencies]

@@ -1,0 +1,19 @@
+[package]
+name = "lit-bit-cli"
+version = "0.1.0"
+edition = "2024"
+default-run = "lit-bit-cli"
+
+[dependencies]
+lit-bit-core = { path = "../lit-bit-core", features = ["std", "async", "diagram"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Binary targets
+[[bin]]
+name = "lit-bit-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "heap-safety-check"
+path = "src/bin/heap-safety-check.rs"

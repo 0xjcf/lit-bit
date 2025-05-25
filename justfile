@@ -76,8 +76,8 @@ kill-qemu:
 
 # Run the traffic_light example from lit-bit-core on RISC-V QEMU
 run-rv: kill-qemu
-  @echo "Running traffic_light example (from lit-bit-core) on RISC-V QEMU..."
-  @cargo run -p lit-bit-core --example traffic_light --target riscv32imac-unknown-none-elf --verbose
+  @echo "🚀 Running traffic_light example (RISC-V QEMU, no_std)..."
+  @cargo run -p lit-bit-core --example traffic_light --target riscv32imac-unknown-none-elf --no-default-features --release
 
 # --- Code Quality & Analysis ---
 coverage: # Coverage might also need --workspace or to target specific packages
@@ -87,8 +87,25 @@ coverage: # Coverage might also need --workspace or to target specific packages
   @printf '\nText summary for AI context:\n'
   @cargo llvm-cov report --text --output-dir target/llvm-cov # Path might change
 
+# Cortex-M size check with strict no_std build
 size-check-cortex-m:
-  @echo "🔍 Building and checking firmware size for Cortex-M example (from lit-bit-core)..."
-  @cargo build -p lit-bit-core --example traffic_light_cortex_m --target thumbv7m-none-eabi --release
-  @echo "\nSize report for traffic_light_cortex_m:"
+  @echo "🔍 Building traffic_light_cortex_m (no_std)..."
+  @cargo build -p lit-bit-core --example traffic_light_cortex_m --target thumbv7m-none-eabi --no-default-features --release
+  @echo "\n📏 Size report for traffic_light_cortex_m:"
   @cargo size -p lit-bit-core --example traffic_light_cortex_m --target thumbv7m-none-eabi --release -- -A
+
+# --- Heap Crash Canary (Optional Embedded Test) ---
+# This test builds and (optionally) runs the heap_crash example for riscv32.
+# It will crash at runtime if heap allocation is attempted, proving the dummy allocator is active.
+# Usage: just heap-crash-test-rv
+heap-crash-test-rv:
+  @echo "🚨 Building heap_crash example (RISC-V, no_std, dummy allocator)..."
+  @cargo build -p lit-bit-core --example heap_crash --target riscv32imac-unknown-none-elf --no-default-features --release
+  @echo "If you run this on QEMU or hardware, it should crash if heap allocation is attempted."
+  @echo "(Not run by default in CI; for manual/optional validation.)"
+
+heap-crash-test-cm:
+  @echo "🚨 Building heap_crash example (Cortex-M, no_std, dummy allocator)..."
+  @cargo build -p lit-bit-core --example heap_crash --target thumbv7m-none-eabi --no-default-features --release
+  @echo "If you run this on QEMU or hardware, it should crash if heap allocation is attempted."
+  @echo "(Not run by default in CI; for manual/optional validation.)"

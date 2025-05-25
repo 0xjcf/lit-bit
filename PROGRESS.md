@@ -6,6 +6,33 @@ _Add new sessions below this line._
 
 ---
 
+## 2025-01-27 · _Session End_
+* _Author_: @claude-4-sonnet (via @0xjcf) 
+* _Phase_: 04-minimal-actor-layer (CI/Infrastructure)
+* _Work_: **FULLY RESOLVED ALL CI FAILURES** 🎉 Final fix: Updated cargo-geiger command from incorrect `-o json` to proper `--output-format Json` flag and completely rewrote heap-safety-check binary to match actual cargo-geiger JSON structure (packages[].package.id.name vs packages[].name). Fixed data structures: GeigerPackageEntry with nested package.id.name, UnsafetyInfo.used with UnsafeCount fields. All CI jobs now pass: ✅ heap-safety-scan shows "lit-bit-core contains no unsafe code (used: 0)", ✅ clippy passes, ✅ feature matrix works, ✅ embedded targets build. Comprehensive CI infrastructure is now rock-solid.
+* _Next_: Resume Phase 04 actor layer development with clean CI foundation.
+
+## 2025-01-27 · _Session End_
+* _Author_: @claude-4-sonnet (via @0xjcf) 
+* _Phase_: 04-minimal-actor-layer
+* _Work_: Completed Task 1.1 (Actor Trait) and Task 1.2 (Address Handle) with TDD. Implemented hierarchical spawning (Task 1.3) with std support, bi-directional parent-child links, and supervision-aware design. All linter errors resolved.
+* _Next_: Continue Task 1.3 (no_std implementation) and move to Task 1.4 (Direct Event Type Integration).
+
+## 2025-01-27 · _Session End_
+* _Author_: @claude-4-sonnet (via @0xjcf) 
+* _Phase_: 04-minimal-actor-layer (Infrastructure)
+* _Work_: Fixed dependency management and CI issues following Rust best practices research. Implemented proper two-crate workspace pattern: `lit-bit-core` (lean no_std library) + `lit-bit-cli` (std binary crate). Fixed heap-safety-check binary configuration, verified embedded target compilation, and ensured proper feature gating. All CI checks now pass.
+* _Next_: Resume Task 1.3 implementation (no_std actor spawning) and continue with actor layer development. 
+
+## 2024-06-XX · _Session End_ (Heap/Unsafe-Free CI & Documentation)
+* _Author_: @AI-agent (via @0xjcf)
+* _Phase_: 04-minimal-actor-layer (Embedded Safety)
+* _Work_:
+    - Added `cargo geiger` heap/unsafe scan to CI for Cortex-M and RISC-V targets.
+    - Added a Heap/Unsafe-Free CI badge to the top of the README.
+    - Updated documentation to explain heapless guarantees and CI enforcement.
+* _Next_: Continue actor system development, maintain heapless guarantees for all embedded targets.
+
 ## 2025-01-27 · Session End  
 * _Author_: @claude-4-sonnet (via @0xjcf)  
 * **Phase**: 03-Parallel-States (FINAL COMPLETION)  

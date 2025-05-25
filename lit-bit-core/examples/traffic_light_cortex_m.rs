@@ -1,6 +1,25 @@
 #![cfg_attr(target_arch = "arm", no_std)]
 #![cfg_attr(target_arch = "arm", no_main)]
 
+// Dummy allocator: satisfies linker for potential `alloc` references,
+// but will crash if actual heap allocation occurs.
+// This ensures heapless behavior at runtime.
+
+#[cfg(target_arch = "arm")]
+#[global_allocator]
+static DUMMY: DummyAlloc = DummyAlloc;
+
+#[cfg(target_arch = "arm")]
+struct DummyAlloc;
+
+#[cfg(target_arch = "arm")]
+unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
+    unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
+        core::ptr::null_mut()
+    }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+}
+
 #[cfg(target_arch = "arm")]
 mod cortex_m_logic {
     use cortex_m::asm;

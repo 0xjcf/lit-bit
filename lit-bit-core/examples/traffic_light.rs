@@ -1,6 +1,25 @@
 #![cfg_attr(target_arch = "riscv32", no_std)]
 #![cfg_attr(target_arch = "riscv32", no_main)]
 
+// Dummy allocator: satisfies linker for potential `alloc` references,
+// but will crash if actual heap allocation occurs.
+// This ensures heapless behavior at runtime.
+
+#[cfg(target_arch = "riscv32")]
+#[global_allocator]
+static DUMMY: DummyAlloc = DummyAlloc;
+
+#[cfg(target_arch = "riscv32")]
+struct DummyAlloc;
+
+#[cfg(target_arch = "riscv32")]
+unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
+    unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
+        core::ptr::null_mut()
+    }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+}
+
 // panic_halt is only used and needed for the riscv32 no_std target
 #[cfg(target_arch = "riscv32")]
 use panic_halt as _;
@@ -9,7 +28,6 @@ use panic_halt as _;
 mod riscv_logic {
     use riscv::asm;
     use riscv_rt::entry;
-    use semihosting::println;
 
     use lit_bit_core::{
         ActionFn, MAX_ACTIVE_REGIONS, MachineDefinition, Runtime, SendResult, StateMachine,
@@ -30,8 +48,7 @@ mod riscv_logic {
         TimerElapsed = 0,
     }
 
-    // Reinstate TrafficLightContext with cycle_count
-    #[derive(Debug, Clone, Default, PartialEq, Eq)] // Added Default for initialization
+    #[derive(Debug, Clone, Default, PartialEq, Eq)]
     struct TrafficLightContext {
         cycle_count: u32,
     }
@@ -53,19 +70,19 @@ mod riscv_logic {
 
     fn log_red(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
-            uart_print_str("U: Light is now RED.\n");
+            uart_print_str("UART: Light is now RED.\n");
         }
     }
 
     fn log_green(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
-            uart_print_str("U: Light is now GREEN.\n");
+            uart_print_str("UART: Light is now GREEN.\n");
         }
     }
 
     fn log_yellow(_context: &mut TrafficLightContext, _event: &TrafficLightEvent) {
         unsafe {
-            uart_print_str("U: Light is now YELLOW.\n");
+            uart_print_str("UART: Light is now YELLOW.\n");
         }
     }
 
@@ -73,12 +90,10 @@ mod riscv_logic {
         context.cycle_count += 1;
     }
 
-    // Match function for timer elapsed event
     fn matches_timer_elapsed(event: &TrafficLightEvent) -> bool {
         matches!(event, TrafficLightEvent::TimerElapsed)
     }
 
-    // Define the transitions
     const TRAFFIC_LIGHT_TRANSITIONS: &[Transition<
         TrafficLightState,
         TrafficLightEvent,
@@ -107,8 +122,6 @@ mod riscv_logic {
         },
     ];
 
-    // Define the states (even if simple, the definition needs an array)
-    #[allow(dead_code)] // Suppress dead code warning as it's used via TRAFFIC_LIGHT_MACHINE_DEF
     const TRAFFIC_LIGHT_STATENODES: &[StateNode<
         TrafficLightState,
         TrafficLightContext,
@@ -140,22 +153,19 @@ mod riscv_logic {
         },
     ];
 
-    // Create the machine definition
-    // This is what the `statechart!` macro would generate.
     const TRAFFIC_LIGHT_MACHINE_DEF: MachineDefinition<
         TrafficLightState,
         TrafficLightEvent,
         TrafficLightContext,
     > = MachineDefinition::new(
-        TRAFFIC_LIGHT_STATENODES, // Added states argument
+        TRAFFIC_LIGHT_STATENODES,
         TRAFFIC_LIGHT_TRANSITIONS,
-        TrafficLightState::Red, // Initial state
+        TrafficLightState::Red,
     );
 
-    const M: usize = 2; // Max hierarchy depth for this simple machine (flat = 1, 2 is safe)
+    const M: usize = 2;
     const MAX_NODES_CALC: usize = M * MAX_ACTIVE_REGIONS;
 
-    // Type alias for this specific Runtime configuration
     type TrafficLightRuntime = Runtime<
         TrafficLightState,
         TrafficLightEvent,
@@ -169,27 +179,23 @@ mod riscv_logic {
     fn main_riscv_entry() -> ! {
         unsafe {
             uart_print_str("UART: Entered main_riscv!\n");
-        }
-        println!("SEMI: Entered main_riscv! Semihosting test.");
-        println!("SEMI: Starting traffic light simulation...");
-        unsafe {
-            uart_print_str("UART: Starting simulation...\n");
+            uart_print_str("UART: Starting traffic light simulation...\n");
         }
 
         let initial_context = TrafficLightContext { cycle_count: 0 };
-        let initial_event = TrafficLightEvent::TimerElapsed; // Initial event
-        // Use the type alias
+        let initial_event = TrafficLightEvent::TimerElapsed;
+
         let mut runtime: TrafficLightRuntime =
             Runtime::new(&TRAFFIC_LIGHT_MACHINE_DEF, initial_context, &initial_event)
                 .expect("Failed to create traffic light state machine");
 
         unsafe {
-            uart_print_str("UART: SM created.\n");
+            uart_print_str("UART: State machine created.\n");
         }
 
         for _ in 0..7 {
             unsafe {
-                uart_print_str("\nUART: Event -> ");
+                uart_print_str("UART: Event -> ");
             }
             match runtime.send(&TrafficLightEvent::TimerElapsed) {
                 SendResult::Transitioned => unsafe {
@@ -198,18 +204,14 @@ mod riscv_logic {
                 SendResult::NoMatch => unsafe {
                     uart_print_str("UART: No Transition.\n");
                 },
-                SendResult::Error(e) => {
-                    println!("SEMI: Runtime error: {e:?}");
-                    unsafe {
-                        uart_print_str("UART: ERROR during transition!\n");
-                    }
-                }
+                SendResult::Error(_) => unsafe {
+                    uart_print_str("UART: ERROR during transition!\n");
+                },
             }
         }
 
-        println!("\nSEMI: Simulation finished.");
         unsafe {
-            uart_print_str("\nUART: Simulation finished.\n");
+            uart_print_str("UART: Simulation finished.\n");
         }
 
         loop {
