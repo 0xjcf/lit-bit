@@ -136,6 +136,7 @@ pub async fn actor_task<A: Actor, const N: usize>(
 }
 
 pub mod address;
+pub mod backpressure;
 pub mod integration;
 pub mod spawn;
 

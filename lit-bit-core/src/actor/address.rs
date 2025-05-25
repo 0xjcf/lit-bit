@@ -1,5 +1,7 @@
 //! Type-safe Address handle for actor message delivery (Task 1.2 scaffold)
 
+use super::backpressure::SendError;
+
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
@@ -7,12 +9,6 @@ extern crate alloc;
 pub struct Address<Event: 'static, const N: usize> {
     sender: heapless::spsc::Producer<'static, Event, N>,
     _phantom: core::marker::PhantomData<Event>,
-}
-
-#[cfg(not(feature = "std"))]
-#[derive(Debug, PartialEq, Eq)]
-pub enum SendError<T> {
-    Full(T),
 }
 
 #[cfg(not(feature = "std"))]
@@ -129,6 +125,34 @@ impl<Event, const N: usize> Address<Event, N> {
     #[must_use]
     pub fn cell(&self) -> std::sync::Arc<ActorCell<Event, N>> {
         self.cell.clone()
+    }
+
+    /// Send a message with async back-pressure.
+    ///
+    /// This method will await if the mailbox is full, providing natural back-pressure.
+    ///
+    /// # Errors
+    /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
+    pub async fn send(&self, event: Event) -> Result<(), SendError<Event>> {
+        self.sender
+            .send(event)
+            .await
+            .map_err(|err| SendError::Closed(err.0))
+    }
+
+    /// Try to send a message without blocking.
+    ///
+    /// # Errors
+    /// Returns `SendError::Full(msg)` if the mailbox is full.
+    /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
+    pub fn try_send(&self, event: Event) -> Result<(), SendError<Event>> {
+        match self.sender.try_send(event) {
+            Ok(()) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(event)) => Err(SendError::Full(event)),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(event)) => {
+                Err(SendError::Closed(event))
+            }
+        }
     }
 
     /// Spawns a child actor, linking parent and child.

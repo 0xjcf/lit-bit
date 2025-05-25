@@ -53,6 +53,7 @@ cortex-m-rt = "0.7.5"
 
 [dev-dependencies]
 panic-halt = "1.0.0" # For no_std examples (both ARM and RISC-V if cfg-ed in example)
+tokio = { version = "1.42", features = ["macros", "rt", "sync", "time"] } # For async tests
 
 # Host-specific dev dependencies (for macOS aarch64 host)
 [target.aarch64-apple-darwin.dev-dependencies]
