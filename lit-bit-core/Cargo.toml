@@ -29,7 +29,7 @@ thiserror = { version = "1.0", optional = true }
 tracing = { version = "0.1", optional = true }
 futures = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
 async-trait = { version = "0.1", optional = true }
-tokio = { version = "1.42", features = ["macros", "rt", "sync", "time"], optional = true }
+tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"], optional = true }
 log = { version = "0.4", optional = true }
 
 # Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
@@ -53,7 +53,7 @@ cortex-m-rt = "0.7.5"
 
 [dev-dependencies]
 panic-halt = "1.0.0" # For no_std examples (both ARM and RISC-V if cfg-ed in example)
-tokio = { version = "1.42", features = ["macros", "rt", "sync", "time"] } # For async tests
+tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] } # For async tests
 
 # Host-specific dev dependencies (for macOS aarch64 host)
 [target.aarch64-apple-darwin.dev-dependencies]

@@ -25,12 +25,13 @@ test-summary:
   @cargo test 2>&1 | grep "test result"
 
 # --- Lint Tasks ---
-# Lint the entire workspace or a specific part (app parameter currently informational for workspace-wide script)
+# Comprehensive lint: includes pedantic warnings, all features, nightly check, AND CI-exact check
+# This is the most thorough check and will catch issues before they hit CI
 # Usage: just lint [fix] OR just lint <app_name> [fix]
 lint app='workspace' fix='':
   ./scripts/lint_app.sh {{app}} {{fix}}
 
-# Nightly-specific lint tasks for catching CI issues early
+# Nightly-specific lint with all features (more permissive than CI)
 lint-nightly app='workspace' fix='':
   #!/usr/bin/env bash
   set -e
@@ -48,6 +49,27 @@ lint-nightly app='workspace' fix='':
     cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
   fi
   echo "✅ Nightly clippy check complete."
+
+# CI-exact lint commands - matches exactly what CI runs (without --all-features)
+# Use this to catch issues that only appear in the CI environment
+# Usage: just lint-ci [stable|nightly]
+lint-ci toolchain='stable':
+  #!/usr/bin/env bash
+  set -e
+  echo "🤖 Running CI-exact clippy checks ({{toolchain}})..."
+  
+  if [[ "{{toolchain}}" == "nightly" ]]; then
+    if ! rustup toolchain list | grep -q "nightly"; then
+      echo "❌ Nightly toolchain not installed. Install with: rustup toolchain install nightly"
+      exit 1
+    fi
+    echo "🔍 Running nightly clippy (CI-exact)..."
+    cargo +nightly clippy --all-targets --workspace -- -D warnings
+  else
+    echo "🔍 Running stable clippy (CI-exact)..."
+    cargo clippy --all-targets --workspace -- -D warnings
+  fi
+  echo "✅ CI-exact clippy check complete."
 
 # Build all workspace members for release
 build:
