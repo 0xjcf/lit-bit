@@ -1,9 +1,12 @@
 //! Actor spawning functions for Embassy and Tokio runtimes.
 
-#[allow(unused_imports)] // TODO: Remove when spawning functions are fully implemented
+#[cfg(all(not(feature = "std"), feature = "embassy"))]
 use super::{Actor, actor_task, create_mailbox};
 
-#[cfg(all(not(feature = "std"), feature = "embassy"))]
+#[cfg(feature = "std")]
+use super::{Actor, actor_task, create_mailbox};
+
+#[cfg(any(all(not(feature = "std"), feature = "embassy"), feature = "std"))]
 use super::address::Address;
 
 // Embassy spawning function (Task 3.2)
@@ -25,20 +28,19 @@ where
 }
 
 // Tokio spawning function (Task 3.3)
-// TODO: Complete implementation when Address integration is finished
 #[cfg(feature = "std")]
-#[allow(dead_code)]
-fn spawn_actor_tokio_placeholder<A, const N: usize>(actor: A)
+pub fn spawn_actor_tokio<A, const N: usize>(actor: A) -> Address<A::Message, N>
 where
     A: Actor + Send + 'static,
     A::Message: Send + 'static,
 {
-    let (_outbox, inbox) = create_mailbox::<A::Message, N>();
+    let (outbox, inbox) = create_mailbox::<A::Message, N>();
 
     // Spawn on current Tokio runtime
     tokio::spawn(actor_task::<A, N>(actor, inbox));
 
-    // TODO: Return Address when integration is complete
+    // Create Address from the Tokio sender
+    Address::from_tokio_sender(outbox)
 }
 
 // Graceful termination patterns (Task 3.4)
@@ -85,11 +87,14 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[tokio::test]
-    async fn spawn_tokio_compiles() {
-        // This test just ensures the function signature compiles
-        // Actual functionality testing would require a complete implementation
-        let _actor = TestActor::new();
-        // let _addr = spawn_actor_tokio::<_, 16>(actor);
-        // TODO: Uncomment when Address::from_tokio_sender is implemented
+    async fn spawn_tokio_works() {
+        let actor = TestActor::new();
+        let addr = spawn_actor_tokio::<_, 16>(actor);
+
+        // Test that we can send a message
+        addr.send(42).await.unwrap();
+
+        // Give the actor time to process
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     }
 }

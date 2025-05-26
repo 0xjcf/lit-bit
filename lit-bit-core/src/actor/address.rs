@@ -107,6 +107,21 @@ impl<Event, const N: usize> Address<Event, N> {
         }
     }
 
+    /// Create an Address from a Tokio sender (for `spawn_actor_tokio`).
+    #[must_use]
+    pub fn from_tokio_sender(sender: tokio::sync::mpsc::Sender<Event>) -> Self {
+        let cell = std::sync::Arc::new(ActorCell::<Event, N> {
+            _phantom: std::marker::PhantomData,
+        });
+        Self {
+            sender,
+            actor_id: 0,
+            parent: None,
+            children: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            cell,
+        }
+    }
+
     /// Returns a reference to the parent Weak pointer, if any.
     #[must_use]
     pub fn parent(&self) -> Option<&std::sync::Weak<ActorCell<Event, N>>> {

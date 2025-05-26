@@ -8,11 +8,12 @@ It aims to provide a similar developer experience to XState but within the Rust 
 
 ## Current Status
 
-*   **Phase:** 04 - Minimal Actor Layer (In Progress)
+*   **Phase:** 04 - Minimal Actor Layer ✅ **COMPLETED** | Next: Phase 05 - Async & Side-Effects (planning)
 *   Core runtime for flat, hierarchical, and parallel state machines is functional.
 *   Procedural macro (`statechart!`) for defining state machines is operational for flat, hierarchical, and parallel structures.
-*   Minimal actor system and mailbox integration is in progress (see below).
+*   **Minimal actor system and mailbox integration is complete** with full Embassy/Tokio support.
 *   Examples for RISC-V (QEMU) and Cortex-M (QEMU/hardware) are available.
+*   **Actor layer provides**: Type-safe addresses, hierarchical spawning, supervision trees, platform-dual mailboxes.
 
 
 ## ✨ Features
@@ -362,9 +363,9 @@ Please open an issue to discuss any significant changes or new features before s
 
 This project is licensed under the terms of the MIT license and the Apache License (Version 2.0). See [LICENSE-MIT](./LICENSE-MIT) and [LICENSE-APACHE](./LICENSE-APACHE) for details. You may use this project under either license.
 
-## 🧵 Actor Layer (Phase 04: Minimal Actor System — In Progress)
+## 🧵 Actor Layer (Phase 04: Minimal Actor System — ✅ Complete)
 
-**lit-bit** is gaining a minimal actor model layer to enable safe, single-threaded event loops and mailbox-based communication for both embedded and async Rust environments.
+**lit-bit** provides a production-ready minimal actor model layer that enables safe, single-threaded event loops and mailbox-based communication for both embedded and async Rust environments.
 
 - **Purpose:** Integrate statecharts into concurrent systems (embedded or async) using message-passing actors.
 - **APIs:**
@@ -374,8 +375,8 @@ This project is licensed under the terms of the MIT license and the Apache Licen
         - `heapless::spsc::Queue` for `no_std`/embedded (fail-fast, zero-alloc)
         - `tokio::sync::mpsc` for `std`/async (await-based back-pressure)
     - **Spawning:**
-        - `spawn_actor_embassy!` for Embassy/embedded
-        - `spawn_actor_tokio!` for async/Tokio
+        - `spawn_actor_embassy()` for Embassy/embedded ✅
+        - `spawn_actor_tokio()` for async/Tokio ✅
 - **Supervision:** Hierarchical parent/child actors and restart strategies (inspired by Akka/OTP/XState).
 - **Direct Integration:** You can `impl Actor for MyStateMachine` for zero-cost event forwarding.
 

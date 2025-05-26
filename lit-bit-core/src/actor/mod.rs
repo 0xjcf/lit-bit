@@ -140,6 +140,12 @@ pub mod backpressure;
 pub mod integration;
 pub mod spawn;
 
+// Re-export spawn functions for convenience
+#[cfg(all(not(feature = "std"), feature = "embassy"))]
+pub use spawn::spawn_actor_embassy;
+#[cfg(feature = "std")]
+pub use spawn::spawn_actor_tokio;
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,7 +5,7 @@ Thought for 9 seconds
 
 > **Goal:** deliver an ergonomic, type-safe, `no_std`-ready state-chart + minimal actor layer that scales from RISC-V firmware to async web back-ends, matching (or exceeding) XState's feature set.
 
-> **Current Focus:** Phase 04 — Minimal Actor Layer (mailbox, actor trait, supervision, embedded + async support, research-driven design)
+> **Current Focus:** Phase 04 — Minimal Actor Layer ✅ **COMPLETED** | Next: Phase 05 — Async & Side-Effects (planning in progress)
 
 | Phase                               | Focus                                                                                                     | New Capability                    | Key Requirements                                                                                                                  | Success Criteria                                                                                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
