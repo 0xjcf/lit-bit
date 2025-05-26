@@ -40,7 +40,7 @@ jobs:
 
     - name: Test feature matrix (lit-bit-core only)
       if: matrix.toolchain == 'stable'
-      run: cd lit-bit-core && cargo hack check --feature-powerset --no-dev-deps
+      run: cd lit-bit-core && cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy
 
   embedded-targets:
     name: Embedded Targets

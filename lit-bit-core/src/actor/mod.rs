@@ -110,24 +110,30 @@ pub async fn actor_task<A: Actor, const N: usize>(
     // Main processing loop (Ector pattern)
     loop {
         #[cfg(not(feature = "std"))]
-        let Some(msg) = inbox.dequeue() else {
-            // Yield and continue (Embassy style)
-            #[cfg(feature = "embassy")]
-            embassy_futures::yield_now().await;
-            #[cfg(not(feature = "embassy"))]
-            {
-                // For no_std without embassy, we need a different yield mechanism
-                // This is a placeholder - in practice you'd use your executor's yield
-                continue;
-            }
-        };
+        {
+            let msg = loop {
+                if let Some(msg) = inbox.dequeue() {
+                    break msg;
+                }
+                // Yield and continue (Embassy style)
+                #[cfg(feature = "embassy")]
+                embassy_futures::yield_now().await;
+                #[cfg(not(feature = "embassy"))]
+                {
+                    // For no_std without embassy, we need a different yield mechanism
+                    // This is a placeholder - in practice you'd use your executor's yield
+                }
+            };
+            actor.on_event(msg).await;
+        }
 
         #[cfg(feature = "std")]
-        let Some(msg) = inbox.recv().await else {
-            break; // Channel closed
-        };
-
-        actor.on_event(msg).await;
+        {
+            let Some(msg) = inbox.recv().await else {
+                break; // Channel closed
+            };
+            actor.on_event(msg).await;
+        }
     }
 
     // Cleanup hook

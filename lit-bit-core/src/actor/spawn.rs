@@ -9,6 +9,16 @@ use super::{Actor, actor_task, create_mailbox};
 #[cfg(any(all(not(feature = "std"), feature = "embassy"), feature = "std"))]
 use super::address::Address;
 
+// Embassy task for running actors (must be at top level)
+#[cfg(all(not(feature = "std"), feature = "embassy"))]
+#[embassy_executor::task]
+async fn embassy_actor_task<A: Actor + 'static, const N: usize>(
+    actor: A,
+    inbox: super::Inbox<A::Message, N>,
+) {
+    let _ = actor_task::<A, N>(actor, inbox).await;
+}
+
 // Embassy spawning function (Task 3.2)
 #[cfg(all(not(feature = "std"), feature = "embassy"))]
 pub fn spawn_actor_embassy<A, const N: usize>(
@@ -21,8 +31,8 @@ where
 {
     let (outbox, inbox) = create_mailbox::<A::Message, N>();
 
-    // Move actor and inbox into static context (Embassy requirement)
-    spawner.spawn(actor_task::<A, N>(actor, inbox)).unwrap();
+    // Spawn the embassy task
+    spawner.spawn(embassy_actor_task(actor, inbox)).unwrap();
 
     Address::from_producer(outbox)
 }

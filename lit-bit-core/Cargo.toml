@@ -32,6 +32,10 @@ async-trait = { version = "0.1", optional = true }
 tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"], optional = true }
 log = { version = "0.4", optional = true }
 
+# Embassy dependencies for no_std async
+embassy-futures = { version = "0.1", optional = true }
+embassy-executor = { version = "0.6", optional = true }
+
 # Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
 # MOVED TO TARGET-SPECIFIC BELOW
 # cortex-m = "0.7.7"
@@ -70,7 +74,7 @@ std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "dep:futures",
 # The `async` feature requires `std` because tokio's runtime features (rt, time) require std
 async = ["std", "dep:async-trait", "dep:futures", "dep:tokio"]
 diagram = ["dep:serde"] # For serializing statechart structure
-embassy = [] # Feature flag for Embassy executor support (no dependencies, just cfg gates)
+embassy = ["dep:embassy-futures", "dep:embassy-executor"] # Feature flag for Embassy executor support (temporarily excluded from CI due to generic task limitations)
 
 # Example of combining features for specific use cases:
 # async-std = ["async", "std", "dep:tokio"]

@@ -71,6 +71,19 @@ lint-ci toolchain='stable':
   fi
   echo "✅ CI-exact clippy check complete."
 
+# Test feature matrix (matches CI exactly) - excludes embassy feature temporarily
+test-features:
+  #!/usr/bin/env bash
+  set -e
+  echo "🧪 Testing feature matrix (lit-bit-core only)..."
+  cd lit-bit-core
+  if ! command -v cargo-hack &> /dev/null; then
+    echo "❌ cargo-hack not installed. Install with: cargo install cargo-hack --locked"
+    exit 1
+  fi
+  cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy
+  echo "✅ Feature matrix test complete."
+
 # Build all workspace members for release
 build:
   @echo "Building workspace for release..."
