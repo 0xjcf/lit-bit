@@ -3,9 +3,6 @@
 use super::backpressure::SendError;
 
 #[cfg(not(feature = "std"))]
-extern crate alloc;
-
-#[cfg(not(feature = "std"))]
 pub struct Address<Event: 'static, const N: usize> {
     sender: heapless::spsc::Producer<'static, Event, N>,
     _phantom: core::marker::PhantomData<Event>,
@@ -33,10 +30,6 @@ impl<Event: 'static, const N: usize> Address<Event, N> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(feature = "std"))]
-    extern crate alloc;
-    #[cfg(not(feature = "std"))]
-    use alloc::boxed::Box;
     #[test]
     fn address_type_sanity() {
         // TDD: Address<Event> can be constructed and is type-safe
@@ -44,10 +37,8 @@ mod tests {
         #[cfg(not(feature = "std"))]
         {
             use super::Address;
-            use heapless::spsc::Queue;
             const CAP: usize = 2;
-            let queue: &'static mut Queue<u32, CAP> = Box::leak(Box::new(Queue::new()));
-            let (prod, _cons) = queue.split();
+            let (prod, _cons) = crate::static_mailbox!(TEST_QUEUE: u32, CAP);
             let _addr: Address<u32, CAP> = Address::from_producer(prod);
         }
     }
@@ -55,16 +46,12 @@ mod tests {
 
 #[cfg(all(test, not(feature = "std")))]
 mod nostd_tests {
-    extern crate alloc;
     use super::Address;
-    use alloc::boxed::Box;
-    use heapless::spsc::Queue;
 
     #[test]
     fn try_send_fails_when_queue_full() {
         const CAP: usize = 3;
-        let queue: &'static mut Queue<u8, CAP> = Box::leak(Box::new(Queue::new()));
-        let (prod, _cons) = queue.split();
+        let (prod, _cons) = crate::static_mailbox!(FULL_QUEUE_TEST: u8, CAP);
         let mut addr = Address::<u8, CAP>::from_producer(prod);
         assert!(addr.try_send(1).is_ok());
         assert!(addr.try_send(2).is_ok());

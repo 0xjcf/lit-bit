@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 
 //! # Rust-Statechart
 //! A Rust library for building type-safe, Harel statecharts, inspired by `XState`.
@@ -43,7 +44,12 @@ pub use runtime::Transition; // If users need to construct this manually
 // Re-export key actor types for easier access
 pub use actor::address::Address;
 pub use actor::backpressure::SendError;
+#[cfg(feature = "std")]
 pub use actor::{Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, create_mailbox};
+#[cfg(not(feature = "std"))]
+pub use actor::{
+    Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, create_mailbox_safe,
+};
 
 // Note: static_mailbox macro is available directly from the crate root
 

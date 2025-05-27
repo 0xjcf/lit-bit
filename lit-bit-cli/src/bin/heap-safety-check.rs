@@ -21,8 +21,16 @@ struct GeigerPackageEntry {
 #[derive(Debug, Deserialize)]
 struct GeigerPackageInfo {
     #[allow(dead_code)]
-    id: String,
+    id: GeigerPackageId,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeigerPackageId {
     name: String,
+    #[allow(dead_code)]
+    version: String,
+    #[allow(dead_code)]
+    source: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,7 +115,7 @@ fn main() {
     let mut found_lit_bit_core = false;
 
     for package_entry in &report.packages {
-        let package_name = &package_entry.package.name;
+        let package_name = &package_entry.package.id.name;
         if package_name == "lit-bit-core" {
             found_lit_bit_core = true;
             let unsafety = &package_entry.unsafety.used;

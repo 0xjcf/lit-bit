@@ -3,6 +3,8 @@
 #![allow(dead_code)]
 
 use core::panic::PanicInfo;
+#[cfg(not(feature = "std"))]
+use static_cell::StaticCell;
 
 /// Error type for actor lifecycle and supervision hooks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +38,7 @@ pub enum RestartStrategy {
 ///
 /// The `on_event` method uses different implementations based on feature flags:
 /// - **With `async` feature**: Uses `async-trait` for stable Rust compatibility
-/// - **Without `async` feature**: Uses `impl Future` (requires nightly Rust or edition 2024)
+/// - **Without `async` feature**: Uses `impl Future` (requires nightly Rust with `async_fn_in_trait` feature)
 #[allow(unused_variables)]
 #[cfg_attr(not(feature = "async"), allow(async_fn_in_trait))]
 pub trait Actor: Send {
@@ -88,9 +90,9 @@ pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 
 /// Creates a static mailbox with safe initialization.
 ///
-/// This macro creates a statically allocated SPSC queue and returns the producer
-/// and consumer endpoints. It handles all the unsafe code internally and ensures
-/// the queue can only be split once.
+/// This macro creates a statically allocated SPSC queue using `StaticCell` and returns
+/// the producer and consumer endpoints. It handles initialization safely without any
+/// unsafe code and ensures the queue can only be split once.
 ///
 /// # Arguments
 ///
@@ -120,70 +122,54 @@ pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 #[macro_export]
 macro_rules! static_mailbox {
     ($(#[$attr:meta])* $name:ident: $msg_type:ty, $capacity:expr) => {{
-        use core::sync::atomic::{AtomicBool, Ordering};
+        use static_cell::StaticCell;
 
         $(#[$attr])*
-        static mut $name: heapless::spsc::Queue<$msg_type, $capacity> =
-            heapless::spsc::Queue::new();
+        static $name: StaticCell<heapless::spsc::Queue<$msg_type, $capacity>> = StaticCell::new();
 
-        // Generate unique flag name to avoid symbol conflicts
-        paste::paste! {
-            // Ensure this macro is only called once per static
-            static [<$name _INIT_FLAG>]: AtomicBool = AtomicBool::new(false);
+        // Initialize the queue and get a 'static reference
+        let queue: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
+            $name.init(heapless::spsc::Queue::new());
 
-            if [<$name _INIT_FLAG>].swap(true, Ordering::AcqRel) {
-                panic!("static_mailbox! called multiple times for the same queue");
-            }
-        }
-
-        // SAFETY: We ensure this is only called once via the atomic flag above.
-        // The static queue is valid for 'static lifetime and we immediately
-        // split it to prevent further access to the raw queue.
-        let queue_ref: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
-            unsafe { &mut *core::ptr::addr_of_mut!($name) };
-
-        queue_ref.split()
+        // Split the queue into producer and consumer
+        queue.split()
     }};
 
     // Variant without attributes
     ($name:ident: $msg_type:ty, $capacity:expr) => {
-        $crate::static_mailbox!($name: $msg_type, $capacity)
+        $crate::static_mailbox!($(#[])* $name: $msg_type, $capacity)
     };
 }
 
-/// Creates a mailbox from a statically allocated queue (advanced usage).
+/// Creates a mailbox from a statically allocated queue using StaticCell (safe alternative).
 ///
-/// This function is intended for advanced use cases where you need full control
-/// over the queue allocation. For most use cases, prefer the `static_mailbox!` macro.
+/// This function provides a safe way to create mailboxes from static memory without
+/// requiring unsafe code. It uses `StaticCell` to ensure safe one-time initialization.
 ///
-/// # Safety
-///
-/// The caller must ensure that:
-/// - The provided queue reference is valid for the `'static` lifetime
-/// - The queue is not used elsewhere after calling this function
-/// - The queue is properly initialized (typically via `heapless::spsc::Queue::new()`)
+/// For most use cases, prefer the `static_mailbox!` macro which handles the StaticCell
+/// creation automatically.
 ///
 /// # Arguments
 ///
-/// * `queue` - A static mutable reference to a heapless queue that will be split
-///   into producer and consumer halves
+/// * `cell` - A StaticCell containing an uninitialized heapless queue
 ///
 /// # Examples
 ///
 /// ```rust,no_run
 /// use heapless::spsc::Queue;
-/// use lit_bit_core::actor::create_mailbox;
+/// use static_cell::StaticCell;
+/// use lit_bit_core::actor::create_mailbox_safe;
 ///
-/// static mut QUEUE: Queue<u32, 16> = Queue::new();
+/// static QUEUE_CELL: StaticCell<Queue<u32, 16>> = StaticCell::new();
 ///
-/// // SAFETY: QUEUE is statically allocated and not used elsewhere
-/// let (outbox, inbox) = unsafe { create_mailbox(&mut QUEUE) };
+/// let (outbox, inbox) = create_mailbox_safe(&QUEUE_CELL);
 /// ```
 #[cfg(not(feature = "std"))]
 #[must_use]
-pub unsafe fn create_mailbox<T, const N: usize>(
-    queue: &'static mut heapless::spsc::Queue<T, N>,
+pub fn create_mailbox_safe<T, const N: usize>(
+    cell: &'static StaticCell<heapless::spsc::Queue<T, N>>,
 ) -> (Outbox<T, N>, Inbox<T, N>) {
+    let queue = cell.init(heapless::spsc::Queue::new());
     queue.split()
 }
 

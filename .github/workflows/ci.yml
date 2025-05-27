@@ -79,11 +79,16 @@ jobs:
 
     - name: Heap/Unsafe Scan (Strict for lit-bit-core only, Cortex-M)
       run: |
+        # Run cargo-geiger from the lit-bit-core directory to avoid workspace issues
+        cd lit-bit-core
+        
         # Run cargo-geiger and capture both stdout and stderr, but ignore warnings in exit code
         set +e
-        cargo geiger --output-format Json --target thumbv7m-none-eabi --no-default-features -p lit-bit-core --manifest-path ${{ github.workspace }}/lit-bit-core/Cargo.toml > geiger_report.json 2>geiger_warnings.log
+        cargo geiger --output-format Json --target thumbv7m-none-eabi --no-default-features > ../geiger_report.json 2>../geiger_warnings.log
         geiger_exit_code=$?
         set -e
+        
+        cd ..
 
         # Show the warnings for debugging but don't fail on them
         if [ -s geiger_warnings.log ]; then
@@ -91,10 +96,15 @@ jobs:
           cat geiger_warnings.log
         fi
 
-        # Only fail if it's a real error (not just warnings)
-        if [ $geiger_exit_code -ne 0 ] && [ $geiger_exit_code -ne 1 ]; then
-          echo "Cargo geiger failed with exit code $geiger_exit_code"
-          exit $geiger_exit_code
+        # Check if geiger_report.json is empty or if geiger failed completely
+        if [ ! -s geiger_report.json ]; then
+          echo "❌ Cargo geiger failed to generate a report or generated an empty report"
+          echo "Exit code was: $geiger_exit_code"
+          if [ -s geiger_warnings.log ]; then
+            echo "Last few lines of warnings:"
+            tail -10 geiger_warnings.log
+          fi
+          exit 1
         fi
 
         echo "Generated geiger report:"

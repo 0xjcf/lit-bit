@@ -19,6 +19,7 @@ categories = ["embedded", "no-std", "algorithms"]
 # Core dependencies (keep minimal for no_std focus)
 # We might add `heapless` later if needed for no_std collections.
 heapless = { version = "0.8.0", default-features = false }
+static_cell = { version = "2.1.0", default-features = false }
 lit-bit-macro = { workspace = true }
 paste = "1.0"
 
