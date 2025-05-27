@@ -80,9 +80,9 @@ pub type Inbox<T, const N: usize> = heapless::spsc::Consumer<'static, T, N>;
 pub type Outbox<T, const N: usize> = heapless::spsc::Producer<'static, T, N>;
 
 #[cfg(feature = "std")]
-pub type Inbox<T, const N: usize> = tokio::sync::mpsc::Receiver<T>;
+pub type Inbox<T> = tokio::sync::mpsc::Receiver<T>;
 #[cfg(feature = "std")]
-pub type Outbox<T, const N: usize> = tokio::sync::mpsc::Sender<T>;
+pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 
 // Platform-specific mailbox creation functions (Tasks 2.2-2.3)
 
@@ -131,7 +131,7 @@ macro_rules! static_mailbox {
             // Ensure this macro is only called once per static
             static [<$name _INIT_FLAG>]: AtomicBool = AtomicBool::new(false);
 
-            if [<$name _INIT_FLAG>].swap(true, Ordering::Acquire) {
+            if [<$name _INIT_FLAG>].swap(true, Ordering::AcqRel) {
                 panic!("static_mailbox! called multiple times for the same queue");
             }
         }
@@ -189,8 +189,8 @@ pub unsafe fn create_mailbox<T, const N: usize>(
 
 #[cfg(feature = "std")]
 #[must_use]
-pub fn create_mailbox<T, const N: usize>() -> (Outbox<T, N>, Inbox<T, N>) {
-    tokio::sync::mpsc::channel(N)
+pub fn create_mailbox<T>(capacity: usize) -> (Outbox<T>, Inbox<T>) {
+    tokio::sync::mpsc::channel(capacity)
 }
 
 /// Yield mechanism for `no_std` environments without Embassy.
@@ -257,6 +257,7 @@ async fn yield_control() {
 /// # Errors
 /// Returns `ActorError` if actor startup, shutdown, or message processing fails.
 #[allow(unreachable_code)] // no_std path has infinite loop, cleanup only reachable on std
+#[cfg(not(feature = "std"))]
 pub async fn actor_task<A: Actor, const N: usize>(
     mut actor: A,
     mut inbox: Inbox<A::Message, N>,
@@ -266,32 +267,49 @@ pub async fn actor_task<A: Actor, const N: usize>(
 
     // Main processing loop (Ector pattern)
     loop {
-        #[cfg(not(feature = "std"))]
-        {
-            let msg = loop {
-                if let Some(msg) = inbox.dequeue() {
-                    break msg;
-                }
-                // Yield and continue (Embassy style)
-                #[cfg(feature = "embassy")]
-                embassy_futures::yield_now().await;
-                #[cfg(not(feature = "embassy"))]
-                {
-                    // For no_std without embassy, yield control to allow other tasks to run.
-                    // This uses a configurable yield function that can be customized per executor.
-                    yield_control().await;
-                }
-            };
-            actor.on_event(msg).await;
-        }
+        let msg = loop {
+            if let Some(msg) = inbox.dequeue() {
+                break msg;
+            }
+            // Yield and continue (Embassy style)
+            #[cfg(feature = "embassy")]
+            embassy_futures::yield_now().await;
+            #[cfg(not(feature = "embassy"))]
+            {
+                // For no_std without embassy, yield control to allow other tasks to run.
+                // This uses a configurable yield function that can be customized per executor.
+                yield_control().await;
+            }
+        };
+        actor.on_event(msg).await;
+    }
 
-        #[cfg(feature = "std")]
-        {
-            let Some(msg) = inbox.recv().await else {
-                break; // Channel closed
-            };
-            actor.on_event(msg).await;
-        }
+    // Cleanup hook (unreachable in no_std)
+    #[allow(unreachable_code)]
+    {
+        actor.on_stop()?;
+        Ok(())
+    }
+}
+
+/// Runs an actor's message processing loop (std version).
+///
+/// # Errors
+/// Returns `ActorError` if actor startup, shutdown, or message processing fails.
+#[cfg(feature = "std")]
+pub async fn actor_task<A: Actor>(
+    mut actor: A,
+    mut inbox: Inbox<A::Message>,
+) -> Result<(), ActorError> {
+    // Startup hook
+    actor.on_start()?;
+
+    // Main processing loop (std version)
+    loop {
+        let Some(msg) = inbox.recv().await else {
+            break; // Channel closed
+        };
+        actor.on_event(msg).await;
     }
 
     // Cleanup hook

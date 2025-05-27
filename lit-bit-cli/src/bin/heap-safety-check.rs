@@ -2,7 +2,7 @@
 //! Parses `geiger_report.json` and fails if any unsafe code is used in lit-bit-core itself.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::process;
 
 use serde::Deserialize;
@@ -53,8 +53,54 @@ struct UnsafeCount {
 fn main() {
     let file = File::open("geiger_report.json").expect("Failed to open geiger_report.json");
     let reader = BufReader::new(file);
-    let report: GeigerReport =
-        serde_json::from_reader(reader).expect("Failed to parse geiger_report.json");
+
+    // Check for debug environment variable
+    let debug_enabled = std::env::var("DEBUG_GEIGER").is_ok();
+
+    let report: GeigerReport = if debug_enabled {
+        // Read the entire file content for debugging
+        let file_debug =
+            File::open("geiger_report.json").expect("Failed to open geiger_report.json for debug");
+        let mut reader_debug = BufReader::new(file_debug);
+        let mut content = String::new();
+        reader_debug
+            .read_to_string(&mut content)
+            .expect("Failed to read geiger_report.json content");
+
+        eprintln!("🐛 DEBUG_GEIGER: Raw JSON content (first 500 chars):");
+        eprintln!("{}", &content.chars().take(500).collect::<String>());
+        if content.len() > 500 {
+            eprintln!("... (truncated, total length: {} chars)", content.len());
+        }
+
+        // Try to parse as generic JSON first to see structure
+        match serde_json::from_str::<serde_json::Value>(&content) {
+            Ok(json_value) => {
+                eprintln!("🐛 DEBUG_GEIGER: Successfully parsed as generic JSON");
+                eprintln!("🐛 DEBUG_GEIGER: JSON structure: {json_value:#}");
+            }
+            Err(e) => {
+                eprintln!("🐛 DEBUG_GEIGER: Failed to parse even as generic JSON: {e}");
+            }
+        }
+
+        // Now try to parse as our specific structure
+        match serde_json::from_str::<GeigerReport>(&content) {
+            Ok(report) => {
+                eprintln!("🐛 DEBUG_GEIGER: Successfully parsed as GeigerReport");
+                report
+            }
+            Err(e) => {
+                eprintln!("🐛 DEBUG_GEIGER: Failed to parse as GeigerReport: {e}");
+                eprintln!(
+                    "🐛 DEBUG_GEIGER: This indicates a mismatch between expected and actual JSON structure"
+                );
+                panic!("Failed to parse geiger_report.json: {e}");
+            }
+        }
+    } else {
+        serde_json::from_reader(reader).expect("Failed to parse geiger_report.json")
+    };
 
     // Look for lit-bit-core specifically
     let mut total_unsafe = 0u64;

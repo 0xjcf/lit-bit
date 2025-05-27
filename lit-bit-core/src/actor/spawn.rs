@@ -67,15 +67,15 @@ where
 
 // Tokio spawning function (Task 3.3)
 #[cfg(feature = "std")]
-pub fn spawn_actor_tokio<A, const N: usize>(actor: A) -> Address<A::Message, N>
+pub fn spawn_actor_tokio<A>(actor: A, capacity: usize) -> Address<A::Message>
 where
     A: Actor + Send + 'static,
     A::Message: Send + 'static,
 {
-    let (outbox, inbox) = create_mailbox::<A::Message, N>();
+    let (outbox, inbox) = create_mailbox::<A::Message>(capacity);
 
     // Spawn on current Tokio runtime
-    tokio::spawn(actor_task::<A, N>(actor, inbox));
+    tokio::spawn(actor_task::<A>(actor, inbox));
 
     // Create Address from the Tokio sender
     Address::from_tokio_sender(outbox)
@@ -142,7 +142,7 @@ mod tests {
         async fn spawn_tokio_works() {
             let shared_counter = Arc::new(Mutex::new(0u32));
             let actor = TestActor::new(Arc::clone(&shared_counter));
-            let actor_address = spawn_actor_tokio::<_, 16>(actor);
+            let actor_address = spawn_actor_tokio(actor, 16);
 
             // Test that we can send a message
             actor_address.send(42).await.unwrap();

@@ -1,7 +1,6 @@
 //! Latency benchmarks for actor mailbox operations
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use std::time::Instant;
 
 fn bench_mailbox_send_receive(c: &mut Criterion) {
     let mut group = c.benchmark_group("mailbox_latency");
@@ -14,9 +13,7 @@ fn bench_mailbox_send_receive(c: &mut Criterion) {
                 b.iter(|| {
                     // TODO: Implement actual mailbox send/receive when available
                     // For now, simulate the operation
-                    let start = Instant::now();
                     black_box(queue_size);
-                    let _duration = start.elapsed();
                 });
             },
         );

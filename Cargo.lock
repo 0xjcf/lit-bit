@@ -732,6 +732,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "heapless",
  "lit-bit-core",
  "lit-bit-macro",
  "once_cell",

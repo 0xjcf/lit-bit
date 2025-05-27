@@ -104,10 +104,7 @@ pub mod std_async {
     ///
     /// # Errors
     /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
-    pub async fn send<T: Send + 'static, const N: usize>(
-        outbox: &Outbox<T, N>,
-        item: T,
-    ) -> Result<(), SendError<T>> {
+    pub async fn send<T: Send + 'static>(outbox: &Outbox<T>, item: T) -> Result<(), SendError<T>> {
         outbox
             .send(item)
             .await
@@ -119,7 +116,7 @@ pub mod std_async {
     /// # Errors
     /// Returns `SendError::Full(msg)` if the mailbox is full.
     /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
-    pub fn try_send<T, const N: usize>(outbox: &Outbox<T, N>, item: T) -> Result<(), SendError<T>> {
+    pub fn try_send<T>(outbox: &Outbox<T>, item: T) -> Result<(), SendError<T>> {
         match outbox.try_send(item) {
             Ok(()) => Ok(()),
             Err(tokio::sync::mpsc::error::TrySendError::Full(item)) => Err(SendError::Full(item)),
@@ -131,7 +128,7 @@ pub mod std_async {
 
     /// Get the maximum capacity of the mailbox.
     #[must_use]
-    pub fn capacity<T, const N: usize>(outbox: &Outbox<T, N>) -> usize {
+    pub fn capacity<T>(outbox: &Outbox<T>) -> usize {
         // For tokio channels, the capacity is the same as N
         // but we should still call the method for consistency
         outbox.max_capacity()
@@ -140,14 +137,14 @@ pub mod std_async {
     /// Receive a message with async waiting.
     ///
     /// Returns `Some(msg)` if a message is received, `None` if the sender has been dropped.
-    pub async fn recv<T, const N: usize>(inbox: &mut Inbox<T, N>) -> Option<T> {
+    pub async fn recv<T>(inbox: &mut Inbox<T>) -> Option<T> {
         inbox.recv().await
     }
 
     /// Try to receive a message without blocking.
     ///
     /// Returns `Some(msg)` if a message is available, `None` if the mailbox is empty.
-    pub fn try_recv<T, const N: usize>(inbox: &mut Inbox<T, N>) -> Option<T> {
+    pub fn try_recv<T>(inbox: &mut Inbox<T>) -> Option<T> {
         inbox.try_recv().ok()
     }
 }
@@ -207,19 +204,19 @@ mod tests {
     #[cfg(feature = "std")]
     #[tokio::test]
     async fn std_backpressure_try_send() {
-        let (outbox, _inbox): (Outbox<u32, 2>, _) = crate::actor::create_mailbox::<u32, 2>();
+        let (outbox, _inbox): (Outbox<u32>, _) = crate::actor::create_mailbox::<u32>(2);
 
         // Fill the mailbox
-        assert!(std_async::try_send::<u32, 2>(&outbox, 1).is_ok());
-        assert!(std_async::try_send::<u32, 2>(&outbox, 2).is_ok());
+        assert!(std_async::try_send::<u32>(&outbox, 1).is_ok());
+        assert!(std_async::try_send::<u32>(&outbox, 2).is_ok());
 
         // Next try_send should fail (but send() would await)
         assert!(matches!(
-            std_async::try_send::<u32, 2>(&outbox, 3),
+            std_async::try_send::<u32>(&outbox, 3),
             Err(SendError::Full(3))
         ));
 
         // Verify capacity info
-        assert_eq!(std_async::capacity::<u32, 2>(&outbox), 2);
+        assert_eq!(std_async::capacity::<u32>(&outbox), 2);
     }
 }

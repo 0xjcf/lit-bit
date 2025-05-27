@@ -178,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create and spawn the calculator actor
     let calculator = CalculatorActor::new(10);
-    let addr = spawn_actor_tokio::<CalculatorActor, 16>(calculator);
+    let addr = spawn_actor_tokio(calculator, 16);
 
     println!("\n🚀 Calculator actor spawned with initial value 10");
 
@@ -248,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn test_calculator_basic_operations() {
         let calculator = CalculatorActor::new(0);
-        let addr = spawn_actor_tokio::<CalculatorActor, 16>(calculator);
+        let addr = spawn_actor_tokio(calculator, 16);
 
         // Test addition
         addr.send(CalcMessage::Add(10)).await.unwrap();
@@ -275,7 +275,7 @@ mod tests {
     #[tokio::test]
     async fn test_calculator_division_by_zero() {
         let calculator = CalculatorActor::new(10);
-        let addr = spawn_actor_tokio::<CalculatorActor, 16>(calculator);
+        let addr = spawn_actor_tokio(calculator, 16);
 
         // Division by zero should be ignored
         addr.send(CalcMessage::Divide(0)).await.unwrap();
@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn test_calculator_reset() {
         let calculator = CalculatorActor::new(42);
-        let addr = spawn_actor_tokio::<CalculatorActor, 16>(calculator);
+        let addr = spawn_actor_tokio(calculator, 16);
 
         // Reset should set value to 0
         addr.send(CalcMessage::Reset).await.unwrap();
@@ -309,7 +309,7 @@ mod tests {
     #[tokio::test]
     async fn test_calculator_operation_count() {
         let calculator = CalculatorActor::new(0);
-        let addr = spawn_actor_tokio::<CalculatorActor, 16>(calculator);
+        let addr = spawn_actor_tokio(calculator, 16);
 
         // Perform several operations
         addr.send(CalcMessage::Add(5)).await.unwrap();

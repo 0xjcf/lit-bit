@@ -67,6 +67,7 @@ use lit_bit_core::actor::test_utils::{
 ```rust
 use lit_bit_core::actor::{Actor, ActorError};
 use tokio::sync::oneshot;
+use std::time::Duration;
 
 #[derive(Debug)]
 struct Calculator {
@@ -326,6 +327,7 @@ impl Actor for Consumer {
 mod communication_tests {
     use super::*;
     use lit_bit_core::actor::test_utils::TestKit;
+    use tokio::sync::oneshot;
     
     #[tokio::test]
     async fn test_producer_consumer_flow() {
@@ -485,6 +487,7 @@ mod supervision_tests {
 mod embedded_backpressure_tests {
     use super::*;
     use lit_bit_core::actor::test_utils::{EmbeddedTestKit, MessageCapture};
+    use std::time::Duration;
     
     #[tokio::test]
     async fn test_mailbox_overflow_handling() {
@@ -572,6 +575,8 @@ mod embedded_backpressure_tests {
 mod cloud_backpressure_tests {
     use super::*;
     use lit_bit_core::actor::test_utils::{CloudTestKit, LoadGenerator};
+    use tokio::sync::oneshot;
+    use std::time::Duration;
     
     #[tokio::test]
     async fn test_async_backpressure() {
@@ -679,6 +684,7 @@ mod performance_tests {
     use super::*;
     use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
     use lit_bit_core::actor::test_utils::{PerformanceTestKit, ThroughputMeter};
+    use tokio::sync::oneshot;
     
     fn bench_message_throughput(c: &mut Criterion) {
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -754,6 +760,8 @@ mod performance_tests {
 mod latency_tests {
     use super::*;
     use lit_bit_core::actor::test_utils::{LatencyMeter, PerformanceTestKit};
+    use tokio::sync::oneshot;
+    use std::time::Duration;
     
     #[tokio::test]
     async fn measure_round_trip_latency() {
@@ -843,6 +851,8 @@ mod property_tests {
     use super::*;
     use proptest::prelude::*;
     use lit_bit_core::actor::test_utils::{PropertyTestKit, MessageSequence};
+    use tokio::sync::oneshot;
+    use std::time::Duration;
     
     proptest! {
         #[test]

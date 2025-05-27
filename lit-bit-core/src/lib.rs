@@ -99,7 +99,7 @@ mod re_export_tests {
         // Test that mailbox types and functions are re-exported
         use crate::{Inbox, Outbox, create_mailbox};
 
-        let (_outbox, _inbox): (Outbox<u32, 4>, Inbox<u32, 4>) = create_mailbox::<u32, 4>();
+        let (_outbox, _inbox): (Outbox<u32>, Inbox<u32>) = create_mailbox::<u32>(4);
 
         // This test just verifies the types are accessible
         // Actual functionality is tested in the actor module tests

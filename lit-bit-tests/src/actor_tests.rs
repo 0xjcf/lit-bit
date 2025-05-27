@@ -182,88 +182,87 @@ mod tests {
 
     #[tokio::test]
     async fn std_mailbox_integration() {
-        let (outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
-            lit_bit_core::actor::create_mailbox::<TestEvent, 4>();
+        let (outbox, mut inbox): (Outbox<TestEvent>, Inbox<TestEvent>) =
+            lit_bit_core::actor::create_mailbox::<TestEvent>(4);
 
         // Test async sending and receiving
         assert!(
-            std_async::send::<TestEvent, 4>(&outbox, TestEvent::Increment)
+            std_async::send::<TestEvent>(&outbox, TestEvent::Increment)
                 .await
                 .is_ok()
         );
         assert!(
-            std_async::send::<TestEvent, 4>(&outbox, TestEvent::SetValue(42))
+            std_async::send::<TestEvent>(&outbox, TestEvent::SetValue(42))
                 .await
                 .is_ok()
         );
 
         // Test receiving
         assert_eq!(
-            std_async::recv::<TestEvent, 4>(&mut inbox).await,
+            std_async::recv::<TestEvent>(&mut inbox).await,
             Some(TestEvent::Increment)
         );
         assert_eq!(
-            std_async::recv::<TestEvent, 4>(&mut inbox).await,
+            std_async::recv::<TestEvent>(&mut inbox).await,
             Some(TestEvent::SetValue(42))
         );
 
         // Test try_send with capacity limits
         for i in 0..4 {
-            assert!(std_async::try_send::<TestEvent, 4>(&outbox, TestEvent::SetValue(i)).is_ok());
+            assert!(std_async::try_send::<TestEvent>(&outbox, TestEvent::SetValue(i)).is_ok());
         }
 
         // Should fail when full (but send() would await)
         assert!(matches!(
-            std_async::try_send::<TestEvent, 4>(&outbox, TestEvent::Stop),
+            std_async::try_send::<TestEvent>(&outbox, TestEvent::Stop),
             Err(SendError::Full(TestEvent::Stop))
         ));
     }
 
     #[tokio::test]
     async fn std_backpressure_behavior() {
-        let (outbox, mut inbox): (Outbox<u32, 2>, _) =
-            lit_bit_core::actor::create_mailbox::<u32, 2>();
+        let (outbox, mut inbox): (Outbox<u32>, _) = lit_bit_core::actor::create_mailbox::<u32>(2);
 
         // Fill mailbox to capacity
-        assert!(std_async::try_send::<u32, 2>(&outbox, 1).is_ok());
-        assert!(std_async::try_send::<u32, 2>(&outbox, 2).is_ok());
+        assert!(std_async::try_send::<u32>(&outbox, 1).is_ok());
+        assert!(std_async::try_send::<u32>(&outbox, 2).is_ok());
 
         // Verify capacity info
-        assert_eq!(std_async::capacity::<u32, 2>(&outbox), 2);
+        assert_eq!(std_async::capacity::<u32>(&outbox), 2);
 
         // try_send should fail when full
         assert!(matches!(
-            std_async::try_send::<u32, 2>(&outbox, 3),
+            std_async::try_send::<u32>(&outbox, 3),
             Err(SendError::Full(3))
         ));
 
         // Test that send() can succeed when there's space
         // First, receive one item to make space
-        let received = std_async::recv::<u32, 2>(&mut inbox).await;
+        let received = std_async::recv::<u32>(&mut inbox).await;
         assert_eq!(received, Some(1));
 
         // Now send() should succeed because there's space
-        let send_result = std_async::send::<u32, 2>(&outbox, 3).await;
+        let send_result = std_async::send::<u32>(&outbox, 3).await;
         assert!(send_result.is_ok());
 
         // Verify we can receive the new item
-        let received = std_async::recv::<u32, 2>(&mut inbox).await;
+        let received = std_async::recv::<u32>(&mut inbox).await;
         assert_eq!(received, Some(2));
-        let received = std_async::recv::<u32, 2>(&mut inbox).await;
+        let received = std_async::recv::<u32>(&mut inbox).await;
         assert_eq!(received, Some(3));
     }
 
     #[tokio::test]
     async fn actor_task_lifecycle() {
         let actor = TestActor::new();
-        let (outbox, inbox): (Outbox<TestEvent, 8>, _) =
-            lit_bit_core::actor::create_mailbox::<TestEvent, 8>();
+        let (outbox, inbox): (Outbox<TestEvent>, _) =
+            lit_bit_core::actor::create_mailbox::<TestEvent>(8);
 
         // Send some events before starting the task
-        std_async::send::<TestEvent, 8>(&outbox, TestEvent::Increment)
+        std_async::send::<TestEvent>(&outbox, TestEvent::Increment)
             .await
             .unwrap();
-        std_async::send::<TestEvent, 8>(&outbox, TestEvent::SetValue(42))
+        std_async::send::<TestEvent>(&outbox, TestEvent::SetValue(42))
             .await
             .unwrap();
 
@@ -271,17 +270,17 @@ mod tests {
         drop(outbox);
 
         // Run the actor task
-        let result = actor_task::<TestActor, 8>(actor, inbox).await;
+        let result = actor_task::<TestActor>(actor, inbox).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn actor_task_start_failure() {
         let actor = TestActor::with_start_failure();
-        let (_outbox, inbox): (Outbox<TestEvent, 8>, _) =
-            lit_bit_core::actor::create_mailbox::<TestEvent, 8>();
+        let (_outbox, inbox): (Outbox<TestEvent>, _) =
+            lit_bit_core::actor::create_mailbox::<TestEvent>(8);
 
-        let result = actor_task::<TestActor, 8>(actor, inbox).await;
+        let result = actor_task::<TestActor>(actor, inbox).await;
         assert_eq!(result, Err(ActorError::StartupFailure));
     }
 

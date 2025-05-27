@@ -11,6 +11,7 @@ publish = false  # Never publish this crate
 [dependencies]
 lit-bit-core = { workspace = true, features = ["std"] }
 lit-bit-macro = { workspace = true }
+heapless = "0.8.0"
 
 # Test dependencies
 proptest = "1.4"
@@ -22,6 +23,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # For async testing
 futures = "0.3"
 async-trait = "0.1"
+
+[features]
+# Feature flags for conditional compilation
+embassy = ["lit-bit-core/embassy"]
 
 [dev-dependencies]
 # Additional test utilities if needed

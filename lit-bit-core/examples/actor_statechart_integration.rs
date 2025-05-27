@@ -11,7 +11,6 @@
 //! - Type-safe message passing with compile-time guarantees
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(not(feature = "std"), no_main)]
 
 // Required for no_std builds
 #[cfg(not(feature = "std"))]
@@ -35,8 +34,15 @@ unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
 }
 
 // Panic handler for no_std builds
-#[cfg(not(feature = "std"))]
+#[cfg(all(not(feature = "std"), feature = "panic-halt"))]
 use panic_halt as _;
+
+// Alternative panic handler when panic-halt is not available
+#[cfg(all(not(feature = "std"), not(feature = "panic-halt")))]
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
 
 use lit_bit_core::StateMachine;
 use lit_bit_macro::{statechart, statechart_event};
@@ -118,7 +124,8 @@ fn action_establish_connection(context: &mut ConnectionContext, event: &Connecti
         }
         #[cfg(not(feature = "std"))]
         {
-            // For no_std, use a simpler approach - just store the client_id
+            // For no_std, use client_id directly as the session_id to avoid overwrites
+            // We'll store a simple marker string and use the session_id to differentiate
             context.add_connection("conn", *client_id);
         }
 
@@ -138,7 +145,8 @@ fn action_close_connection(context: &mut ConnectionContext, event: &ConnectionEv
         }
         #[cfg(not(feature = "std"))]
         {
-            // For no_std, remove by simple key
+            // For no_std, remove by simple key (this is a limitation of the simple approach)
+            // In a real implementation, you'd want a more sophisticated data structure
             context.remove_connection("conn");
         }
     }
@@ -165,6 +173,18 @@ fn action_handle_network_error(context: &mut ConnectionContext, _event: &Connect
     );
 }
 
+fn action_increment_failures_and_handle_error(
+    context: &mut ConnectionContext,
+    _event: &ConnectionEvent,
+) {
+    context.failed_attempts += 1;
+    #[cfg(feature = "std")]
+    println!(
+        "🚨 Network error occurred, triggering error recovery (total failures: {})",
+        context.failed_attempts
+    );
+}
+
 fn action_shutdown_all(context: &mut ConnectionContext, _event: &ConnectionEvent) {
     let count = context.active_connections.len();
     context.active_connections.clear();
@@ -178,7 +198,7 @@ fn guard_has_active_connections(context: &ConnectionContext, _event: &Connection
 }
 
 fn guard_too_many_failures(context: &ConnectionContext, _event: &ConnectionEvent) -> bool {
-    context.failed_attempts >= 3
+    context.failed_attempts >= 2
 }
 
 // Define the connection manager statechart
@@ -199,7 +219,7 @@ statechart! {
         on ConnectionEvent::Disconnect { client_id: _ } => Connected [action action_close_connection];
         on ConnectionEvent::Heartbeat { client_id: _ } => Connected [action action_handle_heartbeat];
         on ConnectionEvent::Timeout => Connected [action action_handle_timeout];
-        on ConnectionEvent::NetworkError [guard guard_too_many_failures] => ErrorRecovery [action action_handle_network_error];
+        on ConnectionEvent::NetworkError [guard guard_too_many_failures] => ErrorRecovery [action action_increment_failures_and_handle_error];
         on ConnectionEvent::NetworkError => Connected [action action_handle_network_error];
         on ConnectionEvent::Shutdown [guard guard_has_active_connections] => Shutdown [action action_shutdown_all];
         on ConnectionEvent::Shutdown => Disconnected;
