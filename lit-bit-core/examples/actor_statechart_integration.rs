@@ -25,7 +25,7 @@ static DUMMY: DummyAlloc = DummyAlloc;
 #[cfg(not(feature = "std"))]
 struct DummyAlloc;
 
-#[cfg(any(target_arch = "riscv32", target_arch = "arm"))]
+#[cfg(not(feature = "std"))]
 unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
     unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
         // Panic immediately to prevent undefined behavior from null pointer dereference

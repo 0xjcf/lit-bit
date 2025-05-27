@@ -16,6 +16,17 @@ where
 {
     type Message = SM::Event;
 
+    #[cfg(feature = "async")]
+    fn on_event(&mut self, event: Self::Message) -> futures::future::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            // Direct forwarding to StateMachine::send
+            let _result = self.send(&event);
+            // In a real implementation, you might want to handle SendResult::Error
+            // or log the state transitions
+        })
+    }
+
+    #[cfg(not(feature = "async"))]
     #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
     fn on_event(&mut self, event: Self::Message) -> impl core::future::Future<Output = ()> + Send {
         async move {

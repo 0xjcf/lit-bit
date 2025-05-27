@@ -1709,6 +1709,7 @@ dependencies = [
  "log",
  "once_cell",
  "panic-halt",
+ "paste",
  "proptest",
  "riscv",
  "riscv-rt",

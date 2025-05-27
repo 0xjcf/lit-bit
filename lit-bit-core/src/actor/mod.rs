@@ -31,11 +31,21 @@ pub enum RestartStrategy {
 /// - `on_start`: Optional startup hook (default: Ok(())).
 /// - `on_stop`: Optional shutdown hook (default: Ok(())).
 /// - `on_panic`: Supervision hook for panic handling (default: `OneForOne`).
+///
+/// ## Stability Note
+///
+/// The `on_event` method uses different implementations based on feature flags:
+/// - **With `async` feature**: Uses `async-trait` for stable Rust compatibility
+/// - **Without `async` feature**: Uses `impl Future` (requires nightly Rust or edition 2024)
 #[allow(unused_variables)]
-#[allow(async_fn_in_trait)]
+#[cfg_attr(not(feature = "async"), allow(async_fn_in_trait))]
 pub trait Actor: Send {
     type Message: Send + 'static;
 
+    #[cfg(feature = "async")]
+    fn on_event(&mut self, msg: Self::Message) -> futures::future::BoxFuture<'_, ()>;
+
+    #[cfg(not(feature = "async"))]
     fn on_event(&mut self, msg: Self::Message) -> impl core::future::Future<Output = ()> + Send;
 
     /// Called when the actor starts. Default: Ok(())
@@ -116,14 +126,17 @@ macro_rules! static_mailbox {
         static mut $name: heapless::spsc::Queue<$msg_type, $capacity> =
             heapless::spsc::Queue::new();
 
-        // Ensure this macro is only called once per static
-        static INIT_FLAG: AtomicBool = AtomicBool::new(false);
+        // Generate unique flag name to avoid symbol conflicts
+        paste::paste! {
+            // Ensure this macro is only called once per static
+            static [<$name _INIT_FLAG>]: AtomicBool = AtomicBool::new(false);
 
-        if INIT_FLAG.swap(true, Ordering::Acquire) {
-            panic!("static_mailbox! called multiple times for the same queue");
+            if [<$name _INIT_FLAG>].swap(true, Ordering::Acquire) {
+                panic!("static_mailbox! called multiple times for the same queue");
+            }
         }
 
-                // SAFETY: We ensure this is only called once via the atomic flag above.
+        // SAFETY: We ensure this is only called once via the atomic flag above.
         // The static queue is valid for 'static lifetime and we immediately
         // split it to prevent further access to the raw queue.
         let queue_ref: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
@@ -315,6 +328,14 @@ mod tests {
     impl Actor for TestActor {
         type Message = u32;
 
+        #[cfg(feature = "async")]
+        fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
+            Box::pin(async move {
+                self.counter += msg;
+            })
+        }
+
+        #[cfg(not(feature = "async"))]
         #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
         fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
             async move {
@@ -353,5 +374,24 @@ mod tests {
         assert!(producer.enqueue(42).is_ok());
         assert_eq!(consumer.dequeue(), Some(42));
         assert_eq!(consumer.dequeue(), None);
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[test]
+    fn static_mailbox_multiple_instances() {
+        // Test that multiple static_mailbox! invocations don't conflict
+        let (mut producer1, mut consumer1) = crate::static_mailbox!(MAILBOX_ONE: u32, 4);
+        let (mut producer2, mut consumer2) = crate::static_mailbox!(MAILBOX_TWO: i32, 8);
+
+        // Test both mailboxes work independently
+        assert!(producer1.enqueue(123).is_ok());
+        assert!(producer2.enqueue(456).is_ok());
+
+        assert_eq!(consumer1.dequeue(), Some(123));
+        assert_eq!(consumer2.dequeue(), Some(456));
+
+        // Verify they're independent
+        assert_eq!(consumer1.dequeue(), None);
+        assert_eq!(consumer2.dequeue(), None);
     }
 }

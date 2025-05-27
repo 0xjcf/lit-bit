@@ -20,6 +20,7 @@ categories = ["embedded", "no-std", "algorithms"]
 # We might add `heapless` later if needed for no_std collections.
 heapless = { version = "0.8.0", default-features = false }
 lit-bit-macro = { workspace = true }
+paste = "1.0"
 
 # Optional dependencies for features (generally std-related or host tools)
 anyhow = { version = "1.0", optional = true }

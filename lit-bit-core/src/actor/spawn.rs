@@ -118,6 +118,16 @@ mod tests {
         impl Actor for TestActor {
             type Message = u32;
 
+            #[cfg(feature = "async")]
+            fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
+                let counter = Arc::clone(&self.counter);
+                Box::pin(async move {
+                    let mut count = counter.lock().unwrap();
+                    *count += msg;
+                })
+            }
+
+            #[cfg(not(feature = "async"))]
             #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
             fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
                 let counter = Arc::clone(&self.counter);

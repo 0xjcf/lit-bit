@@ -71,6 +71,23 @@ impl TestActor {
 impl Actor for TestActor {
     type Message = TestEvent;
 
+    #[cfg(feature = "async")]
+    fn on_event(&mut self, msg: TestEvent) -> futures::future::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.processed_events.push(msg.clone());
+
+            match msg {
+                TestEvent::Increment => self.counter += 1,
+                TestEvent::SetValue(value) => self.counter = value,
+                TestEvent::Stop => {
+                    // This would normally signal the actor to stop
+                    // In our test, we just record it
+                }
+            }
+        })
+    }
+
+    #[cfg(not(feature = "async"))]
     #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
     fn on_event(&mut self, msg: TestEvent) -> impl core::future::Future<Output = ()> + Send {
         async move {
@@ -130,6 +147,15 @@ impl MockStateMachine {
 impl Actor for MockStateMachine {
     type Message = u32;
 
+    #[cfg(feature = "async")]
+    fn on_event(&mut self, event: u32) -> futures::future::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.events_received.push(event);
+            self.state = event;
+        })
+    }
+
+    #[cfg(not(feature = "async"))]
     #[allow(clippy::manual_async_fn)]
     fn on_event(&mut self, event: u32) -> impl core::future::Future<Output = ()> + Send {
         async move {

@@ -51,10 +51,22 @@ impl SimpleActor {
 impl Actor for SimpleActor {
     type Message = u32;
 
-    async fn on_event(&mut self, msg: u32) {
-        self.count += msg;
-        #[cfg(feature = "std")]
-        println!("Count is now: {}", self.count);
+    #[cfg(feature = "async")]
+    fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
+        Box::pin(async move {
+            self.count += msg;
+            #[cfg(feature = "std")]
+            println!("Count is now: {}", self.count);
+        })
+    }
+
+    #[cfg(not(feature = "async"))]
+    fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
+        async move {
+            self.count += msg;
+            #[cfg(feature = "std")]
+            println!("Count is now: {}", self.count);
+        }
     }
 
     fn on_start(&mut self) -> Result<(), ActorError> {
