@@ -9,6 +9,12 @@
 
 It aims to provide a similar developer experience to XState but within the Rust ecosystem, focusing on compile-time safety and minimal resource footprint for bare-metal targets like RISC-V and ARM Cortex-M.
 
+## 📋 Project Vision & Documentation
+
+- **[📍 Roadmap](./ROADMAP.md)** - Project phases, milestones, and future development plans
+- **[📖 Technical Specification](./Spec.md)** - Detailed technical specification and design decisions
+- **[📚 Documentation Hub](./docs/)** - Comprehensive guides, tutorials, and architectural overviews
+
 ## Current Status
 
 *   **Phase:** 04 - Minimal Actor Layer ✅ **COMPLETED** | Next: Phase 05 - Async & Side-Effects (planning)
@@ -376,31 +382,4 @@ This project is licensed under the terms of the MIT license and the Apache Licen
     - `Address<Event>`: type-safe handle for sending events/messages.
     - **Mailboxes:**
         - `heapless::spsc::Queue` for `no_std`/embedded (fail-fast, zero-alloc)
-        - `tokio::sync::mpsc` for `std`/async (await-based back-pressure)
-    - **Spawning:**
-        - `spawn_actor_embassy()` for Embassy/embedded ✅
-        - `spawn_actor_tokio()` for async/Tokio ✅
-- **Supervision:** Hierarchical parent/child actors and restart strategies (inspired by Akka/OTP/XState).
-- **Direct Integration:** You can `impl Actor for MyStateMachine` for zero-cost event forwarding.
-
-**Example (embedded):**
-```rust
-let (addr, _inbox) = heapless::spsc::Queue::new().split();
-addr.try_send(MyEvent::Start).unwrap();
-```
-
-**Example (Tokio):**
-```rust
-let (addr, _inbox) = tokio::sync::mpsc::channel(8);
-addr.send(MyEvent::Start).await.unwrap();
-```
-
-See the [Spec](./Spec.md#7-actor-model-phase-4-target) for full API and design details.
-
-### 🛡️ Heapless Guarantees
-
-- All embedded (`no_std`) code is designed to be heapless.
-- A dummy global allocator is used in embedded examples to satisfy the linker, but any attempt to allocate heap memory will crash at runtime.
-- **CI runs [`cargo geiger`](https://github.com/rust-secure-code/cargo-geiger) to scan for accidental heap/alloc/unsafe usage on Cortex-M and RISC-V targets.**
-- The badge above means every PR is checked for heap/unsafe regressions before merge.
-- See [`examples/heap_crash.rs`](lit-bit-core/examples/heap_crash.rs) for a runtime canary that will crash if heap allocation is attempted on either RISC-V or Cortex-M targets, proving the dummy allocator is active and effective.
+        - `
