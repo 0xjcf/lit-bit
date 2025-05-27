@@ -136,9 +136,18 @@ macro_rules! static_mailbox {
     }};
 
     // Variant without attributes
-    ($name:ident: $msg_type:ty, $capacity:expr) => {
-        $crate::static_mailbox!($(#[])* $name: $msg_type, $capacity)
-    };
+    ($name:ident: $msg_type:ty, $capacity:expr) => {{
+        use static_cell::StaticCell;
+
+        static $name: StaticCell<heapless::spsc::Queue<$msg_type, $capacity>> = StaticCell::new();
+
+        // Initialize the queue and get a 'static reference
+        let queue: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
+            $name.init(heapless::spsc::Queue::new());
+
+        // Split the queue into producer and consumer
+        queue.split()
+    }};
 }
 
 /// Creates a mailbox from a statically allocated queue using StaticCell (safe alternative).
