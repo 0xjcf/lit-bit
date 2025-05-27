@@ -118,6 +118,16 @@ fn increment_count(ctx: &mut SystemContext, _event: &WrappedEvent) {
 
 // Helper function to demonstrate usage
 #[allow(dead_code)]
+/// Processes an external event by converting it to a wrapped event and sending it to the state machine.
+///
+/// Converts an `external_crate::ExternalEvent` into a `WrappedEvent`, sends it to the provided `WrapperMachine`, and handles the result by printing status messages if the `std` feature is enabled.
+///
+/// # Examples
+///
+/// ```
+/// let mut machine = WrapperMachine::new(SystemContext::default(), WrappedEvent::Start);
+/// process_external_event(&mut machine, external_crate::ExternalEvent::Configure { setting: 42 });
+/// ```
 fn process_external_event(
     machine: &mut WrapperMachine,
     external_event: external_crate::ExternalEvent,

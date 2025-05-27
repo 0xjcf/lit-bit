@@ -4092,6 +4092,13 @@ mod tests {
     }
 
     #[test]
+    /// Tests that `apply_prefix_to_pattern` correctly prefixes event patterns with the event type path,
+    /// handling wrapper patterns such as references, parentheses, OR patterns, tuple structs, struct patterns,
+    /// mutable references, and wildcards appropriately.
+    ///
+    /// This ensures that generated patterns for state machine transitions are syntactically correct and
+    /// match the intended event variants, regardless of pattern complexity. Wildcard patterns are verified
+    /// to remain unmodified.
     fn test_apply_prefix_to_pattern_handles_wrappers_correctly() {
         // This test verifies that the apply_prefix_to_pattern function
         // correctly handles wrapper patterns like references and parentheses

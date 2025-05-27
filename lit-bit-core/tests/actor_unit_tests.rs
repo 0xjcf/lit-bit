@@ -44,6 +44,19 @@ enum TestEvent {
 }
 
 impl TestActor {
+    /// Creates a new `TestActor` with default settings.
+    ///
+    /// The actor starts with a counter value of 0, does not fail on start or stop, and has an empty list of processed events.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let actor = TestActor::new();
+    /// assert_eq!(actor.counter, 0);
+    /// assert!(!actor.should_fail_start);
+    /// assert!(!actor.should_fail_stop);
+    /// assert!(actor.processed_events.is_empty());
+    /// ```
     fn new() -> Self {
         Self {
             counter: 0,
@@ -53,6 +66,16 @@ impl TestActor {
         }
     }
 
+    /// Creates a `TestActor` instance configured to fail during startup.
+    ///
+    /// The returned actor will return a `StartupFailure` error when its `on_start` method is called.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let actor = TestActor::with_start_failure();
+    /// assert!(actor.should_fail_start);
+    /// ```
     fn with_start_failure() -> Self {
         Self {
             should_fail_start: true,
@@ -60,6 +83,16 @@ impl TestActor {
         }
     }
 
+    /// Creates a `TestActor` instance configured to fail during shutdown.
+    ///
+    /// The returned actor will return a shutdown failure error when its `on_stop` lifecycle method is called.
+    #[must_use]
+    fn with_stop_failure() -> Self {
+        Self {
+            should_fail_stop: true,
+            ..Self::new()
+        }
+    }
     fn with_stop_failure() -> Self {
         Self {
             should_fail_stop: true,
@@ -72,6 +105,19 @@ impl Actor for TestActor {
     type Message = TestEvent;
 
     #[cfg(feature = "async")]
+    /// Handles a `TestEvent` by updating the actor's state and recording the event.
+    ///
+    /// Processes the incoming event asynchronously, incrementing or setting the counter for relevant events,
+    /// and appending all events to the `processed_events` log. The `Stop` event is recorded but does not affect the actor's state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut actor = TestActor::new();
+    /// futures::executor::block_on(actor.on_event(TestEvent::Increment));
+    /// assert_eq!(actor.counter, 1);
+    /// assert_eq!(actor.processed_events, vec![TestEvent::Increment]);
+    /// ```
     fn on_event(&mut self, msg: TestEvent) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
             self.processed_events.push(msg.clone());
@@ -88,7 +134,18 @@ impl Actor for TestActor {
     }
 
     #[cfg(not(feature = "async"))]
-    #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
+    #[allow(clippy::manual_async_fn)] /// Asynchronously processes a `TestEvent`, updating the actor's state and recording the event.
+    ///
+    /// Increments or sets the internal counter based on the event type, and appends the event to the processed events log.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut actor = TestActor::new();
+    /// futures::executor::block_on(actor.on_event(TestEvent::Increment));
+    /// assert_eq!(actor.counter, 1);
+    /// assert_eq!(actor.processed_events, vec![TestEvent::Increment]);
+    /// ```
     fn on_event(&mut self, msg: TestEvent) -> impl core::future::Future<Output = ()> + Send {
         async move {
             self.processed_events.push(msg.clone());
@@ -104,6 +161,9 @@ impl Actor for TestActor {
         }
     }
 
+    /// Invoked when the actor starts, returning an error if startup failure is configured.
+    ///
+    /// Returns `Err(ActorError::StartupFailure)` if `should_fail_start` is set; otherwise, returns `Ok(())`.
     fn on_start(&mut self) -> Result<(), ActorError> {
         if self.should_fail_start {
             Err(ActorError::StartupFailure)
@@ -112,6 +172,9 @@ impl Actor for TestActor {
         }
     }
 
+    /// Handles the actor's shutdown logic, optionally simulating a shutdown failure.
+    ///
+    /// Returns `Err(ActorError::ShutdownFailure)` if the actor is configured to fail on stop; otherwise, returns `Ok(())`.
     fn on_stop(self) -> Result<(), ActorError> {
         if self.should_fail_stop {
             Err(ActorError::ShutdownFailure)
@@ -120,6 +183,17 @@ impl Actor for TestActor {
         }
     }
 
+    /// Specifies the restart strategy to use when the actor panics.
+    ///
+    /// Always returns `RestartStrategy::OneForOne`, indicating that only the failed actor should be restarted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let actor = TestActor::new();
+    /// let strategy = actor.on_panic(&PanicInfo::default());
+    /// assert_eq!(strategy, RestartStrategy::OneForOne);
+    /// ```
     fn on_panic(&self, _info: &PanicInfo) -> RestartStrategy {
         RestartStrategy::OneForOne
     }
@@ -135,6 +209,15 @@ struct MockStateMachine {
 
 #[cfg(feature = "std")]
 impl MockStateMachine {
+    /// Creates a new `MockStateMachine` with initial state set to 0 and an empty list of received events.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let sm = MockStateMachine::new();
+    /// assert_eq!(sm.state, 0);
+    /// assert!(sm.events_received.is_empty());
+    /// ```
     fn new() -> Self {
         Self {
             state: 0,
@@ -148,6 +231,18 @@ impl Actor for MockStateMachine {
     type Message = u32;
 
     #[cfg(feature = "async")]
+    /// Handles an incoming event by recording it and updating the internal state.
+    ///
+    /// The received event value is appended to the list of received events and also sets the current state to that value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut sm = MockStateMachine { state: 0, events_received: vec![] };
+    /// futures::executor::block_on(sm.on_event(42));
+    /// assert_eq!(sm.state, 42);
+    /// assert_eq!(sm.events_received, vec![42]);
+    /// ```
     fn on_event(&mut self, event: u32) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
             self.events_received.push(event);
@@ -157,6 +252,18 @@ impl Actor for MockStateMachine {
 
     #[cfg(not(feature = "async"))]
     #[allow(clippy::manual_async_fn)]
+    /// Handles an incoming event by recording it and updating the internal state.
+    ///
+    /// The event value is appended to the list of received events and also sets the current state to the event's value.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut actor = MockStateMachine { state: 0, events_received: vec![] };
+    /// futures::executor::block_on(actor.on_event(42));
+    /// assert_eq!(actor.state, 42);
+    /// assert_eq!(actor.events_received, vec![42]);
+    /// ```
     fn on_event(&mut self, event: u32) -> impl core::future::Future<Output = ()> + Send {
         async move {
             self.events_received.push(event);
@@ -170,6 +277,9 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Tests the basic functionality of the `Actor` trait implementation for `TestActor`.
+    ///
+    /// Verifies the initial state of the actor and ensures that the `on_start` and `on_stop` lifecycle hooks succeed.
     fn actor_trait_basic_functionality() {
         let mut actor = TestActor::new();
 
@@ -183,12 +293,14 @@ mod tests {
     }
 
     #[test]
+    /// Tests that an actor configured to fail on startup returns a `StartupFailure` error.
     fn actor_lifecycle_start_failure() {
         let mut actor = TestActor::with_start_failure();
         assert_eq!(actor.on_start(), Err(ActorError::StartupFailure));
     }
 
     #[test]
+    /// Tests that an actor configured to fail on stop returns a shutdown failure error.
     fn actor_lifecycle_stop_failure() {
         let actor = TestActor::with_stop_failure();
         assert_eq!(actor.on_stop(), Err(ActorError::ShutdownFailure));
@@ -196,6 +308,26 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Tests that `TestActor` correctly processes `Increment` and `SetValue` events, updating its counter and recording processed events.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use crate::{TestActor, TestEvent};
+    /// # tokio_test::block_on(async {
+    /// let mut actor = TestActor::new();
+    /// actor.on_event(TestEvent::Increment).await;
+    /// assert_eq!(actor.counter, 1);
+    /// assert_eq!(actor.processed_events, vec![TestEvent::Increment]);
+    ///
+    /// actor.on_event(TestEvent::SetValue(42)).await;
+    /// assert_eq!(actor.counter, 42);
+    /// assert_eq!(
+    ///     actor.processed_events,
+    ///     vec![TestEvent::Increment, TestEvent::SetValue(42)]
+    /// );
+    /// # });
+    /// ```
     async fn actor_message_processing() {
         let mut actor = TestActor::new();
 
@@ -214,6 +346,15 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Tests that the `MockStateMachine` actor correctly processes events by updating its state and recording received events.
+    ///
+    /// This integration test verifies that calling `on_event` with different values updates the internal state and logs the events in order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // This test is intended to be run as part of the test suite.
+    /// ```
     async fn statechart_integration() {
         let mut mock_sm = MockStateMachine::new();
 
@@ -229,6 +370,10 @@ mod tests {
 
     #[cfg(not(feature = "std"))]
     #[test]
+    /// Tests embedded mailbox integration for sending, receiving, and enforcing capacity limits.
+    ///
+    /// Verifies that messages can be sent and received in order, that the mailbox enforces its capacity limit,
+    /// and that sending fails with `SendError::Full` when the mailbox is full.
     fn embedded_mailbox_integration() {
         let (mut outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
             lit_bit_core::static_mailbox!(EMBEDDED_MAILBOX_TEST: TestEvent, 4);
@@ -264,6 +409,25 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Tests async mailbox integration for sending, receiving, and backpressure behavior.
+    ///
+    /// Verifies that messages can be sent and received asynchronously, enforces mailbox capacity limits,
+    /// and ensures that `try_send` fails with `SendError::Full` when the mailbox is full.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use lit_bit_core::actor::{Outbox, Inbox, SendError};
+    /// # use crate::{TestEvent, std_async};
+    /// # async fn test() {
+    /// let (outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
+    ///     lit_bit_core::actor::create_mailbox::<TestEvent, 4>();
+    ///
+    /// std_async::send::<TestEvent, 4>(&outbox, TestEvent::Increment).await.unwrap();
+    /// let event = std_async::recv::<TestEvent, 4>(&mut inbox).await;
+    /// assert_eq!(event, Some(TestEvent::Increment));
+    /// # }
+    /// ```
     async fn std_mailbox_integration() {
         let (outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
             lit_bit_core::actor::create_mailbox::<TestEvent, 4>();
@@ -304,6 +468,7 @@ mod tests {
 
     #[cfg(not(feature = "std"))]
     #[test]
+    /// Tests embedded mailbox backpressure by verifying capacity limits, fullness detection, and fail-fast behavior when attempting to send to a full mailbox.
     fn embedded_backpressure_behavior() {
         let (mut outbox, _inbox): (Outbox<u32, 2>, _) =
             lit_bit_core::static_mailbox!(EMBEDDED_BACKPRESSURE_TEST: u32, 2);
@@ -325,6 +490,17 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Tests backpressure behavior of the standard async mailbox, ensuring correct handling when full and after space is freed.
+    ///
+    /// This test verifies that sending to a full mailbox fails immediately, and that sending succeeds after an item is received to free up space. It also checks that items are received in the expected order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// std_backpressure_behavior().await;
+    /// # });
+    /// ```
     async fn std_backpressure_behavior() {
         let (outbox, mut inbox): (Outbox<u32, 2>, _) =
             lit_bit_core::actor::create_mailbox::<u32, 2>();
@@ -360,6 +536,25 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Tests the full lifecycle of an actor task, including event processing and graceful shutdown.
+    ///
+    /// This test sends events to the actor's mailbox before starting the task, closes the mailbox to signal shutdown,
+    /// runs the actor task asynchronously, and asserts successful completion.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use lit_bit_core::actor::{TestActor, TestEvent, actor_task, create_mailbox, std_async};
+    /// # async fn test() {
+    /// let actor = TestActor::new();
+    /// let (outbox, inbox) = create_mailbox::<TestEvent, 8>();
+    /// std_async::send(&outbox, TestEvent::Increment).await.unwrap();
+    /// std_async::send(&outbox, TestEvent::SetValue(42)).await.unwrap();
+    /// drop(outbox);
+    /// let result = actor_task::<TestActor, 8>(actor, inbox).await;
+    /// assert!(result.is_ok());
+    /// # }
+    /// ```
     async fn actor_task_lifecycle() {
         let actor = TestActor::new();
         let (outbox, inbox): (Outbox<TestEvent, 8>, _) =
@@ -383,6 +578,9 @@ mod tests {
 
     #[cfg(not(feature = "std"))]
     #[test]
+    /// Tests actor creation and basic mailbox event sending in a no_std environment.
+    ///
+    /// Verifies that a `TestActor` can be instantiated and events can be sent to its mailbox without requiring an async runtime. Also checks initial actor state.
     fn actor_task_lifecycle_nostd() {
         // For no_std, we can't easily test the full actor_task without an async runtime
         // So we just test the actor creation and basic functionality
@@ -401,6 +599,22 @@ mod tests {
 
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Tests that an actor task returns a `StartupFailure` error when the actor is configured to fail on startup.
+    ///
+    /// This verifies that the actor's startup failure is correctly propagated as an error from the actor task.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use lit_bit_core::actor::{ActorError, Outbox, actor_task};
+    /// # use crate::{TestActor, TestEvent};
+    /// # async fn test() {
+    /// let actor = TestActor::with_start_failure();
+    /// let (_outbox, inbox): (Outbox<TestEvent, 8>, _) = lit_bit_core::actor::create_mailbox::<TestEvent, 8>();
+    /// let result = actor_task::<TestActor, 8>(actor, inbox).await;
+    /// assert_eq!(result, Err(ActorError::StartupFailure));
+    /// # }
+    /// ```
     async fn actor_task_start_failure() {
         let actor = TestActor::with_start_failure();
         let (_outbox, inbox): (Outbox<TestEvent, 8>, _) =
@@ -411,6 +625,16 @@ mod tests {
     }
 
     #[test]
+    /// Tests the `SendError` type for correct `Display`, `Debug`, and `PartialEq` implementations.
+    ///
+    /// Verifies that `SendError::Full` and `SendError::Closed` produce the expected string representations
+    /// and equality comparisons.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// send_error_types();
+    /// ```
     fn send_error_types() {
         let full_error = SendError::Full(42u32);
         let closed_error = SendError::Closed(42u32);
@@ -439,6 +663,17 @@ mod integration_tests {
     /// Test that demonstrates the complete actor workflow
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Executes a complete actor lifecycle workflow, including startup, event processing, state verification, and shutdown.
+    ///
+    /// This test verifies that the actor correctly handles startup, processes a sequence of events, updates its internal state, records processed events, and shuts down successfully.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio_test::block_on(async {
+    /// complete_actor_workflow().await;
+    /// # });
+    /// ```
     async fn complete_actor_workflow() {
         let mut actor = TestActor::new();
 
@@ -467,6 +702,23 @@ mod integration_tests {
     /// Test actor behavior under error conditions
     #[cfg(feature = "std")]
     #[tokio::test]
+    /// Tests actor error handling by verifying normal event processing and the default panic restart strategy.
+    ///
+    /// This test ensures that the actor correctly processes an event and that the default restart strategy
+    /// for panics is `OneForOne`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use crate::{TestActor, TestEvent};
+    /// # tokio_test::block_on(async {
+    /// let mut actor = TestActor::new();
+    /// actor.on_event(TestEvent::Increment).await;
+    /// assert_eq!(actor.counter, 1);
+    /// let restart_strategy = crate::RestartStrategy::OneForOne;
+    /// assert_eq!(restart_strategy, crate::RestartStrategy::OneForOne);
+    /// # });
+    /// ```
     async fn actor_error_handling() {
         let mut actor = TestActor::new();
 

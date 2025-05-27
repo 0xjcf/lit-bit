@@ -27,6 +27,15 @@ pub struct CalculatorActor {
 
 impl CalculatorActor {
     #[must_use]
+    /// Creates a new `CalculatorActor` with the specified initial value and zeroed operation count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let actor = CalculatorActor::new(10);
+    /// assert_eq!(actor.value, 10);
+    /// assert_eq!(actor.operation_count, 0);
+    /// ```
     pub fn new(initial_value: i32) -> Self {
         Self {
             value: initial_value,
@@ -68,6 +77,19 @@ pub struct CalculatorStats {
 impl Actor for CalculatorActor {
     type Message = CalcMessage;
 
+    /// Invoked when the calculator actor starts, resetting the operation count to zero.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` if the actor starts successfully.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut actor = CalculatorActor::new(10);
+    /// actor.on_start().unwrap();
+    /// assert_eq!(actor.operation_count, 0);
+    /// ```
     fn on_start(&mut self) -> Result<(), ActorError> {
         #[cfg(feature = "std")]
         println!("🧮 Calculator actor starting with value: {}", self.value);
@@ -77,6 +99,18 @@ impl Actor for CalculatorActor {
         Ok(())
     }
 
+    /// Handles cleanup when the calculator actor stops.
+    ///
+    /// Returns `Ok(())` after performing any necessary shutdown actions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lit_bit::actor::{Actor, ActorError};
+    ///
+    /// let actor = CalculatorActor::new(0);
+    /// assert!(actor.on_stop().is_ok());
+    /// ```
     fn on_stop(self) -> Result<(), ActorError> {
         #[cfg(feature = "std")]
         println!(
@@ -87,6 +121,22 @@ impl Actor for CalculatorActor {
     }
 
     #[cfg(feature = "async")]
+    /// Handles incoming calculator messages asynchronously, updating state or responding to queries.
+    ///
+    /// Processes arithmetic operations (add, subtract, multiply, divide), resets the calculator, and, when enabled, replies to value and statistics requests via oneshot channels. Division by zero is ignored without altering state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lit_bit::actors::{Actor, Addr};
+    /// use crate::{CalculatorActor, CalcMessage};
+    ///
+    /// # async fn example() {
+    /// let mut actor = CalculatorActor::new(10);
+    /// actor.on_event(CalcMessage::Add(5)).await; // value becomes 15
+    /// actor.on_event(CalcMessage::Divide(0)).await; // division by zero ignored
+    /// # }
+    /// ```
     fn on_event(&mut self, msg: CalcMessage) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
             match msg {
@@ -155,6 +205,23 @@ impl Actor for CalculatorActor {
     }
 
     #[cfg(not(feature = "async"))]
+    /// Handles incoming calculator messages asynchronously, updating state or responding to queries.
+    ///
+    /// Processes arithmetic operations (add, subtract, multiply, divide), resets the calculator, and, when enabled, replies to value and statistics requests via oneshot channels. Division by zero is ignored without altering state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lit_bit::actors::{Actor, oneshot};
+    /// use crate::{CalculatorActor, CalcMessage};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let mut actor = CalculatorActor::new(10);
+    /// actor.on_event(CalcMessage::Add(5)).await; // value becomes 15
+    /// actor.on_event(CalcMessage::Divide(0)).await; // division by zero ignored
+    /// # }
+    /// ```
     fn on_event(&mut self, msg: CalcMessage) -> impl core::future::Future<Output = ()> + Send {
         async move {
             match msg {
@@ -225,6 +292,21 @@ impl Actor for CalculatorActor {
 
 #[cfg(feature = "std")]
 #[tokio::main]
+/// Runs an asynchronous example demonstrating the calculator actor's capabilities.
+///
+/// Spawns a calculator actor, performs a sequence of arithmetic operations, retrieves the current value and statistics using request-response messaging, tests division by zero handling, resets the calculator, and prints key actor model concepts showcased in the process.
+///
+/// # Returns
+/// Returns `Ok(())` if all operations complete successfully; otherwise, returns an error.
+///
+/// # Examples
+///
+/// ```
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     main().await
+/// }
+/// ```
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎯 Basic Actor Example: Calculator");
     println!("==================================");
@@ -287,6 +369,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(not(feature = "std"))]
+/// Entry point for the example; panics if the `std` feature is not enabled.
+///
+/// This function is intended as a placeholder for no_std targets and will always panic,
+/// indicating that the example requires the standard library to run.
+///
+/// # Panics
+///
+/// Always panics with a message stating that the `std` feature is required.
 fn main() {
     // For no_std targets, this would typically be an embassy-based main
     // or integrated into a larger embedded application

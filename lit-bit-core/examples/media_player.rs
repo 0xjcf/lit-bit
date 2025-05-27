@@ -88,6 +88,19 @@ fn guard_valid_track_path(_context: &MediaPlayerContext, event: &MediaPlayerEven
     }
 }
 
+/// Loads a new track into the media player context if a `LoadTrack` event is received.
+///
+/// Sets the current track to the provided path and logs the action.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = MediaPlayerContext::default();
+/// let event = MediaPlayerEvent::LoadTrack { path: "song.mp3".into() };
+/// action_load_track(&mut context, &event);
+/// assert_eq!(context.current_track, Some("song.mp3".into()));
+/// assert!(context.action_log.iter().any(|s| s == "LoadedTrack"));
+/// ```
 fn action_load_track(context: &mut MediaPlayerContext, event: &MediaPlayerEvent) {
     if let MediaPlayerEvent::LoadTrack { path } = event {
         context.current_track = Some(path.clone());
@@ -97,6 +110,20 @@ fn action_load_track(context: &mut MediaPlayerContext, event: &MediaPlayerEvent)
     }
 }
 
+/// Logs the start of media playback and prints the currently loaded track if available.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = MediaPlayerContext {
+///     current_track: Some("song.mp3".into()),
+///     volume: 50,
+///     brightness: 50,
+///     action_log: heapless::Vec::new(),
+/// };
+/// action_start_playback(&mut context, &MediaPlayerEvent::Play);
+/// assert_eq!(context.action_log.last().unwrap().as_str(), "StartedPlayback");
+/// ```
 fn action_start_playback(context: &mut MediaPlayerContext, _event: &MediaPlayerEvent) {
     context.log_action("StartedPlayback");
     #[cfg(not(target_arch = "riscv32"))]

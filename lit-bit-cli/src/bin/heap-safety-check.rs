@@ -50,6 +50,21 @@ struct UnsafeCount {
     unsafe_count: u64,
 }
 
+/// Checks the `geiger_report.json` file for unsafe code usage in the `lit-bit-core` package.
+///
+/// Reads and parses the Geiger safety analysis report, locates the `lit-bit-core` package, and sums all unsafe code usages across functions, expressions, implementations, traits, and methods. If any unsafe code is detected, prints detailed counts and exits with a non-zero status. If the package is not found, prints an error and exits with failure. Otherwise, prints a success message indicating no unsafe code.
+///
+/// # Panics
+///
+/// Panics if the `geiger_report.json` file cannot be opened or parsed.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Run as a standalone binary to check for unsafe code in lit-bit-core.
+/// // Exits with code 1 if unsafe code is found or the package is missing.
+/// main();
+/// ```
 fn main() {
     let file = File::open("geiger_report.json").expect("Failed to open geiger_report.json");
     let reader = BufReader::new(file);

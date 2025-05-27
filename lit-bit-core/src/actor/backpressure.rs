@@ -17,6 +17,9 @@ pub enum SendError<T> {
 }
 
 impl<T> core::fmt::Display for SendError<T> {
+    /// Formats the `SendError` as a human-readable message.
+    ///
+    /// Displays "mailbox is full" for `Full` errors and "receiver has been dropped" for `Closed` errors.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             SendError::Full(_) => write!(f, "mailbox is full"),
@@ -43,7 +46,18 @@ pub mod embedded {
     ///
     /// Note: `SendError::Closed` cannot occur with heapless queues as they
     /// cannot detect if the consumer has been dropped. This variant is only
-    /// used for API consistency with the std implementation.
+    /// Attempts to enqueue a message into the outbox without blocking.
+    ///
+    /// Returns `Ok(())` if the message is successfully enqueued. If the outbox is full, returns `Err(SendError::Full(item))`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::embedded::{try_send, Outbox};
+    ///
+    /// let mut outbox: Outbox<u32, 2> = Outbox::new();
+    /// assert!(try_send(&mut outbox, 42).is_ok());
+    /// ```
     pub fn try_send<T, const N: usize>(
         outbox: &mut Outbox<T, N>,
         item: T,
@@ -53,18 +67,50 @@ pub mod embedded {
 
     /// Check if the mailbox is full.
     #[must_use]
+    /// Returns `true` if the outbox mailbox is currently full.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use my_module::embedded::{is_full, try_send, Outbox};
+    ///
+    /// let mut outbox: Outbox<u32, 2> = Outbox::new();
+    /// assert!(!is_full(&outbox));
+    /// try_send(&mut outbox, 1).unwrap();
+    /// try_send(&mut outbox, 2).unwrap();
+    /// assert!(is_full(&outbox));
+    /// ```
     pub fn is_full<T, const N: usize>(outbox: &Outbox<T, N>) -> bool {
         !outbox.ready()
     }
 
     /// Get the current number of messages in the mailbox.
     #[must_use]
+    /// Returns the current number of messages in the outbox.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::embedded::{Outbox, len};
+    /// let mut outbox: Outbox<u8, 4> = Outbox::new();
+    /// assert_eq!(len(&outbox), 0);
+    /// ```
     pub fn len<T, const N: usize>(outbox: &Outbox<T, N>) -> usize {
         outbox.len()
     }
 
     /// Get the maximum capacity of the mailbox.
     #[must_use]
+    /// Returns the maximum number of messages the outbox can hold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::embedded::{Outbox, capacity};
+    ///
+    /// let outbox: Outbox<u8, 4> = Outbox::new();
+    /// assert_eq!(capacity(&outbox), 4);
+    /// ```
     pub fn capacity<T, const N: usize>(outbox: &Outbox<T, N>) -> usize {
         outbox.capacity()
     }
@@ -73,18 +119,49 @@ pub mod embedded {
     ///
     /// Returns `Some(msg)` if a message is available, `None` if the mailbox is empty.
     #[must_use]
+    /// Attempts to dequeue a message from the inbox without blocking.
+    ///
+    /// Returns `Some(message)` if a message is available, or `None` if the inbox is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::embedded::{Inbox, try_recv};
+    ///
+    /// let mut inbox: Inbox<u32, 4> = Inbox::new();
+    /// assert_eq!(try_recv(&mut inbox), None);
+    /// ```
     pub fn try_recv<T, const N: usize>(inbox: &mut Inbox<T, N>) -> Option<T> {
         inbox.dequeue()
     }
 
     /// Check if the mailbox is empty.
     #[must_use]
+    /// Returns `true` if the inbox contains no messages.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::embedded::{Inbox, is_empty};
+    ///
+    /// let inbox: Inbox<u32, 4> = Inbox::new();
+    /// assert!(is_empty(&inbox));
+    /// ```
     pub fn is_empty<T, const N: usize>(inbox: &Inbox<T, N>) -> bool {
         inbox.len() == 0
     }
 
     /// Get the current number of messages in the mailbox.
     #[must_use]
+    /// Returns the number of messages currently in the inbox.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::embedded::{Inbox, inbox_len};
+    /// let inbox: Inbox<u32, 4> = Inbox::new();
+    /// assert_eq!(inbox_len(&inbox), 0);
+    /// ```
     pub fn inbox_len<T, const N: usize>(inbox: &Inbox<T, N>) -> usize {
         inbox.len()
     }
@@ -103,7 +180,25 @@ pub mod std_async {
     /// This function will await if the mailbox is full, providing natural back-pressure.
     ///
     /// # Errors
-    /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
+    /// Asynchronously sends a message into the mailbox, awaiting until space is available.
+    ///
+    /// Returns an error if the receiver has been dropped before the message is sent.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(())` if the message was successfully enqueued.
+    /// - `Err(SendError::Closed(msg))` if the receiver has been dropped and the message could not be delivered.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::std_async::{send, Outbox};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let outbox: Outbox<u32, 2> = Outbox::new();
+    /// send(&outbox, 42).await.unwrap();
+    /// # });
+    /// ```
     pub async fn send<T: Send + 'static, const N: usize>(
         outbox: &Outbox<T, N>,
         item: T,
@@ -118,7 +213,18 @@ pub mod std_async {
     ///
     /// # Errors
     /// Returns `SendError::Full(msg)` if the mailbox is full.
-    /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
+    /// Attempts to send a message into the outbox without blocking.
+    ///
+    /// Returns `Ok(())` if the message is enqueued successfully. Returns `Err(SendError::Full(item))` if the outbox is full, or `Err(SendError::Closed(item))` if the receiver has been dropped.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::std_async::{try_send, Outbox, SendError};
+    ///
+    /// let (outbox, _inbox) = Outbox::<u32, 2>::new();
+    /// assert!(try_send(&outbox, 42).is_ok());
+    /// ```
     pub fn try_send<T, const N: usize>(outbox: &Outbox<T, N>, item: T) -> Result<(), SendError<T>> {
         match outbox.try_send(item) {
             Ok(()) => Ok(()),
@@ -131,6 +237,15 @@ pub mod std_async {
 
     /// Get the maximum capacity of the mailbox.
     #[must_use]
+    /// Returns the maximum number of messages the outbox can hold.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::std_async::{Outbox, capacity};
+    /// let outbox: Outbox<u32, 4> = Outbox::new();
+    /// assert_eq!(capacity(&outbox), 4);
+    /// ```
     pub fn capacity<T, const N: usize>(outbox: &Outbox<T, N>) -> usize {
         // For tokio channels, the capacity is the same as N
         // but we should still call the method for consistency
@@ -139,14 +254,25 @@ pub mod std_async {
 
     /// Receive a message with async waiting.
     ///
-    /// Returns `Some(msg)` if a message is received, `None` if the sender has been dropped.
+    /// ```
     pub async fn recv<T, const N: usize>(inbox: &mut Inbox<T, N>) -> Option<T> {
         inbox.recv().await
     }
 
     /// Try to receive a message without blocking.
     ///
-    /// Returns `Some(msg)` if a message is available, `None` if the mailbox is empty.
+    /// Attempts to dequeue a message from the inbox without blocking.
+    ///
+    /// Returns `Some(msg)` if a message is available; returns `None` if the inbox is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use your_crate::embedded::{Inbox, try_recv};
+    ///
+    /// let mut inbox: Inbox<u32, 4> = Inbox::new();
+    /// assert_eq!(try_recv(&mut inbox), None);
+    /// ```
     pub fn try_recv<T, const N: usize>(inbox: &mut Inbox<T, N>) -> Option<T> {
         inbox.try_recv().ok()
     }

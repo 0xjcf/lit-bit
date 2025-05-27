@@ -27,11 +27,37 @@ struct DummyAlloc;
 
 #[cfg(not(feature = "std"))]
 unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
+    /// Panics if a heap allocation is attempted in a no_std context.
+    ///
+    /// This allocator is intended for use in environments where heap allocation is not supported.
+    /// Any attempt to allocate memory will cause a panic to prevent undefined behavior.
+    ///
+    /// # Safety
+    ///
+    /// This function always panics and never returns a valid pointer. Do not use in contexts where heap allocation is required.
+    ///
+    /// # Examples
+    ///
+    /// ```should_panic
+    /// use core::alloc::{GlobalAlloc, Layout};
+    /// let dummy = DummyAlloc;
+    /// // This will panic
+    /// unsafe { dummy.alloc(Layout::from_size_align(8, 8).unwrap()); }
+    /// ```
     unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
         // Panic immediately to prevent undefined behavior from null pointer dereference
         panic!("DummyAlloc: heap allocation attempted in no_std context")
     }
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+    /// Deallocates memory at the given pointer with the specified layout.
+///
+/// This implementation is a no-op and does not actually free memory. Intended for use in environments
+/// where heap allocation is unsupported or intentionally disabled.
+///
+/// # Safety
+///
+/// The caller must ensure that the pointer and layout are valid. Since this function does nothing,
+/// memory leaks may occur if used in a context expecting real deallocation.
+unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
 }
 
 // Panic handler for no_std builds
@@ -65,6 +91,13 @@ pub struct ConnectionContext {
 }
 
 impl ConnectionContext {
+    /// Adds a new connection to the active connections map and increments the total connections count.
+    ///
+    /// In `std` environments, the connection ID is stored as a `String`. In `no_std` environments, the ID is converted to a heapless `String` if possible. If the conversion fails in `no_std`, the connection is not added.
+    ///
+    /// # Parameters
+    /// - `id`: The identifier for the connection to add.
+    /// - `session_id`: The session ID associated with the connection.
     fn add_connection(&mut self, id: &str, session_id: u32) {
         #[cfg(feature = "std")]
         {
@@ -79,6 +112,18 @@ impl ConnectionContext {
         self.total_connections += 1;
     }
 
+    /// Removes an active connection by its ID.
+    ///
+    /// Returns `true` if the connection was present and removed, or `false` if the ID was not found or invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut ctx = ConnectionContext::default();
+    /// ctx.add_connection("client1", 42);
+    /// assert!(ctx.remove_connection("client1"));
+    /// assert!(!ctx.remove_connection("client2"));
+    /// ```
     fn remove_connection(&mut self, id: &str) -> bool {
         #[cfg(feature = "std")]
         {
@@ -107,7 +152,22 @@ pub enum ConnectionEvent {
     Shutdown,
 }
 
-// Action functions for state transitions
+/// Handles the establishment of a new connection in the state machine context.
+///
+/// Adds a new connection entry to the context's active connections and increments the total connection count when a `Connect` event is received. In `std` environments, the connection is identified by a formatted string; in `no_std`, a fixed identifier is used.
+///
+/// # Parameters
+/// - `context`: The mutable connection context to update.
+/// - `event`: The event triggering the action; only acts on `Connect` events.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// let event = ConnectionEvent::Connect { client_id: 42 };
+/// action_establish_connection(&mut context, &event);
+/// assert_eq!(context.total_connections, 1);
+/// ```
 fn action_establish_connection(context: &mut ConnectionContext, event: &ConnectionEvent) {
     if let ConnectionEvent::Connect { client_id } = event {
         // Use client_id directly as a simple connection identifier
@@ -127,6 +187,21 @@ fn action_establish_connection(context: &mut ConnectionContext, event: &Connecti
     }
 }
 
+/// Handles the disconnection of a client by removing its connection from the context.
+///
+/// Removes the connection associated with the given client from the active connections map in the context. In `std` environments, the connection is identified by a formatted string containing the client ID; in `no_std` environments, a fixed key is used.
+///
+/// # Parameters
+/// - `context`: The mutable connection context to update.
+/// - `event`: The event triggering the action, expected to be a `Disconnect` variant.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// let event = ConnectionEvent::Disconnect { client_id: 42 };
+/// action_close_connection(&mut context, &event);
+/// ```
 fn action_close_connection(context: &mut ConnectionContext, event: &ConnectionEvent) {
     if let ConnectionEvent::Disconnect { client_id } = event {
         #[cfg(feature = "std")]
@@ -144,6 +219,19 @@ fn action_close_connection(context: &mut ConnectionContext, event: &ConnectionEv
     }
 }
 
+/// Handles a heartbeat event from a client.
+///
+/// Updates the system in response to a heartbeat event, typically used to indicate that a client is still active.
+/// No changes are made to the context.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// let event = ConnectionEvent::Heartbeat { client_id: 42 };
+/// action_handle_heartbeat(&mut context, &event);
+/// // No state changes, but logs heartbeat if std is enabled.
+/// ```
 fn action_handle_heartbeat(_context: &mut ConnectionContext, event: &ConnectionEvent) {
     if let ConnectionEvent::Heartbeat { client_id } = event {
         #[cfg(feature = "std")]
@@ -151,11 +239,33 @@ fn action_handle_heartbeat(_context: &mut ConnectionContext, event: &ConnectionE
     }
 }
 
+/// Handles a timeout event for a connection.
+///
+/// This action is triggered when a connection timeout occurs. In `std` environments, it logs the timeout event.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// let event = ConnectionEvent::Timeout;
+/// action_handle_timeout(&mut context, &event);
+/// // In std, logs "⏰ Connection timeout detected"
+/// ```
 fn action_handle_timeout(_context: &mut ConnectionContext, _event: &ConnectionEvent) {
     #[cfg(feature = "std")]
     println!("⏰ Connection timeout detected");
 }
 
+/// Increments the failure count in the connection context when a network error occurs.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// let event = ConnectionEvent::NetworkError;
+/// action_handle_network_error(&mut context, &event);
+/// assert_eq!(context.failed_attempts, 1);
+/// ```
 fn action_handle_network_error(context: &mut ConnectionContext, _event: &ConnectionEvent) {
     context.failed_attempts += 1;
     #[cfg(feature = "std")]
@@ -165,6 +275,17 @@ fn action_handle_network_error(context: &mut ConnectionContext, _event: &Connect
     );
 }
 
+/// Removes all active connections from the context, effectively shutting down all connections.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// context.add_connection("client1", 1);
+/// context.add_connection("client2", 2);
+/// action_shutdown_all(&mut context, &ConnectionEvent::Shutdown);
+/// assert_eq!(context.active_connections.len(), 0);
+/// ```
 fn action_shutdown_all(context: &mut ConnectionContext, _event: &ConnectionEvent) {
     let count = context.active_connections.len();
     context.active_connections.clear();
@@ -172,11 +293,31 @@ fn action_shutdown_all(context: &mut ConnectionContext, _event: &ConnectionEvent
     println!("🛑 Shutting down all {count} active connections");
 }
 
-// Guard functions
+/// Returns true if there are any active connections in the context.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// assert!(!guard_has_active_connections(&context, &ConnectionEvent::Timeout));
+/// context.add_connection("client1", 42);
+/// assert!(guard_has_active_connections(&context, &ConnectionEvent::Timeout));
+/// ```
 fn guard_has_active_connections(context: &ConnectionContext, _event: &ConnectionEvent) -> bool {
     !context.active_connections.is_empty()
 }
 
+/// Returns true if the number of failed connection attempts is three or more.
+///
+/// Used as a guard condition to trigger error recovery transitions when excessive network failures occur.
+///
+/// # Examples
+///
+/// ```
+/// let mut context = ConnectionContext::default();
+/// context.failed_attempts = 3;
+/// assert!(guard_too_many_failures(&context, &ConnectionEvent::NetworkError));
+/// ```
 fn guard_too_many_failures(context: &ConnectionContext, _event: &ConnectionEvent) -> bool {
     context.failed_attempts >= 3
 }
@@ -221,6 +362,23 @@ statechart! {
 // No manual implementation needed - the blanket impl handles everything!
 
 #[cfg(feature = "std")]
+/// Demonstrates the integration of a statechart-based connection manager with the Actor trait.
+///
+/// This example creates a `ConnectionManager` state machine, simulates connection lifecycle events,
+/// handles network errors and recovery, and performs a shutdown. It prints state and context
+/// information at each step to illustrate zero-cost, type-safe actor integration with statecharts.
+///
+/// # Returns
+/// Returns `Ok(())` if the demonstration completes successfully; otherwise, returns an error.
+///
+/// # Examples
+///
+/// ```
+/// fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     // Runs the demonstration of statechart-actor integration.
+///     main()
+/// }
+/// ```
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎯 StateMachine-Actor Integration Example");
     println!("=========================================");
@@ -291,6 +449,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(not(feature = "std"))]
+/// Demonstrates basic usage of the `ConnectionManager` state machine in a no_std environment.
+///
+/// Initializes the connection manager with a default context and simulates connect, heartbeat, and disconnect events. Intended for integration into embedded runtimes.
+///
+/// # Examples
+///
+/// ```
+/// main(); // Runs the demonstration sequence for embedded targets.
+/// ```
 fn main() {
     // For no_std targets, this would typically be integrated into
     // an Embassy-based application or other embedded runtime
@@ -314,6 +481,9 @@ mod tests {
     use lit_bit_core::actor::Actor;
 
     #[test]
+    /// Tests that the `ConnectionManager` statechart implements the `Actor` trait and supports state transitions via the actor interface.
+    ///
+    /// This test verifies trait implementation and basic event handling for both `std` and `no_std` environments. In `std`, it uses a Tokio runtime to test asynchronous event processing.
     fn statechart_implements_actor() {
         let initial_context = ConnectionContext::default();
         let mut manager =
@@ -375,6 +545,9 @@ mod tests {
     }
 
     #[test]
+    /// Tests that triggering multiple network errors transitions the state machine into error recovery and increments the failure count.
+    ///
+    /// This test initializes a `ConnectionManager`, simulates a connection, sends three consecutive `NetworkError` events, and asserts that the `failed_attempts` counter reaches 3.
     fn error_recovery_state_machine() {
         let initial_context = ConnectionContext::default();
         let mut manager =

@@ -28,11 +28,38 @@ struct DummyAlloc;
 
 #[cfg(not(feature = "std"))]
 unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
+    /// Prevents heap allocation in `no_std` environments by panicking on allocation attempts.
+    ///
+    /// # Safety
+    ///
+    /// This function always panics and never returns a valid pointer. It should never be called.
+    ///
+    /// # Examples
+    ///
+    /// ```should_panic
+    /// use core::alloc::{GlobalAlloc, Layout};
+    ///
+    /// let alloc = DummyAlloc;
+    /// // This will panic:
+    /// unsafe { alloc.alloc(Layout::from_size_align(8, 8).unwrap()); }
+    /// ```
     unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
         // Panic immediately to prevent undefined behavior from null pointer dereference
         panic!("DummyAlloc: heap allocation attempted in no_std context")
     }
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+    /// Deallocates memory, but performs no action as this is a dummy allocator.
+///
+/// # Safety
+///
+/// This function is a no-op and does not actually free memory. Using this allocator in a real allocation context will result in undefined behavior.
+///
+/// # Examples
+///
+/// ```
+/// // No actual deallocation occurs; for demonstration only.
+/// unsafe { DUMMY_ALLOC.dealloc(ptr, layout); }
+/// ```
+unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
 }
 
 // Panic handler for no_std builds
@@ -54,6 +81,18 @@ pub struct CounterActor {
 
 impl CounterActor {
     #[must_use]
+    /// Creates a new `CounterActor` with the specified processing delay in milliseconds.
+    ///
+    /// The counter and processed message count are initialized to zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let actor = CounterActor::new(100);
+    /// assert_eq!(actor.count, 0);
+    /// assert_eq!(actor.processed_messages, 0);
+    /// assert_eq!(actor.processing_delay_ms, 100);
+    /// ```
     pub fn new(processing_delay_ms: u32) -> Self {
         Self {
             count: 0,
@@ -90,6 +129,16 @@ pub struct CounterStats {
 impl Actor for CounterActor {
     type Message = CounterMessage;
 
+    /// Initializes the counter actor before it begins processing messages.
+    ///
+    /// Returns `Ok(())` to indicate successful startup.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut actor = CounterActor::new(0);
+    /// assert!(actor.on_start().is_ok());
+    /// ```
     fn on_start(&mut self) -> Result<(), ActorError> {
         #[cfg(feature = "std")]
         println!(
@@ -100,6 +149,20 @@ impl Actor for CounterActor {
     }
 
     #[cfg(feature = "async")]
+    /// Processes a `CounterMessage`, updating the counter state and optionally responding to queries.
+    ///
+    /// Handles increment, decrement, add, and reset operations, as well as asynchronous queries for the current count and statistics when running with the `std` feature. Simulates a configurable processing delay if enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lit_bit_core::actor::Actor;
+    /// use lit_bit_core::examples::actor_backpressure::{CounterActor, CounterMessage};
+    ///
+    /// let mut actor = CounterActor::new(0);
+    /// futures::executor::block_on(actor.on_event(CounterMessage::Increment));
+    /// assert_eq!(actor.count, 1);
+    /// ```
     fn on_event(&mut self, msg: CounterMessage) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
             // Simulate processing delay
@@ -156,6 +219,22 @@ impl Actor for CounterActor {
     }
 
     #[cfg(not(feature = "async"))]
+    /// Processes a `CounterMessage`, updating the counter state and optionally responding to queries.
+    ///
+    /// Handles increment, decrement, add, and reset operations on the counter, as well as asynchronous queries for the current count and statistics when running with the `std` feature. Simulates a configurable processing delay if enabled.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use lit_bit_core::actor::Actor;
+    /// use crate::{CounterActor, CounterMessage};
+    ///
+    /// let mut actor = CounterActor::new(0);
+    /// // Increment the counter
+    /// actor.on_event(CounterMessage::Increment).await;
+    /// // Add 5 to the counter
+    /// actor.on_event(CounterMessage::Add(5)).await;
+    /// ```
     fn on_event(&mut self, msg: CounterMessage) -> impl core::future::Future<Output = ()> + Send {
         async move {
             // Simulate processing delay
@@ -214,6 +293,22 @@ impl Actor for CounterActor {
 
 #[cfg(feature = "std")]
 #[tokio::main]
+/// Demonstrates platform-specific back-pressure concepts in the actor system.
+///
+/// Prints an overview of back-pressure handling strategies for embedded and cloud environments, highlighting differences in feedback and flow control.
+///
+/// # Returns
+/// Returns `Ok(())` if the demonstration completes successfully.
+///
+/// # Examples
+///
+/// ```
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     main().await?;
+///     Ok(())
+/// }
+/// ```
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎯 Actor Back-pressure Handling Example");
     println!("=======================================");
@@ -229,6 +324,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(not(feature = "std"))]
+/// Entry point for embedded (`no_std`) targets.
+///
+/// This function serves as a placeholder for embedded applications and does not perform any operations.
+/// In a real embedded environment, platform-specific initialization or logging would be implemented here.
 fn main() {
     // For no_std targets, demonstrate basic concepts
     // In a real embedded application, this would use defmt or similar
@@ -240,6 +339,16 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Tests basic operations of the `CounterActor`, including message processing and state updates.
+    ///
+    /// This test verifies that the actor correctly handles `Add`, `Increment`, and `Decrement` messages,
+    /// and that its internal state reflects the expected count and processed message count after processing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// counter_actor_basic_operations();
+    /// ```
     fn counter_actor_basic_operations() {
         let mut counter = CounterActor::new(0);
 

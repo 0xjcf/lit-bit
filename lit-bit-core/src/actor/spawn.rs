@@ -12,6 +12,16 @@ use super::address::Address;
 // Embassy task for running actors (must be at top level)
 #[cfg(all(not(feature = "std"), feature = "embassy"))]
 #[embassy_executor::task]
+/// Runs an actor on the Embassy executor, processing messages from a statically allocated inbox.
+///
+/// This function is intended to be spawned as a top-level Embassy task. It awaits the actor's message-processing future, enabling the actor to handle incoming messages asynchronously.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Typically used internally by spawn_actor_embassy; not called directly.
+/// embassy_executor::Spawner::spawn(embassy_actor_task(actor, inbox));
+/// ```
 async fn embassy_actor_task<A: Actor + 'static, const N: usize>(
     actor: A,
     inbox: super::Inbox<A::Message, N>,
@@ -67,6 +77,7 @@ where
 
 // Tokio spawning function (Task 3.3)
 #[cfg(feature = "std")]
+/// ```
 pub fn spawn_actor_tokio<A, const N: usize>(actor: A) -> Address<A::Message, N>
 where
     A: Actor + Send + 'static,
@@ -110,6 +121,14 @@ mod tests {
         }
 
         impl TestActor {
+            /// Creates a new instance with the provided shared counter.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// let counter = Arc::new(Mutex::new(0));
+            /// let actor = TestActor::new(counter.clone());
+            /// ```
             fn new(counter: Arc<Mutex<u32>>) -> Self {
                 Self { counter }
             }
@@ -119,6 +138,33 @@ mod tests {
             type Message = u32;
 
             #[cfg(feature = "async")]
+            /// Handles an incoming message by incrementing the shared counter by the message value asynchronously.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// use std::sync::{Arc, Mutex};
+            /// use futures::executor::block_on;
+            ///
+            /// struct TestActor {
+            ///     counter: Arc<Mutex<u32>>,
+            /// }
+            ///
+            /// impl TestActor {
+            ///     fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
+            ///         let counter = Arc::clone(&self.counter);
+            ///         Box::pin(async move {
+            ///             let mut count = counter.lock().unwrap();
+            ///             *count += msg;
+            ///         })
+            ///     }
+            /// }
+            ///
+            /// let counter = Arc::new(Mutex::new(0));
+            /// let mut actor = TestActor { counter: Arc::clone(&counter) };
+            /// block_on(actor.on_event(42));
+            /// assert_eq!(*counter.lock().unwrap(), 42);
+            /// ```
             fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
                 let counter = Arc::clone(&self.counter);
                 Box::pin(async move {
@@ -128,7 +174,35 @@ mod tests {
             }
 
             #[cfg(not(feature = "async"))]
-            #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
+            #[allow(clippy::manual_async_fn)] /// Handles an incoming message by incrementing the shared counter by the message value asynchronously.
+            ///
+            /// # Examples
+            ///
+            /// ```
+            /// use std::sync::{Arc, Mutex};
+            ///
+            /// struct TestActor {
+            ///     counter: Arc<Mutex<u32>>,
+            /// }
+            ///
+            /// impl TestActor {
+            ///     fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
+            ///         let counter = Arc::clone(&self.counter);
+            ///         async move {
+            ///             let mut count = counter.lock().unwrap();
+            ///             *count += msg;
+            ///         }
+            ///     }
+            /// }
+            ///
+            /// #[tokio::main]
+            /// async fn main() {
+            ///     let counter = Arc::new(Mutex::new(0));
+            ///     let mut actor = TestActor { counter: Arc::clone(&counter) };
+            ///     actor.on_event(42).await;
+            ///     assert_eq!(*counter.lock().unwrap(), 42);
+            /// }
+            /// ```
             fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
                 let counter = Arc::clone(&self.counter);
                 async move {

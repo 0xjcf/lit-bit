@@ -1273,7 +1273,9 @@ where
     /// # Panics
     ///
     /// This function may panic if:
-    /// - Output stream operations fail when `std` feature is enabled (due to `unwrap()` calls)
+    /// Processes an event by evaluating transitions from the current active leaf states, applying exits, actions, and entries, and updating the runtime state accordingly.
+    ///
+    /// Returns `SendResult::Transitioned` if a transition occurs, `SendResult::NoMatch` if no transitions match, or `SendResult::Error` if an error occurs during processing.
     pub fn send_internal(&mut self, event: &EventType) -> SendResult {
         #[cfg(all(feature = "debug-log", feature = "std"))]
         {

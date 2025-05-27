@@ -14,11 +14,37 @@ struct DummyAlloc;
 
 #[cfg(target_arch = "arm")]
 unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
+    /// Panics if a heap allocation is attempted in a no_std context.
+    ///
+    /// This function always panics to enforce heapless operation on ARM Cortex-M targets.
+    /// It is intended to satisfy linker requirements for a global allocator while preventing
+    /// any actual dynamic memory allocation at runtime.
+    ///
+    /// # Panics
+    ///
+    /// Always panics with a message indicating that heap allocation was attempted.
+    ///
+    /// # Safety
+    ///
+    /// This function is marked unsafe to satisfy the `GlobalAlloc` trait requirements, but it never returns.
+    ///
+    /// # Examples
+    ///
+    /// ```should_panic
+    /// use core::alloc::{GlobalAlloc, Layout};
+    ///
+    /// let dummy = DummyAlloc;
+    /// // This will panic
+    /// unsafe { dummy.alloc(Layout::from_size_align(8, 8).unwrap()); }
+    /// ```
     unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
         // Panic immediately to prevent undefined behavior from null pointer dereference
         panic!("DummyAlloc: heap allocation attempted in no_std context")
     }
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+    /// Deallocates memory, but performs no action as heap allocation is not supported on this target.
+///
+/// This method is required to satisfy the `GlobalAlloc` trait but is a no-op since all allocation attempts panic and no memory is ever actually allocated.
+unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
 }
 
 #[cfg(target_arch = "arm")]

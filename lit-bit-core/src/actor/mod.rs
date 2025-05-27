@@ -51,7 +51,9 @@ pub trait Actor: Send {
     /// Called when the actor starts. Default: Ok(())
     ///
     /// # Errors
-    /// Returns `Err(ActorError)` if actor startup fails.
+    /// Optional hook called before the actor starts processing messages.
+    ///
+    /// Override to perform initialization logic. Returns an error to abort actor startup. The default implementation does nothing and returns success.
     fn on_start(&mut self) -> Result<(), ActorError> {
         Ok(())
     }
@@ -59,7 +61,13 @@ pub trait Actor: Send {
     /// Called when the actor stops. Default: Ok(())
     ///
     /// # Errors
-    /// Returns `Err(ActorError)` if actor shutdown fails.
+    /// Optional hook called when the actor is shutting down.
+    ///
+    /// Override to perform cleanup or resource release during actor shutdown. By default, returns `Ok(())`.
+    ///
+    /// # Returns
+    /// - `Ok(())` if shutdown succeeds.
+    /// - `Err(ActorError)` if an error occurs during shutdown.
     fn on_stop(self) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -67,7 +75,39 @@ pub trait Actor: Send {
         Ok(())
     }
 
-    /// Called if the actor panics. Default: `RestartStrategy::OneForOne`
+    /// Determines the restart strategy when the actor panics.
+    ///
+    /// By default, returns `RestartStrategy::OneForOne`, indicating that only the failing actor should be restarted.
+    /// Override to customize supervision behavior based on panic information.
+    ///
+    /// # Parameters
+    /// - `info`: Information about the panic that occurred.
+    ///
+    /// # Returns
+    /// The restart strategy to apply when a panic is detected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use my_actor_framework::{Actor, RestartStrategy};
+    /// use core::panic::PanicInfo;
+    ///
+    /// struct MyActor;
+    ///
+    /// impl Actor for MyActor {
+    ///     type Message = ();
+    ///
+    ///     fn on_panic(&self, info: &PanicInfo) -> RestartStrategy {
+    ///         // Restart all actors if a specific panic message is detected
+    ///         if let Some(location) = info.location() {
+    ///             if location.file().contains("critical") {
+    ///                 return RestartStrategy::OneForAll;
+    ///             }
+    ///         }
+    ///         RestartStrategy::OneForOne
+    ///     }
+    /// }
+    /// ```
     fn on_panic(&self, info: &PanicInfo) -> RestartStrategy {
         RestartStrategy::OneForOne
     }
@@ -181,6 +221,28 @@ macro_rules! static_mailbox {
 /// ```
 #[cfg(not(feature = "std"))]
 #[must_use]
+/// Splits a static heapless SPSC queue into producer and consumer endpoints.
+///
+/// # Safety
+///
+/// The caller must ensure that `queue` is only split once for its lifetime, and that the resulting producer and consumer are not duplicated or aliased elsewhere. Violating these requirements may result in undefined behavior.
+///
+/// # Parameters
+///
+/// - `queue`: A mutable reference to a static heapless single-producer single-consumer queue.
+///
+/// # Returns
+///
+/// A tuple containing the producer (`Outbox`) and consumer (`Inbox`) halves of the queue.
+///
+/// # Examples
+///
+/// ```
+/// static mut QUEUE: heapless::spsc::Queue<u32, 8> = heapless::spsc::Queue::new();
+/// let (producer, consumer) = unsafe { create_mailbox(&mut QUEUE) };
+/// producer.enqueue(42).unwrap();
+/// assert_eq!(consumer.dequeue(), Some(42));
+/// ```
 pub unsafe fn create_mailbox<T, const N: usize>(
     queue: &'static mut heapless::spsc::Queue<T, N>,
 ) -> (Outbox<T, N>, Inbox<T, N>) {
@@ -189,6 +251,17 @@ pub unsafe fn create_mailbox<T, const N: usize>(
 
 #[cfg(feature = "std")]
 #[must_use]
+/// Creates a Tokio MPSC channel for actor message passing with the specified capacity.
+///
+/// Returns a tuple containing the sender (`Outbox`) and receiver (`Inbox`) endpoints.
+///
+/// # Examples
+///
+/// ```
+/// let (outbox, inbox) = create_mailbox::<u32, 8>();
+/// outbox.try_send(42).unwrap();
+/// assert_eq!(inbox.blocking_recv(), Some(42));
+/// ```
 pub fn create_mailbox<T, const N: usize>() -> (Outbox<T, N>, Inbox<T, N>) {
     tokio::sync::mpsc::channel(N)
 }
@@ -224,6 +297,19 @@ pub fn create_mailbox<T, const N: usize>() -> (Outbox<T, N>, Inbox<T, N>) {
 /// This ensures the message loop doesn't busy-wait when no messages are available,
 /// while still allowing rapid message processing when messages are present.
 #[cfg(all(not(feature = "std"), not(feature = "embassy")))]
+/// Asynchronously yields control to the executor, allowing other tasks to run before resuming.
+///
+/// This function is intended for use in cooperative multitasking environments without built-in yield mechanisms. It returns after yielding once, enabling the executor to schedule other tasks.
+///
+/// # Examples
+///
+/// ```
+/// # use your_crate::yield_control;
+/// # async fn demo() {
+/// yield_control().await;
+/// // Execution resumes here after yielding
+/// # }
+/// ```
 async fn yield_control() {
     use core::future::Future;
     use core::pin::Pin;
@@ -256,7 +342,37 @@ async fn yield_control() {
 ///
 /// # Errors
 /// Returns `ActorError` if actor startup, shutdown, or message processing fails.
-#[allow(unreachable_code)] // no_std path has infinite loop, cleanup only reachable on std
+#[allow(unreachable_code)] /// Runs the main message processing loop for an actor, handling lifecycle hooks and mailbox integration.
+///
+/// Calls the actor's `on_start` hook before entering the loop. Continuously receives messages from the provided inbox and dispatches them to the actor's `on_event` handler. On `no_std`, yields control when the inbox is empty to allow cooperative multitasking. On `std`, exits the loop when the channel is closed. After exiting the loop, calls the actor's `on_stop` hook.
+///
+/// # Returns
+/// Returns `Ok(())` if the actor completes successfully, or an `ActorError` if a lifecycle hook fails.
+///
+/// # Examples
+///
+/// ```
+/// # use your_crate::{Actor, actor_task, create_mailbox};
+/// # use core::pin::Pin;
+/// # use futures::Future;
+/// struct MyActor;
+/// impl Actor for MyActor {
+///     type Message = u32;
+///     fn on_event(&mut self, msg: Self::Message) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+///         Box::pin(async move {
+///             // handle message
+///         })
+///     }
+/// }
+/// # #[cfg(feature = "std")]
+/// #[tokio::main]
+/// async fn main() {
+///     let (outbox, inbox) = create_mailbox::<u32, 8>();
+///     let actor = MyActor;
+///     tokio::spawn(actor_task(actor, inbox));
+///     // Send messages using outbox
+/// }
+/// ```
 pub async fn actor_task<A: Actor, const N: usize>(
     mut actor: A,
     mut inbox: Inbox<A::Message, N>,
@@ -320,6 +436,7 @@ mod tests {
     }
 
     impl TestActor {
+        /// Creates a new instance with the counter initialized to zero.
         fn new() -> Self {
             Self { counter: 0 }
         }
@@ -329,6 +446,15 @@ mod tests {
         type Message = u32;
 
         #[cfg(feature = "async")]
+        /// Handles an incoming message by incrementing the counter by the given value.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// let mut actor = TestActor { counter: 0 };
+        /// futures::executor::block_on(actor.on_event(5));
+        /// assert_eq!(actor.counter, 5);
+        /// ```
         fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
             Box::pin(async move {
                 self.counter += msg;
@@ -336,7 +462,15 @@ mod tests {
         }
 
         #[cfg(not(feature = "async"))]
-        #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
+        #[allow(clippy::manual_async_fn)] /// Handles an incoming message by incrementing the counter by the given value.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// let mut actor = TestActor { counter: 0 };
+        /// futures::executor::block_on(actor.on_event(5));
+        /// assert_eq!(actor.counter, 5);
+        /// ```
         fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
             async move {
                 self.counter += msg;
