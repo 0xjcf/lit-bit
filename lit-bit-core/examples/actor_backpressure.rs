@@ -12,6 +12,32 @@
 //! - Error handling strategies
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), no_main)]
+
+// Required for no_std builds
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+// Dummy allocator for no_std builds
+#[cfg(not(feature = "std"))]
+#[global_allocator]
+static DUMMY: DummyAlloc = DummyAlloc;
+
+#[cfg(not(feature = "std"))]
+struct DummyAlloc;
+
+#[cfg(any(target_arch = "riscv32", target_arch = "arm"))]
+unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
+    unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
+        // Panic immediately to prevent undefined behavior from null pointer dereference
+        panic!("DummyAlloc: heap allocation attempted in no_std context")
+    }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+}
+
+// Panic handler for no_std builds
+#[cfg(not(feature = "std"))]
+use panic_halt as _;
 
 use lit_bit_core::actor::{Actor, ActorError};
 
@@ -149,6 +175,7 @@ fn main() {
 }
 
 #[cfg(test)]
+#[cfg(feature = "std")]
 mod tests {
     use super::*;
 

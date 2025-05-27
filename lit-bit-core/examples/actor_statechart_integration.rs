@@ -11,6 +11,32 @@
 //! - Type-safe message passing with compile-time guarantees
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(not(feature = "std"), no_main)]
+
+// Required for no_std builds
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+// Dummy allocator for no_std builds
+#[cfg(not(feature = "std"))]
+#[global_allocator]
+static DUMMY: DummyAlloc = DummyAlloc;
+
+#[cfg(not(feature = "std"))]
+struct DummyAlloc;
+
+#[cfg(any(target_arch = "riscv32", target_arch = "arm"))]
+unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
+    unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
+        // Panic immediately to prevent undefined behavior from null pointer dereference
+        panic!("DummyAlloc: heap allocation attempted in no_std context")
+    }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+}
+
+// Panic handler for no_std builds
+#[cfg(not(feature = "std"))]
+use panic_halt as _;
 
 use lit_bit_core::StateMachine;
 use lit_bit_macro::{statechart, statechart_event};
@@ -298,14 +324,24 @@ mod tests {
         assert!(manager.on_start().is_ok());
 
         // Test state transitions through actor interface
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            manager
-                .on_event(ConnectionEvent::Connect { client_id: 1 })
-                .await;
-            // Verify state changed
-            // Note: In a real test, we'd check the state more thoroughly
-        });
+        #[cfg(feature = "std")]
+        {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                manager
+                    .on_event(ConnectionEvent::Connect { client_id: 1 })
+                    .await;
+                // Verify state changed
+                // Note: In a real test, we'd check the state more thoroughly
+            });
+        }
+
+        #[cfg(not(feature = "std"))]
+        {
+            // For no_std, we can't easily test async behavior without a runtime
+            // but we can verify the trait implementation and basic functionality
+            // In a real embedded environment, this would be handled by Embassy or similar
+        }
     }
 
     #[test]
@@ -321,8 +357,18 @@ mod tests {
 
         // The Actor trait provides a default implementation that returns OneForOne
         // This test verifies that our StateMachine implements the Actor trait correctly
-        use std::any::Any;
-        let _: &dyn Any = &manager; // Verify it's a concrete type
+        #[cfg(feature = "std")]
+        {
+            use std::any::Any;
+            let _: &dyn Any = &manager; // Verify it's a concrete type
+        }
+
+        #[cfg(not(feature = "std"))]
+        {
+            // For no_std, we can't use std::any::Any, but we can still verify
+            // that the manager implements the Actor trait through other means
+            // The fact that this compiles proves the trait is implemented correctly
+        }
 
         // The actual supervision logic would be tested in integration tests
         // where real panics can be triggered and handled

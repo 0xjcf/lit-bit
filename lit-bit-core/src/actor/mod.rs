@@ -75,16 +75,102 @@ pub type Inbox<T, const N: usize> = tokio::sync::mpsc::Receiver<T>;
 pub type Outbox<T, const N: usize> = tokio::sync::mpsc::Sender<T>;
 
 // Platform-specific mailbox creation functions (Tasks 2.2-2.3)
+
+/// Creates a static mailbox with safe initialization.
+///
+/// This macro creates a statically allocated SPSC queue and returns the producer
+/// and consumer endpoints. It handles all the unsafe code internally and ensures
+/// the queue can only be split once.
+///
+/// # Arguments
+///
+/// * `$name` - Identifier for the static queue (for debugging/placement control)
+/// * `$msg_type` - The message type for the queue
+/// * `$capacity` - The queue capacity (const expression)
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use lit_bit_core::static_mailbox;
+///
+/// // Create a mailbox for u32 messages with capacity 16
+/// let (producer, consumer) = static_mailbox!(MY_QUEUE: u32, 16);
+///
+/// // With memory placement attribute
+/// let (tx, rx) = static_mailbox!(
+///     #[link_section = ".sram2"]
+///     FAST_QUEUE: MyMessage, 32
+/// );
+/// ```
+///
+/// # Panics
+///
+/// Panics if called more than once for the same static queue (prevents double-split).
+#[cfg(not(feature = "std"))]
+#[macro_export]
+macro_rules! static_mailbox {
+    ($(#[$attr:meta])* $name:ident: $msg_type:ty, $capacity:expr) => {{
+        use core::sync::atomic::{AtomicBool, Ordering};
+
+        $(#[$attr])*
+        static mut $name: heapless::spsc::Queue<$msg_type, $capacity> =
+            heapless::spsc::Queue::new();
+
+        // Ensure this macro is only called once per static
+        static INIT_FLAG: AtomicBool = AtomicBool::new(false);
+
+        if INIT_FLAG.swap(true, Ordering::Acquire) {
+            panic!("static_mailbox! called multiple times for the same queue");
+        }
+
+                // SAFETY: We ensure this is only called once via the atomic flag above.
+        // The static queue is valid for 'static lifetime and we immediately
+        // split it to prevent further access to the raw queue.
+        let queue_ref: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
+            unsafe { &mut *core::ptr::addr_of_mut!($name) };
+
+        queue_ref.split()
+    }};
+
+    // Variant without attributes
+    ($name:ident: $msg_type:ty, $capacity:expr) => {
+        $crate::static_mailbox!($name: $msg_type, $capacity)
+    };
+}
+
+/// Creates a mailbox from a statically allocated queue (advanced usage).
+///
+/// This function is intended for advanced use cases where you need full control
+/// over the queue allocation. For most use cases, prefer the `static_mailbox!` macro.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - The provided queue reference is valid for the `'static` lifetime
+/// - The queue is not used elsewhere after calling this function
+/// - The queue is properly initialized (typically via `heapless::spsc::Queue::new()`)
+///
+/// # Arguments
+///
+/// * `queue` - A static mutable reference to a heapless queue that will be split
+///   into producer and consumer halves
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use heapless::spsc::Queue;
+/// use lit_bit_core::actor::create_mailbox;
+///
+/// static mut QUEUE: Queue<u32, 16> = Queue::new();
+///
+/// // SAFETY: QUEUE is statically allocated and not used elsewhere
+/// let (outbox, inbox) = unsafe { create_mailbox(&mut QUEUE) };
+/// ```
 #[cfg(not(feature = "std"))]
 #[must_use]
-pub fn create_mailbox<T, const N: usize>() -> (Outbox<T, N>, Inbox<T, N>) {
-    // For no_std, we need static allocation. In practice, this would be handled
-    // by the spawning function that provides the static queue.
-    // This is a placeholder that requires external static allocation.
-    extern crate alloc;
-    use alloc::boxed::Box;
-    let queue: &'static mut heapless::spsc::Queue<T, N> =
-        Box::leak(Box::new(heapless::spsc::Queue::new()));
+pub unsafe fn create_mailbox<T, const N: usize>(
+    queue: &'static mut heapless::spsc::Queue<T, N>,
+) -> (Outbox<T, N>, Inbox<T, N>) {
     queue.split()
 }
 
@@ -92,6 +178,64 @@ pub fn create_mailbox<T, const N: usize>() -> (Outbox<T, N>, Inbox<T, N>) {
 #[must_use]
 pub fn create_mailbox<T, const N: usize>() -> (Outbox<T, N>, Inbox<T, N>) {
     tokio::sync::mpsc::channel(N)
+}
+
+/// Yield mechanism for `no_std` environments without Embassy.
+///
+/// This provides a default yield implementation that allows the executor to schedule
+/// other tasks when the message queue is empty. The implementation returns `Poll::Pending`
+/// once before completing, which gives the executor an opportunity to run other tasks.
+///
+/// ## Customization for Different Executors
+///
+/// Different async executors may require different yield mechanisms:
+///
+/// - **Embassy**: Uses `embassy_futures::yield_now()` (handled separately)
+/// - **RTIC**: May use `rtic_monotonics::yield_now()` or similar
+/// - **Custom executors**: May need executor-specific yield functions
+///
+/// If you're using a different executor, you may need to replace this function
+/// with your executor's specific yield mechanism. This can be done by:
+///
+/// 1. Defining your own yield function with the same signature
+/// 2. Using conditional compilation to select the appropriate implementation
+/// 3. Or by configuring your executor to handle this default yield appropriately
+///
+/// ## Implementation Notes
+///
+/// This implementation creates a future that:
+/// 1. Returns `Poll::Pending` on first poll (yielding control)
+/// 2. Wakes itself to be polled again
+/// 3. Returns `Poll::Ready(())` on second poll (completing)
+///
+/// This ensures the message loop doesn't busy-wait when no messages are available,
+/// while still allowing rapid message processing when messages are present.
+#[cfg(all(not(feature = "std"), not(feature = "embassy")))]
+async fn yield_control() {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+
+    /// A future that yields control once before completing
+    struct YieldOnce {
+        yielded: bool,
+    }
+
+    impl Future for YieldOnce {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+            if self.yielded {
+                Poll::Ready(())
+            } else {
+                self.yielded = true;
+                cx.waker().wake_by_ref(); // Schedule this task to be polled again
+                Poll::Pending
+            }
+        }
+    }
+
+    YieldOnce { yielded: false }.await;
 }
 
 // Message processing loop implementation (Task 3.1)
@@ -120,8 +264,9 @@ pub async fn actor_task<A: Actor, const N: usize>(
                 embassy_futures::yield_now().await;
                 #[cfg(not(feature = "embassy"))]
                 {
-                    // For no_std without embassy, we need a different yield mechanism
-                    // This is a placeholder - in practice you'd use your executor's yield
+                    // For no_std without embassy, yield control to allow other tasks to run.
+                    // This uses a configurable yield function that can be customized per executor.
+                    yield_control().await;
                 }
             };
             actor.on_event(msg).await;
@@ -186,5 +331,27 @@ mod tests {
         // Test lifecycle hooks
         assert!(actor.on_start().is_ok());
         assert!(actor.on_stop().is_ok());
+    }
+
+    #[cfg(all(not(feature = "std"), not(feature = "embassy")))]
+    #[test]
+    fn yield_control_compiles() {
+        // Test that our yield mechanism compiles and can be used in async contexts
+        // This is a compile-time test to ensure the yield function is properly defined
+        let _future = yield_control();
+        // Note: We can't easily test the actual yielding behavior in a unit test
+        // without a full async runtime, but we can verify it compiles correctly
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[test]
+    fn static_mailbox_macro_works() {
+        // Test that our static_mailbox macro works correctly
+        let (mut producer, mut consumer) = crate::static_mailbox!(TEST_MAILBOX: u32, 4);
+
+        // Test basic functionality
+        assert!(producer.enqueue(42).is_ok());
+        assert_eq!(consumer.dequeue(), Some(42));
+        assert_eq!(consumer.dequeue(), None);
     }
 }

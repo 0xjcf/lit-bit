@@ -162,13 +162,14 @@ pub trait StateMachine {
     /// Sends an event to the state machine, potentially causing state transitions and actions.
     ///
     /// # Arguments
-    /// * `event`: The event to process.
+    /// * `event`: The event to process (passed by reference).
     ///
     /// # Returns
-    /// * `true` if the event resulted in one or more transitions (including self-transitions).
-    /// * `false` if the event was ignored (e.g., no matching transition for the current state, or a guard condition prevented the transition).
+    /// * `SendResult::Transitioned` if the event resulted in one or more transitions (including self-transitions).
+    /// * `SendResult::NoMatch` if the event was ignored (e.g., no matching transition for the current state, or a guard condition prevented the transition).
+    /// * `SendResult::Error` if an error occurred during processing.
     /// _Note: This method is typically used directly in bare-metal or synchronous contexts. When using the Actor Model, events are usually sent via the mailbox (`try_send`/`send().await`)._
-    fn send(&mut self, event: Self::Event) -> bool;
+    fn send(&mut self, event: &Self::Event) -> SendResult;
 
     /// Returns the current active state of the state machine.
     fn state(&self) -> Self::State;
@@ -316,8 +317,8 @@ When an event is sent to the state machine via `send(event)`, the following proc
 3.  **Transition Selection**:
     *   **Priority**: Transitions defined on deeper (child) states take priority over transitions defined on ancestor (parent) states for the same event.
     *   **First Match**: If multiple transitions are defined on the *same* state for the same event (e.g., with different guards), the *first* one defined in the macro whose guard evaluates to `true` is chosen.
-    *   **No Match**: If no matching, unblocked transition is found in the current state or its ancestors, the event is considered unhandled, and the machine remains in its current state configuration. `send()` returns `false`.
-4.  **Transition Execution**: If a transition is selected, `send()` will return `true`, and the following steps execute in order:
+    *   **No Match**: If no matching, unblocked transition is found in the current state or its ancestors, the event is considered unhandled, and the machine remains in its current state configuration. `send()` returns `SendResult::NoMatch`.
+4.  **Transition Execution**: If a transition is selected, `send()` will return `SendResult::Transitioned`, and the following steps execute in order:
     *   **Exit Actions**: Execute exit actions (`exit => .action`) for all states being exited, starting from the deepest child state and moving upwards towards the least common ancestor (LCA) state of the source and target states.
     *   **Transition Actions**: Execute the action associated with the transition itself (`=> TARGET_STATE [action .action]`), if defined. This action receives `&mut Context`.
     *   **Enter Actions**: Execute entry actions (`entry => .action`) for all states being entered, starting from the state just below the LCA and moving downwards to the target state. If the target state is compound, its `initial:` state is entered recursively, triggering its entry actions as well.

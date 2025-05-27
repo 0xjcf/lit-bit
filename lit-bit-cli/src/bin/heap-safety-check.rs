@@ -20,11 +20,8 @@ struct GeigerPackageEntry {
 
 #[derive(Debug, Deserialize)]
 struct GeigerPackageInfo {
-    id: PackageId,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageId {
+    #[allow(dead_code)]
+    id: String,
     name: String,
 }
 
@@ -35,14 +32,19 @@ struct UnsafetyInfo {
 
 #[derive(Debug, Deserialize)]
 struct UnsafeStats {
+    #[serde(default)]
     functions: UnsafeCount,
+    #[serde(default)]
     exprs: UnsafeCount,
+    #[serde(rename = "impls", default)]
     item_impls: UnsafeCount,
+    #[serde(rename = "traits", default)]
     item_traits: UnsafeCount,
+    #[serde(default)]
     methods: UnsafeCount,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 struct UnsafeCount {
     #[serde(rename = "unsafe_")]
     unsafe_count: u64,
@@ -59,7 +61,7 @@ fn main() {
     let mut found_lit_bit_core = false;
 
     for package_entry in &report.packages {
-        let package_name = &package_entry.package.id.name;
+        let package_name = &package_entry.package.name;
         if package_name == "lit-bit-core" {
             found_lit_bit_core = true;
             let unsafety = &package_entry.unsafety.used;

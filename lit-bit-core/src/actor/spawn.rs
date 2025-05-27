@@ -1,7 +1,7 @@
 //! Actor spawning functions for Embassy and Tokio runtimes.
 
 #[cfg(all(not(feature = "std"), feature = "embassy"))]
-use super::{Actor, actor_task, create_mailbox};
+use super::{Actor, actor_task};
 
 #[cfg(feature = "std")]
 use super::{Actor, actor_task, create_mailbox};
@@ -21,20 +21,48 @@ async fn embassy_actor_task<A: Actor + 'static, const N: usize>(
 
 // Embassy spawning function (Task 3.2)
 #[cfg(all(not(feature = "std"), feature = "embassy"))]
+/// Spawns an actor on the Embassy executor using a statically allocated mailbox.
+///
+/// This function requires the caller to provide a static mailbox using the `static_mailbox!` macro.
+/// This ensures no heap allocation and gives users full control over memory placement.
+///
+/// # Arguments
+///
+/// * `spawner` - The Embassy spawner to use for spawning the actor task
+/// * `actor` - The actor instance to spawn
+/// * `outbox` - The producer end of a static mailbox (from `static_mailbox!`)
+/// * `inbox` - The consumer end of a static mailbox (from `static_mailbox!`)
+///
+/// # Returns
+///
+/// Returns `Ok(Address)` if the actor was successfully spawned, or `Err(embassy_executor::SpawnError)`
+/// if spawning failed (e.g., task arena is full).
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use embassy_executor::Spawner;
+/// use lit_bit_core::{actor::spawn_actor_embassy, static_mailbox};
+///
+/// fn spawn_my_actor(spawner: Spawner, actor: MyActor) -> Result<Address<MyMessage, 16>, embassy_executor::SpawnError> {
+///     let (outbox, inbox) = static_mailbox!(ACTOR_QUEUE: MyMessage, 16);
+///     spawn_actor_embassy(spawner, actor, outbox, inbox)
+/// }
+/// ```
 pub fn spawn_actor_embassy<A, const N: usize>(
     spawner: embassy_executor::Spawner,
     actor: A,
-) -> Address<A::Message, N>
+    outbox: super::Outbox<A::Message, N>,
+    inbox: super::Inbox<A::Message, N>,
+) -> Result<Address<A::Message, N>, embassy_executor::SpawnError>
 where
     A: Actor + 'static,
     A::Message: 'static,
 {
-    let (outbox, inbox) = create_mailbox::<A::Message, N>();
+    // Spawn the embassy task - return error instead of panicking
+    spawner.spawn(embassy_actor_task(actor, inbox))?;
 
-    // Spawn the embassy task
-    spawner.spawn(embassy_actor_task(actor, inbox)).unwrap();
-
-    Address::from_producer(outbox)
+    Ok(Address::from_producer(outbox))
 }
 
 // Tokio spawning function (Task 3.3)
@@ -72,39 +100,52 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(feature = "std")]
+    mod std_tests {
+        use super::super::{Actor, spawn_actor_tokio};
+        use std::sync::{Arc, Mutex};
 
-    struct TestActor {
-        counter: u32,
-    }
-
-    impl TestActor {
-        fn new() -> Self {
-            Self { counter: 0 }
+        struct TestActor {
+            counter: Arc<Mutex<u32>>,
         }
-    }
 
-    impl Actor for TestActor {
-        type Message = u32;
-
-        #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
-        fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
-            async move {
-                self.counter += msg;
+        impl TestActor {
+            fn new(counter: Arc<Mutex<u32>>) -> Self {
+                Self { counter }
             }
         }
-    }
 
-    #[cfg(feature = "std")]
-    #[tokio::test]
-    async fn spawn_tokio_works() {
-        let actor = TestActor::new();
-        let addr = spawn_actor_tokio::<_, 16>(actor);
+        impl Actor for TestActor {
+            type Message = u32;
 
-        // Test that we can send a message
-        addr.send(42).await.unwrap();
+            #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
+            fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
+                let counter = Arc::clone(&self.counter);
+                async move {
+                    let mut count = counter.lock().unwrap();
+                    *count += msg;
+                }
+            }
+        }
 
-        // Give the actor time to process
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        #[tokio::test]
+        async fn spawn_tokio_works() {
+            let shared_counter = Arc::new(Mutex::new(0u32));
+            let actor = TestActor::new(Arc::clone(&shared_counter));
+            let actor_address = spawn_actor_tokio::<_, 16>(actor);
+
+            // Test that we can send a message
+            actor_address.send(42).await.unwrap();
+
+            // Give the actor time to process the message
+            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+            // Verify that the message was processed by checking the counter
+            let final_count = *shared_counter.lock().unwrap();
+            assert_eq!(
+                final_count, 42,
+                "Actor should have processed the message and updated counter to 42"
+            );
+        }
     }
 }

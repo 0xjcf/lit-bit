@@ -40,7 +40,10 @@ pub mod embedded {
     ///
     /// # Errors
     /// Returns `SendError::Full(msg)` if the mailbox is full.
-    /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
+    ///
+    /// Note: `SendError::Closed` cannot occur with heapless queues as they
+    /// cannot detect if the consumer has been dropped. This variant is only
+    /// used for API consistency with the std implementation.
     pub fn try_send<T, const N: usize>(
         outbox: &mut Outbox<T, N>,
         item: T,
@@ -51,7 +54,7 @@ pub mod embedded {
     /// Check if the mailbox is full.
     #[must_use]
     pub fn is_full<T, const N: usize>(outbox: &Outbox<T, N>) -> bool {
-        outbox.len() >= outbox.capacity()
+        !outbox.ready()
     }
 
     /// Get the current number of messages in the mailbox.
@@ -62,8 +65,8 @@ pub mod embedded {
 
     /// Get the maximum capacity of the mailbox.
     #[must_use]
-    pub fn capacity<T, const N: usize>(_outbox: &Outbox<T, N>) -> usize {
-        N
+    pub fn capacity<T, const N: usize>(outbox: &Outbox<T, N>) -> usize {
+        outbox.capacity()
     }
 
     /// Try to receive a message without blocking.
@@ -101,7 +104,7 @@ pub mod std_async {
     ///
     /// # Errors
     /// Returns `SendError::Closed(msg)` if the receiver has been dropped.
-    pub async fn send<T, const N: usize>(
+    pub async fn send<T: Send + 'static, const N: usize>(
         outbox: &Outbox<T, N>,
         item: T,
     ) -> Result<(), SendError<T>> {
@@ -128,8 +131,10 @@ pub mod std_async {
 
     /// Get the maximum capacity of the mailbox.
     #[must_use]
-    pub fn capacity<T, const N: usize>(_outbox: &Outbox<T, N>) -> usize {
-        N
+    pub fn capacity<T, const N: usize>(outbox: &Outbox<T, N>) -> usize {
+        // For tokio channels, the capacity is the same as N
+        // but we should still call the method for consistency
+        outbox.max_capacity()
     }
 
     /// Receive a message with async waiting.
@@ -151,7 +156,7 @@ pub mod std_async {
 mod tests {
     extern crate alloc;
     use super::*;
-    use crate::actor::create_mailbox;
+
     use alloc::string::ToString;
 
     #[test]
@@ -166,7 +171,7 @@ mod tests {
     #[cfg(not(feature = "std"))]
     #[test]
     fn embedded_backpressure_fail_fast() {
-        let (mut outbox, _inbox): (Outbox<u32, 2>, _) = create_mailbox::<u32, 2>();
+        let (mut outbox, _inbox): (Outbox<u32, 2>, _) = crate::static_mailbox!(TEST_QUEUE: u32, 2);
 
         // Fill the mailbox (heapless queues can hold N-1 items)
         assert!(embedded::try_send::<u32, 2>(&mut outbox, 1).is_ok());
@@ -177,15 +182,32 @@ mod tests {
             Err(SendError::Full(2))
         ));
 
-        // Verify capacity info
-        assert_eq!(embedded::capacity::<u32, 2>(&outbox), 2);
+        // Verify capacity info (heapless capacity is N-1)
+        assert_eq!(embedded::capacity::<u32, 2>(&outbox), 1);
         assert!(embedded::is_full::<u32, 2>(&outbox));
+    }
+
+    #[cfg(not(feature = "std"))]
+    #[test]
+    fn test_capacity_fixed() {
+        let (outbox, _inbox): (Outbox<u32, 4>, _) = crate::static_mailbox!(CAPACITY_TEST: u32, 4);
+
+        // Test that our function now returns the correct capacity
+        let our_capacity = embedded::capacity::<u32, 4>(&outbox);
+        let actual_capacity = outbox.capacity();
+
+        // Both should return the same value now (N-1 for heapless)
+        assert_eq!(our_capacity, 3); // Our function now calls outbox.capacity()
+        assert_eq!(actual_capacity, 3); // Heapless returns N-1
+
+        // They should match now!
+        assert_eq!(our_capacity, actual_capacity);
     }
 
     #[cfg(feature = "std")]
     #[tokio::test]
     async fn std_backpressure_try_send() {
-        let (outbox, _inbox): (Outbox<u32, 2>, _) = create_mailbox::<u32, 2>();
+        let (outbox, _inbox): (Outbox<u32, 2>, _) = crate::actor::create_mailbox::<u32, 2>();
 
         // Fill the mailbox
         assert!(std_async::try_send::<u32, 2>(&outbox, 1).is_ok());

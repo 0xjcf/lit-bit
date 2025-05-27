@@ -7,7 +7,7 @@
 //! - Back-pressure handling
 
 use lit_bit_core::actor::{
-    Actor, ActorError, Inbox, Outbox, RestartStrategy, backpressure::SendError, create_mailbox,
+    Actor, ActorError, Inbox, Outbox, RestartStrategy, backpressure::SendError,
 };
 
 #[cfg(feature = "std")]
@@ -20,6 +20,12 @@ use lit_bit_core::actor::backpressure::embedded;
 use lit_bit_core::actor::backpressure::std_async;
 
 use core::panic::PanicInfo;
+
+// Import Vec for no_std environments
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
 
 /// Test actor for unit testing with configurable behavior
 #[derive(Debug)]
@@ -199,7 +205,7 @@ mod tests {
     #[test]
     fn embedded_mailbox_integration() {
         let (mut outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
-            create_mailbox::<TestEvent, 4>();
+            lit_bit_core::static_mailbox!(EMBEDDED_MAILBOX_TEST: TestEvent, 4);
 
         // Test sending and receiving
         assert!(embedded::try_send::<TestEvent, 4>(&mut outbox, TestEvent::Increment).is_ok());
@@ -234,7 +240,7 @@ mod tests {
     #[tokio::test]
     async fn std_mailbox_integration() {
         let (outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
-            create_mailbox::<TestEvent, 4>();
+            lit_bit_core::actor::create_mailbox::<TestEvent, 4>();
 
         // Test async sending and receiving
         assert!(
@@ -273,7 +279,8 @@ mod tests {
     #[cfg(not(feature = "std"))]
     #[test]
     fn embedded_backpressure_behavior() {
-        let (mut outbox, _inbox): (Outbox<u32, 2>, _) = create_mailbox::<u32, 2>();
+        let (mut outbox, _inbox): (Outbox<u32, 2>, _) =
+            lit_bit_core::static_mailbox!(EMBEDDED_BACKPRESSURE_TEST: u32, 2);
 
         // Fill mailbox to capacity (heapless queues can hold N-1 items)
         assert!(embedded::try_send::<u32, 2>(&mut outbox, 1).is_ok());
@@ -293,7 +300,8 @@ mod tests {
     #[cfg(feature = "std")]
     #[tokio::test]
     async fn std_backpressure_behavior() {
-        let (outbox, mut inbox): (Outbox<u32, 2>, _) = create_mailbox::<u32, 2>();
+        let (outbox, mut inbox): (Outbox<u32, 2>, _) =
+            lit_bit_core::actor::create_mailbox::<u32, 2>();
 
         // Fill mailbox to capacity
         assert!(std_async::try_send::<u32, 2>(&outbox, 1).is_ok());
@@ -328,7 +336,8 @@ mod tests {
     #[tokio::test]
     async fn actor_task_lifecycle() {
         let actor = TestActor::new();
-        let (outbox, inbox): (Outbox<TestEvent, 8>, _) = create_mailbox::<TestEvent, 8>();
+        let (outbox, inbox): (Outbox<TestEvent, 8>, _) =
+            lit_bit_core::actor::create_mailbox::<TestEvent, 8>();
 
         // Send some events before starting the task
         std_async::send::<TestEvent, 8>(&outbox, TestEvent::Increment)
@@ -352,7 +361,8 @@ mod tests {
         // For no_std, we can't easily test the full actor_task without an async runtime
         // So we just test the actor creation and basic functionality
         let actor = TestActor::new();
-        let (mut outbox, _inbox): (Outbox<TestEvent, 8>, _) = create_mailbox::<TestEvent, 8>();
+        let (mut outbox, _inbox): (Outbox<TestEvent, 8>, _) =
+            lit_bit_core::static_mailbox!(NOSTD_LIFECYCLE_TEST: TestEvent, 8);
 
         // Test that we can send events to the mailbox
         embedded::try_send::<TestEvent, 8>(&mut outbox, TestEvent::Increment).unwrap();
@@ -367,7 +377,8 @@ mod tests {
     #[tokio::test]
     async fn actor_task_start_failure() {
         let actor = TestActor::with_start_failure();
-        let (_outbox, inbox): (Outbox<TestEvent, 8>, _) = create_mailbox::<TestEvent, 8>();
+        let (_outbox, inbox): (Outbox<TestEvent, 8>, _) =
+            lit_bit_core::actor::create_mailbox::<TestEvent, 8>();
 
         let result = actor_task::<TestActor, 8>(actor, inbox).await;
         assert_eq!(result, Err(ActorError::StartupFailure));

@@ -23,7 +23,7 @@ lit-bit-macro = { workspace = true }
 
 # Optional dependencies for features (generally std-related or host tools)
 anyhow = { version = "1.0", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
+serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 thiserror = { version = "1.0", optional = true }
 tracing = { version = "0.1", optional = true }
@@ -58,6 +58,8 @@ cortex-m-rt = "0.7.5"
 [dev-dependencies]
 panic-halt = "1.0.0" # For no_std examples (both ARM and RISC-V if cfg-ed in example)
 tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] } # For async tests
+criterion = { version = "0.5", features = ["html_reports"] } # For performance benchmarking
+proptest = "1.4" # For property-based testing
 
 # Host-specific dev dependencies (for macOS aarch64 host)
 [target.aarch64-apple-darwin.dev-dependencies]
@@ -80,3 +82,12 @@ embassy = ["dep:embassy-futures", "dep:embassy-executor"] # Feature flag for Emb
 # async-std = ["async", "std", "dep:tokio"]
 
 debug-log = ["dep:log"]
+
+# Examples that require std feature
+[[example]]
+name = "actor_backpressure"
+required-features = ["std"]
+
+[[example]]
+name = "actor_statechart_integration"
+required-features = ["std"]

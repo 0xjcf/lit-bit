@@ -14,7 +14,7 @@ test: test-core test-macro
 # Test the core library
 test-core:
   @echo "🧪 Testing core library (lit-bit-core)..."
-  @cargo nextest run -p lit-bit-core
+  @cargo nextest run -p lit-bit-core --features std
 
 # Test the procedural macro crate
 test-macro:

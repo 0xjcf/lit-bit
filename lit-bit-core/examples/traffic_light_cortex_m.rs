@@ -15,7 +15,8 @@ struct DummyAlloc;
 #[cfg(target_arch = "arm")]
 unsafe impl core::alloc::GlobalAlloc for DummyAlloc {
     unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 {
-        core::ptr::null_mut()
+        // Panic immediately to prevent undefined behavior from null pointer dereference
+        panic!("DummyAlloc: heap allocation attempted in no_std context")
     }
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
 }

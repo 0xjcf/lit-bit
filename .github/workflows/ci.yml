@@ -38,9 +38,9 @@ jobs:
       if: matrix.toolchain == 'stable' # Only run feature matrix on stable
       run: cargo install cargo-hack --locked
 
-    - name: Test feature matrix (lit-bit-core only)
+    - name: Test feature matrix (workspace)
       if: matrix.toolchain == 'stable'
-      run: cd lit-bit-core && cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy
+      run: cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy --workspace
 
   embedded-targets:
     name: Embedded Targets
