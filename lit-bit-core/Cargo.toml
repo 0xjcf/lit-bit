@@ -73,7 +73,7 @@ once_cell = { version = "1.19.0", default-features = false, features = ["critica
 [features]
 default = [] # Keep default empty for no_std focus
 
-std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "dep:futures", "futures/std", "dep:tokio"]
+std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:serde_json", "dep:tracing", "dep:futures", "futures/std", "dep:tokio"]
 # The `async` feature requires `std` because tokio's runtime features (rt, time) require std
 async = ["std", "dep:async-trait", "dep:futures", "dep:tokio"]
 diagram = ["dep:serde"] # For serializing statechart structure

@@ -65,6 +65,75 @@ pub struct CalculatorStats {
     pub operation_count: u32,
 }
 
+impl CalculatorActor {
+    /// Private method that handles the core message processing logic.
+    /// This is the single source of truth for all calculator operations.
+    fn handle(&mut self, msg: CalcMessage) {
+        match msg {
+            CalcMessage::Add(n) => {
+                self.value = self.value.saturating_add(n);
+                self.operation_count += 1;
+                #[cfg(feature = "std")]
+                println!("➕ Added {}: result = {}", n, self.value);
+            }
+
+            CalcMessage::Subtract(n) => {
+                self.value = self.value.saturating_sub(n);
+                self.operation_count += 1;
+                #[cfg(feature = "std")]
+                println!("➖ Subtracted {}: result = {}", n, self.value);
+            }
+
+            CalcMessage::Multiply(n) => {
+                self.value = self.value.saturating_mul(n);
+                self.operation_count += 1;
+                #[cfg(feature = "std")]
+                println!("✖️  Multiplied by {}: result = {}", n, self.value);
+            }
+
+            CalcMessage::Divide(n) => {
+                if n != 0 {
+                    self.value /= n;
+                    self.operation_count += 1;
+                    #[cfg(feature = "std")]
+                    println!("➗ Divided by {}: result = {}", n, self.value);
+                } else {
+                    #[cfg(feature = "std")]
+                    println!("❌ Division by zero attempted - operation ignored");
+                }
+            }
+
+            CalcMessage::Reset => {
+                self.value = 0;
+                self.operation_count += 1;
+                #[cfg(feature = "std")]
+                println!("🔄 Calculator reset to 0");
+            }
+
+            #[cfg(feature = "std")]
+            CalcMessage::GetValue { reply_to } => {
+                let _ = reply_to.send(self.value);
+                #[cfg(feature = "std")]
+                println!("📊 Current value requested: {}", self.value);
+            }
+
+            #[cfg(feature = "std")]
+            CalcMessage::GetStats { reply_to } => {
+                let stats = CalculatorStats {
+                    current_value: self.value,
+                    operation_count: self.operation_count,
+                };
+                let _ = reply_to.send(stats);
+                #[cfg(feature = "std")]
+                println!(
+                    "📈 Stats requested: value={}, operations={}",
+                    self.value, self.operation_count
+                );
+            }
+        }
+    }
+}
+
 impl Actor for CalculatorActor {
     type Message = CalcMessage;
 
@@ -89,136 +158,14 @@ impl Actor for CalculatorActor {
     #[cfg(feature = "async")]
     fn on_event(&mut self, msg: CalcMessage) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
-            match msg {
-                CalcMessage::Add(n) => {
-                    self.value = self.value.saturating_add(n);
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("➕ Added {}: result = {}", n, self.value);
-                }
-
-                CalcMessage::Subtract(n) => {
-                    self.value = self.value.saturating_sub(n);
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("➖ Subtracted {}: result = {}", n, self.value);
-                }
-
-                CalcMessage::Multiply(n) => {
-                    self.value = self.value.saturating_mul(n);
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("✖️  Multiplied by {}: result = {}", n, self.value);
-                }
-
-                CalcMessage::Divide(n) => {
-                    if n != 0 {
-                        self.value /= n;
-                        self.operation_count += 1;
-                        #[cfg(feature = "std")]
-                        println!("➗ Divided by {}: result = {}", n, self.value);
-                    } else {
-                        #[cfg(feature = "std")]
-                        println!("❌ Division by zero attempted - operation ignored");
-                    }
-                }
-
-                CalcMessage::Reset => {
-                    self.value = 0;
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("🔄 Calculator reset to 0");
-                }
-
-                #[cfg(feature = "std")]
-                CalcMessage::GetValue { reply_to } => {
-                    let _ = reply_to.send(self.value);
-                    #[cfg(feature = "std")]
-                    println!("📊 Current value requested: {}", self.value);
-                }
-
-                #[cfg(feature = "std")]
-                CalcMessage::GetStats { reply_to } => {
-                    let stats = CalculatorStats {
-                        current_value: self.value,
-                        operation_count: self.operation_count,
-                    };
-                    let _ = reply_to.send(stats);
-                    #[cfg(feature = "std")]
-                    println!(
-                        "📈 Stats requested: value={}, operations={}",
-                        self.value, self.operation_count
-                    );
-                }
-            }
+            self.handle(msg);
         })
     }
 
     #[cfg(not(feature = "async"))]
     fn on_event(&mut self, msg: CalcMessage) -> impl core::future::Future<Output = ()> + Send {
         async move {
-            match msg {
-                CalcMessage::Add(n) => {
-                    self.value = self.value.saturating_add(n);
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("➕ Added {}: result = {}", n, self.value);
-                }
-
-                CalcMessage::Subtract(n) => {
-                    self.value = self.value.saturating_sub(n);
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("➖ Subtracted {}: result = {}", n, self.value);
-                }
-
-                CalcMessage::Multiply(n) => {
-                    self.value = self.value.saturating_mul(n);
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("✖️  Multiplied by {}: result = {}", n, self.value);
-                }
-
-                CalcMessage::Divide(n) => {
-                    if n != 0 {
-                        self.value /= n;
-                        self.operation_count += 1;
-                        #[cfg(feature = "std")]
-                        println!("➗ Divided by {}: result = {}", n, self.value);
-                    } else {
-                        #[cfg(feature = "std")]
-                        println!("❌ Division by zero attempted - operation ignored");
-                    }
-                }
-
-                CalcMessage::Reset => {
-                    self.value = 0;
-                    self.operation_count += 1;
-                    #[cfg(feature = "std")]
-                    println!("🔄 Calculator reset to 0");
-                }
-
-                #[cfg(feature = "std")]
-                CalcMessage::GetValue { reply_to } => {
-                    let _ = reply_to.send(self.value);
-                    #[cfg(feature = "std")]
-                    println!("📊 Current value requested: {}", self.value);
-                }
-
-                #[cfg(feature = "std")]
-                CalcMessage::GetStats { reply_to } => {
-                    let stats = CalculatorStats {
-                        current_value: self.value,
-                        operation_count: self.operation_count,
-                    };
-                    let _ = reply_to.send(stats);
-                    #[cfg(feature = "std")]
-                    println!(
-                        "📈 Stats requested: value={}, operations={}",
-                        self.value, self.operation_count
-                    );
-                }
-            }
+            self.handle(msg);
         }
     }
 }

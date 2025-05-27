@@ -2,6 +2,9 @@
 
 [![Heap/Unsafe-Free CI](https://img.shields.io/badge/heap--unsafe--free-checked-brightgreen?logo=rust&label=Heap%2FUnsafe%20Scan)](https://github.com/0xjcf/lit-bit/actions)
 
+![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/0xjcf/lit-bit)
+
+
 **`lit-bit` is a lightweight, procedural macro-driven statechart library for Rust, designed for correctness, ease of use, and suitability for embedded systems (`#![no_std]`) as well as general applications.**
 
 It aims to provide a similar developer experience to XState but within the Rust ecosystem, focusing on compile-time safety and minimal resource footprint for bare-metal targets like RISC-V and ARM Cortex-M.

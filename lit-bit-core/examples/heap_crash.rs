@@ -53,7 +53,7 @@ fn main() -> ! {
     loop {}
 }
 
-// Generic no_std main for other architectures (like thumbv7em, xtensa, etc.)
+// Generic no_std entry point for other architectures (like thumbv7em, xtensa, etc.)
 #[cfg(all(
     not(feature = "std"),
     not(target_arch = "riscv32"),
@@ -78,11 +78,13 @@ use panic_halt as _;
     not(target_arch = "riscv32"),
     not(target_arch = "arm")
 ))]
-fn main() {
+#[unsafe(no_mangle)]
+extern "C" fn _start() -> ! {
     // Attempt to allocate on the heap — should crash due to dummy allocator
     let _leaked = Box::leak(Box::new(9999u32));
-    // For architectures without a specific runtime, we just return
+    // For architectures without a specific runtime, we loop indefinitely
     // The allocation attempt above should have already caused a panic
+    loop {}
 }
 
 #[cfg(feature = "std")]

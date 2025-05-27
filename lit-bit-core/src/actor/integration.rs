@@ -1,7 +1,7 @@
 //! `StateMachine` integration examples showing how to implement Actor for statechart types.
 
 use super::Actor;
-use crate::StateMachine;
+use crate::{SendResult, StateMachine};
 
 /// Example showing how to implement Actor for any `StateMachine` type.
 /// This demonstrates the direct integration pattern from Task 1.4.
@@ -19,10 +19,27 @@ where
     #[cfg(feature = "async")]
     fn on_event(&mut self, event: Self::Message) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
-            // Direct forwarding to StateMachine::send
-            let _result = self.send(&event);
-            // In a real implementation, you might want to handle SendResult::Error
-            // or log the state transitions
+            // Forward event to StateMachine and handle the result
+            match self.send(&event) {
+                SendResult::Transitioned => {
+                    #[cfg(feature = "std")]
+                    tracing::debug!("State transition completed successfully");
+                }
+                SendResult::NoMatch => {
+                    #[cfg(feature = "std")]
+                    tracing::debug!("No matching transition found for event");
+                }
+                SendResult::Error(error) => {
+                    #[cfg(feature = "std")]
+                    tracing::error!("State transition error: {:?}", error);
+                    #[cfg(not(feature = "std"))]
+                    {
+                        // No logging available in no_std context
+                        // Errors are still handled but not logged
+                        let _ = error; // Suppress unused variable warning
+                    }
+                }
+            }
         })
     }
 
@@ -30,10 +47,27 @@ where
     #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
     fn on_event(&mut self, event: Self::Message) -> impl core::future::Future<Output = ()> + Send {
         async move {
-            // Direct forwarding to StateMachine::send
-            let _result = self.send(&event);
-            // In a real implementation, you might want to handle SendResult::Error
-            // or log the state transitions
+            // Forward event to StateMachine and handle the result
+            match self.send(&event) {
+                SendResult::Transitioned => {
+                    #[cfg(feature = "std")]
+                    tracing::debug!("State transition completed successfully");
+                }
+                SendResult::NoMatch => {
+                    #[cfg(feature = "std")]
+                    tracing::debug!("No matching transition found for event");
+                }
+                SendResult::Error(error) => {
+                    #[cfg(feature = "std")]
+                    tracing::error!("State transition error: {:?}", error);
+                    #[cfg(not(feature = "std"))]
+                    {
+                        // No logging available in no_std context
+                        // Errors are still handled but not logged
+                        let _ = error; // Suppress unused variable warning
+                    }
+                }
+            }
         }
     }
 }
@@ -130,5 +164,61 @@ mod tests {
 
         let machine = MockStateMachine::new();
         assert_actor(&machine); // This should compile without errors
+    }
+
+    // Mock state machine that can return errors for testing error handling
+    struct ErrorStateMachine {
+        should_error: bool,
+        context: (),
+    }
+
+    impl ErrorStateMachine {
+        fn new(should_error: bool) -> Self {
+            Self {
+                should_error,
+                context: (),
+            }
+        }
+    }
+
+    impl StateMachine for ErrorStateMachine {
+        type State = MockState;
+        type Event = MockEvent;
+        type Context = ();
+
+        fn send(&mut self, _event: &Self::Event) -> SendResult {
+            if self.should_error {
+                SendResult::Error(crate::runtime::ProcessingError::EntryLogicFailure)
+            } else {
+                SendResult::Transitioned
+            }
+        }
+
+        fn state(&self) -> heapless::Vec<Self::State, 4> {
+            let mut vec = Vec::new();
+            vec.push(MockState::Idle).unwrap();
+            vec
+        }
+
+        fn context(&self) -> &Self::Context {
+            &self.context
+        }
+
+        fn context_mut(&mut self) -> &mut Self::Context {
+            &mut self.context
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[tokio::test]
+    async fn error_handling_integration() {
+        // Test that error handling works without panicking
+        let mut error_machine = ErrorStateMachine::new(true);
+
+        // This should handle the error gracefully and not panic
+        error_machine.on_event(MockEvent::Start).await;
+
+        // Verify the machine is still functional
+        assert_eq!(error_machine.state()[0], MockState::Idle);
     }
 }
