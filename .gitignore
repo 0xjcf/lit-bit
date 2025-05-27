@@ -21,3 +21,10 @@ xtask/target/
 prompts/
 *.map
 .cursor/
+
+# Generated artifacts and logs (should not be in VCS)
+expand.log
+trace_parent_to_child.log
+sample_geiger_report.json
+*.coverage
+cargo-expand.diff
