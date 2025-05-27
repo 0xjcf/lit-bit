@@ -19,18 +19,27 @@ categories = ["embedded", "no-std", "algorithms"]
 # Core dependencies (keep minimal for no_std focus)
 # We might add `heapless` later if needed for no_std collections.
 heapless = { version = "0.8.0", default-features = false }
+static_cell = { version = "2.1.0", default-features = false }
 lit-bit-macro = { workspace = true }
+paste = "1.0"
 
 # Optional dependencies for features (generally std-related or host tools)
 anyhow = { version = "1.0", optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
-serde_json = { version = "1.0", default-features = false, features = ["alloc", "raw_value"], optional = true }
+serde_json = { version = "1.0", optional = true }
 thiserror = { version = "1.0", optional = true }
 tracing = { version = "0.1", optional = true }
 futures = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
 async-trait = { version = "0.1", optional = true }
-tokio = { version = "1.42", features = ["macros", "rt", "sync", "time"], optional = true }
+tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"], optional = true }
 log = { version = "0.4", optional = true }
+
+# Embassy dependencies for no_std async
+embassy-futures = { version = "0.1", optional = true }
+embassy-executor = { version = "0.6", optional = true }
+
+# Panic handler for no_std examples
+panic-halt = { version = "1.0.0", optional = true }
 
 # Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
 # MOVED TO TARGET-SPECIFIC BELOW
@@ -51,13 +60,15 @@ cortex-m-rt = "0.7.5"
 # panic-halt is a dev-dependency, examples will pick it up if cfg-ed for arm
 # cortex-m-semihosting could be added here if needed for Cortex-M examples
 
-[dev-dependencies]
-panic-halt = "1.0.0" # For no_std examples (both ARM and RISC-V if cfg-ed in example)
+# Target-specific dev dependencies to prevent heavy deps from leaking into embedded builds
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
 
-# Host-specific dev dependencies (for macOS aarch64 host)
-[target.aarch64-apple-darwin.dev-dependencies]
-cargo-nextest = "0.9"
-once_cell = { version = "1.19.0", default-features = false, features = ["critical-section"] }
+# Minimal dev dependencies for embedded targets
+[target.'cfg(target_os = "none")'.dev-dependencies]
+panic-halt = "1.0.0"
 
 # Dependencies for examples (if they need specific things not in main deps)
 # Example: `tokio` for running async examples if the main lib doesn't pull it by default.
@@ -65,12 +76,21 @@ once_cell = { version = "1.19.0", default-features = false, features = ["critica
 [features]
 default = [] # Keep default empty for no_std focus
 
-std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:tracing", "dep:futures", "futures/std"]
+std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:serde_json", "dep:tracing", "dep:futures", "futures/std", "dep:tokio"]
 # The `async` feature requires `std` because tokio's runtime features (rt, time) require std
 async = ["std", "dep:async-trait", "dep:futures", "dep:tokio"]
 diagram = ["dep:serde"] # For serializing statechart structure
+embassy = ["dep:embassy-futures", "dep:embassy-executor"] # Feature flag for Embassy executor support (temporarily excluded from CI due to generic task limitations)
 
 # Example of combining features for specific use cases:
 # async-std = ["async", "std", "dep:tokio"]
 
 debug-log = ["dep:log"]
+
+# Examples that require std feature
+[[example]]
+name = "actor_backpressure"
+required-features = ["std"]
+
+[[example]]
+name = "actor_statechart_integration"

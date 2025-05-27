@@ -1,6 +1,32 @@
-# Rust Agent project tasks
+# Lit-bit workspace automation tasks
 default:
   @just --list
+
+# --- New xtask-based commands ---
+# Run CI checks for all targets
+ci:
+  @cargo run --manifest-path xtask/Cargo.toml -- check-all
+
+# Run CI for a specific target
+ci-target target:
+  @cargo run --manifest-path xtask/Cargo.toml -- ci --target {{target}}
+
+# Run all tests via xtask
+test-all:
+  @cargo run --manifest-path xtask/Cargo.toml -- test
+
+# Run benchmarks in smoke mode
+bench-smoke:
+  @cargo run --manifest-path xtask/Cargo.toml -- bench --smoke
+
+# Run full benchmarks
+bench:
+  @cargo run --manifest-path xtask/Cargo.toml -- bench
+
+# Check that benchmarks compile
+bench-check:
+  @echo "🔍 Checking benchmark compilation..."
+  @cargo check -p lit-bit-bench
 
 # Target specific package for development runs if needed
 dev:
@@ -8,29 +34,36 @@ dev:
   @cargo run -p lit-bit-core
 
 # Top-level test runs all workspace tests
-test: test-core test-macro
+test: test-core test-macro test-integration
   @echo "All workspace tests completed."
 
-# Test the core library
+# Test the core library (unit tests only)
 test-core:
   @echo "🧪 Testing core library (lit-bit-core)..."
-  @cargo nextest run -p lit-bit-core
+  @cargo test -p lit-bit-core --lib --bins
 
 # Test the procedural macro crate
 test-macro:
   @echo "🔬 Testing procedural macro crate (lit-bit-macro)..."
   @cargo test -p lit-bit-macro
 
+# Test the integration test suite
+test-integration:
+  @echo "🔬 Testing integration test suite (lit-bit-tests)..."
+  @cargo test -p lit-bit-tests
+
+# Use xtask for comprehensive testing: just test-all
 test-summary:
   @cargo test 2>&1 | grep "test result"
 
 # --- Lint Tasks ---
-# Lint the entire workspace or a specific part (app parameter currently informational for workspace-wide script)
+# Comprehensive lint: includes pedantic warnings, all features, nightly check, AND CI-exact check
+# This is the most thorough check and will catch issues before they hit CI
 # Usage: just lint [fix] OR just lint <app_name> [fix]
 lint app='workspace' fix='':
   ./scripts/lint_app.sh {{app}} {{fix}}
 
-# Nightly-specific lint tasks for catching CI issues early
+# Nightly-specific lint with all features (more permissive than CI)
 lint-nightly app='workspace' fix='':
   #!/usr/bin/env bash
   set -e
@@ -48,6 +81,39 @@ lint-nightly app='workspace' fix='':
     cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
   fi
   echo "✅ Nightly clippy check complete."
+
+# CI-exact lint commands - matches exactly what CI runs (without --all-features)
+# Use this to catch issues that only appear in the CI environment
+# Usage: just lint-ci [stable|nightly]
+lint-ci toolchain='stable':
+  #!/usr/bin/env bash
+  set -e
+  echo "🤖 Running CI-exact clippy checks ({{toolchain}})..."
+  
+  if [[ "{{toolchain}}" == "nightly" ]]; then
+    if ! rustup toolchain list | grep -q "nightly"; then
+      echo "❌ Nightly toolchain not installed. Install with: rustup toolchain install nightly"
+      exit 1
+    fi
+    echo "🔍 Running nightly clippy (CI-exact)..."
+    cargo +nightly clippy --all-targets --workspace -- -D warnings
+  else
+    echo "🔍 Running stable clippy (CI-exact)..."
+    cargo clippy --all-targets --workspace -- -D warnings
+  fi
+  echo "✅ CI-exact clippy check complete."
+
+# Test feature matrix (matches CI exactly) - excludes embassy feature temporarily
+test-features:
+  #!/usr/bin/env bash
+  set -e
+  echo "🧪 Testing feature matrix (workspace)..."
+  if ! command -v cargo-hack &> /dev/null; then
+    echo "❌ cargo-hack not installed. Install with: cargo install cargo-hack --locked"
+    exit 1
+  fi
+  cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy --workspace
+  echo "✅ Feature matrix test complete."
 
 # Build all workspace members for release
 build:
@@ -76,8 +142,8 @@ kill-qemu:
 
 # Run the traffic_light example from lit-bit-core on RISC-V QEMU
 run-rv: kill-qemu
-  @echo "Running traffic_light example (from lit-bit-core) on RISC-V QEMU..."
-  @cargo run -p lit-bit-core --example traffic_light --target riscv32imac-unknown-none-elf --verbose
+  @echo "🚀 Running traffic_light example (RISC-V QEMU, no_std)..."
+  @cargo run -p lit-bit-core --example traffic_light --target riscv32imac-unknown-none-elf --no-default-features --release
 
 # --- Code Quality & Analysis ---
 coverage: # Coverage might also need --workspace or to target specific packages
@@ -87,8 +153,25 @@ coverage: # Coverage might also need --workspace or to target specific packages
   @printf '\nText summary for AI context:\n'
   @cargo llvm-cov report --text --output-dir target/llvm-cov # Path might change
 
+# Cortex-M size check with strict no_std build
 size-check-cortex-m:
-  @echo "🔍 Building and checking firmware size for Cortex-M example (from lit-bit-core)..."
-  @cargo build -p lit-bit-core --example traffic_light_cortex_m --target thumbv7m-none-eabi --release
-  @echo "\nSize report for traffic_light_cortex_m:"
+  @echo "🔍 Building traffic_light_cortex_m (no_std)..."
+  @cargo build -p lit-bit-core --example traffic_light_cortex_m --target thumbv7m-none-eabi --no-default-features --release
+  @echo "\n📏 Size report for traffic_light_cortex_m:"
   @cargo size -p lit-bit-core --example traffic_light_cortex_m --target thumbv7m-none-eabi --release -- -A
+
+# --- Heap Crash Canary (Optional Embedded Test) ---
+# This test builds and (optionally) runs the heap_crash example for riscv32.
+# It will crash at runtime if heap allocation is attempted, proving the dummy allocator is active.
+# Usage: just heap-crash-test-rv
+heap-crash-test-rv:
+  @echo "🚨 Building heap_crash example (RISC-V, no_std, dummy allocator)..."
+  @cargo build -p lit-bit-core --example heap_crash --target riscv32imac-unknown-none-elf --no-default-features --release
+  @echo "If you run this on QEMU or hardware, it should crash if heap allocation is attempted."
+  @echo "(Not run by default in CI; for manual/optional validation.)"
+
+heap-crash-test-cm:
+  @echo "🚨 Building heap_crash example (Cortex-M, no_std, dummy allocator)..."
+  @cargo build -p lit-bit-core --example heap_crash --target thumbv7m-none-eabi --no-default-features --release
+  @echo "If you run this on QEMU or hardware, it should crash if heap allocation is attempted."
+  @echo "(Not run by default in CI; for manual/optional validation.)"

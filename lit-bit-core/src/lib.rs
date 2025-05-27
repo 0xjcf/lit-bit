@@ -15,6 +15,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 #![cfg_attr(not(feature = "std"), no_std)]
+#![forbid(unsafe_code)]
 
 //! # Rust-Statechart
 //! A Rust library for building type-safe, Harel statecharts, inspired by `XState`.
@@ -40,9 +41,23 @@ pub use runtime::SendResult; // Re-export SendResult for public use
 pub use runtime::StateNode; // If users need to construct this manually
 pub use runtime::Transition; // If users need to construct this manually
 
+// Re-export key actor types for easier access
+pub use actor::address::Address;
+pub use actor::backpressure::SendError;
+#[cfg(feature = "std")]
+pub use actor::{Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, create_mailbox};
+#[cfg(not(feature = "std"))]
+pub use actor::{
+    Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, create_mailbox_safe,
+};
+
+// Note: static_mailbox macro is available directly from the crate root
+
 pub mod prelude {
     // pub use crate::StateMachine;
 }
+
+pub mod actor;
 
 pub trait StateMachine<const N_ACTIVE: usize = MAX_ACTIVE_REGIONS> {
     type State: Copy
@@ -62,4 +77,37 @@ pub trait StateMachine<const N_ACTIVE: usize = MAX_ACTIVE_REGIONS> {
     fn state(&self) -> heapless::Vec<Self::State, N_ACTIVE>;
     fn context(&self) -> &Self::Context;
     fn context_mut(&mut self) -> &mut Self::Context;
+}
+
+#[cfg(test)]
+mod re_export_tests {
+    //! Tests to verify that key actor types are properly re-exported at the top level
+
+    #[test]
+    fn actor_types_are_re_exported() {
+        // Test that we can import actor types directly from the crate root
+        use crate::{ActorError, RestartStrategy, SendError};
+
+        // Test that the types are accessible and have the expected properties
+        let error = ActorError::StartupFailure;
+        let strategy = RestartStrategy::OneForOne;
+        let send_error = SendError::Full(42u32);
+
+        // Verify that the types implement expected traits
+        assert_eq!(ActorError::StartupFailure, error);
+        assert_eq!(RestartStrategy::OneForOne, strategy);
+        assert_eq!(SendError::Full(42u32), send_error);
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn mailbox_types_are_re_exported() {
+        // Test that mailbox types and functions are re-exported
+        use crate::{Inbox, Outbox, create_mailbox};
+
+        let (_outbox, _inbox): (Outbox<u32>, Inbox<u32>) = create_mailbox::<u32>(4);
+
+        // This test just verifies the types are accessible
+        // Actual functionality is tested in the actor module tests
+    }
 }

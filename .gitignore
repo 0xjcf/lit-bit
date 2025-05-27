@@ -1,5 +1,6 @@
 # Standard Rust ignores
 /target/
+xtask/target/
 
 # Environment files
 .env*

@@ -29,10 +29,141 @@ jobs:
       run: cargo fmt --check
 
     - name: Run Clippy
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --all-targets --workspace -- -D warnings
 
-    - name: Run cargo check
-      run: cargo check --all-targets # Check lib, tests, examples if any
+    - name: Run cargo check (all targets)
+      run: cargo check --all-targets --workspace
+
+    - name: Install cargo-hack
+      if: matrix.toolchain == 'stable' # Only run feature matrix on stable
+      run: cargo install cargo-hack --locked
+
+    - name: Test feature matrix (workspace)
+      if: matrix.toolchain == 'stable'
+      run: cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy --workspace
+
+  embedded-targets:
+    name: Embedded Targets
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable) + Targets
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        targets: |
+          thumbv7m-none-eabi
+          riscv32imac-unknown-none-elf
+
+    - name: Check no_std builds (Cortex-M)
+      run: cd lit-bit-core && cargo check --target thumbv7m-none-eabi --no-default-features
+
+    - name: Check no_std builds (RISC-V)
+      run: cd lit-bit-core && cargo check --target riscv32imac-unknown-none-elf --no-default-features
+
+  heap-safety-scan:
+    name: Heap/Unsafe Scan (Strict for lit-bit-core only, Cortex-M)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable) + Targets
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        targets: |
+          thumbv7m-none-eabi
+          riscv32imac-unknown-none-elf
+
+    - name: Install cargo-geiger
+      run: cargo install cargo-geiger --locked
+
+    - name: Heap/Unsafe Scan (Strict for lit-bit-core only, Cortex-M)
+      run: |
+        # Run cargo-geiger from the lit-bit-core directory to avoid workspace issues
+        cd lit-bit-core
+        
+        # Run cargo-geiger and capture both stdout and stderr, but ignore warnings in exit code
+        set +e
+        cargo geiger --output-format Json --target thumbv7m-none-eabi --no-default-features > ../geiger_report.json 2>../geiger_warnings.log
+        geiger_exit_code=$?
+        set -e
+        
+        cd ..
+
+        # Show the warnings for debugging but don't fail on them
+        if [ -s geiger_warnings.log ]; then
+          echo "Geiger warnings (non-fatal):"
+          cat geiger_warnings.log
+        fi
+
+        # Check if geiger_report.json is empty or if geiger failed completely
+        if [ ! -s geiger_report.json ]; then
+          echo "❌ Cargo geiger failed to generate a report or generated an empty report"
+          echo "Exit code was: $geiger_exit_code"
+          if [ -s geiger_warnings.log ]; then
+            echo "Last few lines of warnings:"
+            tail -10 geiger_warnings.log
+          fi
+          exit 1
+        fi
+
+        echo "Generated geiger report:"
+        cat geiger_report.json
+        cargo run --bin heap-safety-check --package lit-bit-cli
+
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable)
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+
+    - name: Run core tests
+      run: cargo test -p lit-bit-core --lib --bins
+
+    - name: Run macro tests
+      run: cargo test -p lit-bit-macro
+
+    - name: Run integration tests
+      run: cargo test -p lit-bit-tests
+
+    - name: Check benchmarks compile
+      run: cargo check -p lit-bit-bench
+
+  xtask-automation:
+    name: Xtask Automation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable) + Targets
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        targets: |
+          thumbv7m-none-eabi
+          riscv32imac-unknown-none-elf
+
+    - name: Test xtask CI automation
+      run: cargo run --manifest-path xtask/Cargo.toml -- check-all
+
+    - name: Test benchmark smoke check
+      run: cargo run --manifest-path xtask/Cargo.toml -- bench --smoke
+
+  cli-run:
+    name: CLI Run Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable)
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+
+    - name: Test CLI run
+      run: cargo run --bin lit-bit-cli --package lit-bit-cli --all-features
 
   # Future jobs could include:
   # - cargo test

@@ -48,4 +48,15 @@ else
     echo "   Install with: rustup toolchain install nightly"
 fi
 
+# Also run CI-exact checks to catch issues that only appear without --all-features
+echo ""
+echo "🤖 Running CI-exact checks (without --all-features)..."
+if cargo clippy --all-targets --workspace -- -D warnings; then
+    echo "✅ CI-exact clippy passed!"
+else
+    echo "❌ CI-exact clippy failed - this will cause CI failures!"
+    echo "   This is the exact command CI runs: cargo clippy --all-targets --workspace -- -D warnings"
+    exit 1
+fi
+
 echo "✅ $ACTION_DESCRIPTION complete for $APP_NAME (workspace)." 
