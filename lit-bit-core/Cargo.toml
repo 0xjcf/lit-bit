@@ -56,16 +56,15 @@ cortex-m-rt = "0.7.5"
 # panic-halt is a dev-dependency, examples will pick it up if cfg-ed for arm
 # cortex-m-semihosting could be added here if needed for Cortex-M examples
 
-[dev-dependencies]
-panic-halt = "1.0.0" # For no_std examples (both ARM and RISC-V if cfg-ed in example)
-tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] } # For async tests
-criterion = { version = "0.5", features = ["html_reports"] } # For performance benchmarking
-proptest = "1.4" # For property-based testing
+# Target-specific dev dependencies to prevent heavy deps from leaking into embedded builds
+[target.'cfg(not(target_os = "none"))'.dev-dependencies]
+tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1.4"
 
-# Host-specific dev dependencies (for macOS aarch64 host)
-[target.aarch64-apple-darwin.dev-dependencies]
-cargo-nextest = "0.9"
-once_cell = { version = "1.19.0", default-features = false, features = ["critical-section"] }
+# Minimal dev dependencies for embedded targets
+[target.'cfg(target_os = "none")'.dev-dependencies]
+panic-halt = "1.0.0"
 
 # Dependencies for examples (if they need specific things not in main deps)
 # Example: `tokio` for running async examples if the main lib doesn't pull it by default.

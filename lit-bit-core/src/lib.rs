@@ -45,6 +45,8 @@ pub use actor::address::Address;
 pub use actor::backpressure::SendError;
 pub use actor::{Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, create_mailbox};
 
+// Note: static_mailbox macro is available directly from the crate root
+
 pub mod prelude {
     // pub use crate::StateMachine;
 }

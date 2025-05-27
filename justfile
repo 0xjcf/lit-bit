@@ -2,6 +2,27 @@
 default:
   @just --list
 
+# --- New xtask-based commands ---
+# Run CI checks for all targets
+ci:
+  @cargo run --manifest-path xtask/Cargo.toml -- check-all
+
+# Run CI for a specific target
+ci-target target:
+  @cargo run --manifest-path xtask/Cargo.toml -- ci --target {{target}}
+
+# Run all tests via xtask
+test-all:
+  @cargo run --manifest-path xtask/Cargo.toml -- test
+
+# Run benchmarks in smoke mode
+bench-smoke:
+  @cargo run --manifest-path xtask/Cargo.toml -- bench --smoke
+
+# Run full benchmarks
+bench:
+  @cargo run --manifest-path xtask/Cargo.toml -- bench
+
 # Target specific package for development runs if needed
 dev:
   @echo "Running lit-bit-core (main library) for development..."

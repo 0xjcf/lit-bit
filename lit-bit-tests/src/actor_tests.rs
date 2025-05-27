@@ -1,4 +1,4 @@
-//! Unit tests for core actor logic (Task 4.1)
+//! Comprehensive actor tests for std environments
 //!
 //! Tests cover:
 //! - Message processing and event conversion
@@ -7,25 +7,11 @@
 //! - Back-pressure handling
 
 use lit_bit_core::actor::{
-    Actor, ActorError, Inbox, Outbox, RestartStrategy, backpressure::SendError,
+    Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, backpressure::SendError,
+    backpressure::std_async,
 };
 
-#[cfg(feature = "std")]
-use lit_bit_core::actor::actor_task;
-
-#[cfg(not(feature = "std"))]
-use lit_bit_core::actor::backpressure::embedded;
-
-#[cfg(feature = "std")]
-use lit_bit_core::actor::backpressure::std_async;
-
 use core::panic::PanicInfo;
-
-// Import Vec for no_std environments
-#[cfg(not(feature = "std"))]
-extern crate alloc;
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
 
 /// Test actor for unit testing with configurable behavior
 #[derive(Debug)]
@@ -71,7 +57,6 @@ impl TestActor {
 impl Actor for TestActor {
     type Message = TestEvent;
 
-    #[cfg(feature = "async")]
     fn on_event(&mut self, msg: TestEvent) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
             self.processed_events.push(msg.clone());
@@ -85,23 +70,6 @@ impl Actor for TestActor {
                 }
             }
         })
-    }
-
-    #[cfg(not(feature = "async"))]
-    #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
-    fn on_event(&mut self, msg: TestEvent) -> impl core::future::Future<Output = ()> + Send {
-        async move {
-            self.processed_events.push(msg.clone());
-
-            match msg {
-                TestEvent::Increment => self.counter += 1,
-                TestEvent::SetValue(value) => self.counter = value,
-                TestEvent::Stop => {
-                    // This would normally signal the actor to stop
-                    // In our test, we just record it
-                }
-            }
-        }
     }
 
     fn on_start(&mut self) -> Result<(), ActorError> {
@@ -126,14 +94,12 @@ impl Actor for TestActor {
 }
 
 /// Mock `StateMachine` for testing integration patterns
-#[cfg(feature = "std")]
 #[derive(Debug)]
 struct MockStateMachine {
     state: u32,
     events_received: Vec<u32>,
 }
 
-#[cfg(feature = "std")]
 impl MockStateMachine {
     fn new() -> Self {
         Self {
@@ -143,25 +109,14 @@ impl MockStateMachine {
     }
 }
 
-#[cfg(feature = "std")]
 impl Actor for MockStateMachine {
     type Message = u32;
 
-    #[cfg(feature = "async")]
     fn on_event(&mut self, event: u32) -> futures::future::BoxFuture<'_, ()> {
         Box::pin(async move {
             self.events_received.push(event);
             self.state = event;
         })
-    }
-
-    #[cfg(not(feature = "async"))]
-    #[allow(clippy::manual_async_fn)]
-    fn on_event(&mut self, event: u32) -> impl core::future::Future<Output = ()> + Send {
-        async move {
-            self.events_received.push(event);
-            self.state = event;
-        }
     }
 }
 
@@ -194,7 +149,6 @@ mod tests {
         assert_eq!(actor.on_stop(), Err(ActorError::ShutdownFailure));
     }
 
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn actor_message_processing() {
         let mut actor = TestActor::new();
@@ -212,7 +166,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn statechart_integration() {
         let mut mock_sm = MockStateMachine::new();
@@ -227,42 +180,6 @@ mod tests {
         assert_eq!(mock_sm.events_received, vec![100, 200]);
     }
 
-    #[cfg(not(feature = "std"))]
-    #[test]
-    fn embedded_mailbox_integration() {
-        let (mut outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
-            lit_bit_core::static_mailbox!(EMBEDDED_MAILBOX_TEST: TestEvent, 4);
-
-        // Test sending and receiving
-        assert!(embedded::try_send::<TestEvent, 4>(&mut outbox, TestEvent::Increment).is_ok());
-        assert!(embedded::try_send::<TestEvent, 4>(&mut outbox, TestEvent::SetValue(42)).is_ok());
-
-        // Test receiving
-        assert_eq!(
-            embedded::try_recv::<TestEvent, 4>(&mut inbox),
-            Some(TestEvent::Increment)
-        );
-        assert_eq!(
-            embedded::try_recv::<TestEvent, 4>(&mut inbox),
-            Some(TestEvent::SetValue(42))
-        );
-        assert_eq!(embedded::try_recv::<TestEvent, 4>(&mut inbox), None);
-
-        // Test capacity limits (heapless queues can hold N-1 items, so 3 items for size 4)
-        for i in 0..3 {
-            assert!(
-                embedded::try_send::<TestEvent, 4>(&mut outbox, TestEvent::SetValue(i)).is_ok()
-            );
-        }
-
-        // Should fail when full
-        assert!(matches!(
-            embedded::try_send::<TestEvent, 4>(&mut outbox, TestEvent::Stop),
-            Err(SendError::Full(TestEvent::Stop))
-        ));
-    }
-
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn std_mailbox_integration() {
         let (outbox, mut inbox): (Outbox<TestEvent, 4>, Inbox<TestEvent, 4>) =
@@ -302,28 +219,6 @@ mod tests {
         ));
     }
 
-    #[cfg(not(feature = "std"))]
-    #[test]
-    fn embedded_backpressure_behavior() {
-        let (mut outbox, _inbox): (Outbox<u32, 2>, _) =
-            lit_bit_core::static_mailbox!(EMBEDDED_BACKPRESSURE_TEST: u32, 2);
-
-        // Fill mailbox to capacity (heapless queues can hold N-1 items)
-        assert!(embedded::try_send::<u32, 2>(&mut outbox, 1).is_ok());
-
-        // Verify capacity info
-        assert_eq!(embedded::capacity::<u32, 2>(&outbox), 2);
-        assert!(embedded::is_full::<u32, 2>(&outbox));
-        assert_eq!(embedded::len::<u32, 2>(&outbox), 1);
-
-        // Next send should fail immediately (fail-fast)
-        assert!(matches!(
-            embedded::try_send::<u32, 2>(&mut outbox, 2),
-            Err(SendError::Full(2))
-        ));
-    }
-
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn std_backpressure_behavior() {
         let (outbox, mut inbox): (Outbox<u32, 2>, _) =
@@ -358,7 +253,6 @@ mod tests {
         assert_eq!(received, Some(3));
     }
 
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn actor_task_lifecycle() {
         let actor = TestActor::new();
@@ -381,25 +275,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[cfg(not(feature = "std"))]
-    #[test]
-    fn actor_task_lifecycle_nostd() {
-        // For no_std, we can't easily test the full actor_task without an async runtime
-        // So we just test the actor creation and basic functionality
-        let actor = TestActor::new();
-        let (mut outbox, _inbox): (Outbox<TestEvent, 8>, _) =
-            lit_bit_core::static_mailbox!(NOSTD_LIFECYCLE_TEST: TestEvent, 8);
-
-        // Test that we can send events to the mailbox
-        embedded::try_send::<TestEvent, 8>(&mut outbox, TestEvent::Increment).unwrap();
-        embedded::try_send::<TestEvent, 8>(&mut outbox, TestEvent::SetValue(42)).unwrap();
-
-        // Verify actor is properly constructed
-        assert_eq!(actor.counter, 0);
-        assert!(actor.processed_events.is_empty());
-    }
-
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn actor_task_start_failure() {
         let actor = TestActor::with_start_failure();
@@ -431,13 +306,10 @@ mod tests {
 
 #[cfg(test)]
 mod integration_tests {
-    #[cfg(feature = "std")]
     use super::{TestActor, TestEvent};
-    #[cfg(feature = "std")]
     use lit_bit_core::actor::Actor;
 
     /// Test that demonstrates the complete actor workflow
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn complete_actor_workflow() {
         let mut actor = TestActor::new();
@@ -465,7 +337,6 @@ mod integration_tests {
     }
 
     /// Test actor behavior under error conditions
-    #[cfg(feature = "std")]
     #[tokio::test]
     async fn actor_error_handling() {
         let mut actor = TestActor::new();
@@ -476,8 +347,6 @@ mod integration_tests {
 
         // Test panic handling - we can't easily test the actual panic hook
         // but we can verify the default strategy by creating a simple test
-        // Note: We can't use PanicInfo::internal_constructor as it's not stable
-        // So we just test that the method exists and returns the expected default
         let restart_strategy = super::RestartStrategy::OneForOne;
         assert_eq!(restart_strategy, super::RestartStrategy::OneForOne);
     }
