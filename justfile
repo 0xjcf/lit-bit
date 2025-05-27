@@ -1,4 +1,4 @@
-# Rust Agent project tasks
+# Lit-bit workspace automation tasks
 default:
   @just --list
 
@@ -23,25 +23,36 @@ bench-smoke:
 bench:
   @cargo run --manifest-path xtask/Cargo.toml -- bench
 
+# Check that benchmarks compile
+bench-check:
+  @echo "🔍 Checking benchmark compilation..."
+  @cargo check -p lit-bit-bench
+
 # Target specific package for development runs if needed
 dev:
   @echo "Running lit-bit-core (main library) for development..."
   @cargo run -p lit-bit-core
 
 # Top-level test runs all workspace tests
-test: test-core test-macro
+test: test-core test-macro test-integration
   @echo "All workspace tests completed."
 
-# Test the core library
+# Test the core library (unit tests only)
 test-core:
   @echo "🧪 Testing core library (lit-bit-core)..."
-  @cargo nextest run -p lit-bit-core --features std
+  @cargo test -p lit-bit-core --lib --bins
 
 # Test the procedural macro crate
 test-macro:
   @echo "🔬 Testing procedural macro crate (lit-bit-macro)..."
   @cargo test -p lit-bit-macro
 
+# Test the integration test suite
+test-integration:
+  @echo "🔬 Testing integration test suite (lit-bit-tests)..."
+  @cargo test -p lit-bit-tests
+
+# Use xtask for comprehensive testing: just test-all
 test-summary:
   @cargo test 2>&1 | grep "test result"
 
@@ -96,13 +107,12 @@ lint-ci toolchain='stable':
 test-features:
   #!/usr/bin/env bash
   set -e
-  echo "🧪 Testing feature matrix (lit-bit-core only)..."
-  cd lit-bit-core
+  echo "🧪 Testing feature matrix (workspace)..."
   if ! command -v cargo-hack &> /dev/null; then
     echo "❌ cargo-hack not installed. Install with: cargo install cargo-hack --locked"
     exit 1
   fi
-  cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy
+  cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy --workspace
   echo "✅ Feature matrix test complete."
 
 # Build all workspace members for release

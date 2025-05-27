@@ -111,8 +111,36 @@ jobs:
       with:
         toolchain: stable
 
-    - name: Run tests
-      run: cargo test --workspace
+    - name: Run core tests
+      run: cargo test -p lit-bit-core --lib --bins
+
+    - name: Run macro tests
+      run: cargo test -p lit-bit-macro
+
+    - name: Run integration tests
+      run: cargo test -p lit-bit-tests
+
+    - name: Check benchmarks compile
+      run: cargo check -p lit-bit-bench
+
+  xtask-automation:
+    name: Xtask Automation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust (stable) + Targets
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
+        targets: |
+          thumbv7m-none-eabi
+          riscv32imac-unknown-none-elf
+
+    - name: Test xtask CI automation
+      run: cargo run --manifest-path xtask/Cargo.toml -- check-all
+
+    - name: Test benchmark smoke check
+      run: cargo run --manifest-path xtask/Cargo.toml -- bench --smoke
 
   cli-run:
     name: CLI Run Test
