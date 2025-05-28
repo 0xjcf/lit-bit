@@ -32,7 +32,7 @@ impl<T: core::fmt::Debug> std::error::Error for SendError<T> {}
 ///
 /// Uses fail-fast semantics: operations return immediately with error if mailbox is full.
 /// This prevents blocking in resource-constrained embedded environments.
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 pub mod embedded {
     use super::{Inbox, Outbox, SendError};
 
@@ -94,7 +94,7 @@ pub mod embedded {
 ///
 /// Uses async back-pressure: operations await when mailbox is full, providing
 /// natural flow control in async environments.
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub mod std_async {
     use super::{Inbox, Outbox, SendError};
 
@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(error.to_string(), "receiver has been dropped");
     }
 
-    #[cfg(not(feature = "std"))]
+    #[cfg(not(feature = "async-tokio"))]
     #[test]
     fn embedded_backpressure_fail_fast() {
         let (mut outbox, _inbox): (Outbox<u32, 2>, _) = crate::static_mailbox!(TEST_QUEUE: u32, 2);
@@ -184,7 +184,7 @@ mod tests {
         assert!(embedded::is_full::<u32, 2>(&outbox));
     }
 
-    #[cfg(not(feature = "std"))]
+    #[cfg(not(feature = "async-tokio"))]
     #[test]
     fn test_capacity_fixed() {
         let (outbox, _inbox): (Outbox<u32, 4>, _) = crate::static_mailbox!(CAPACITY_TEST: u32, 4);
@@ -201,7 +201,7 @@ mod tests {
         assert_eq!(our_capacity, actual_capacity);
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(feature = "async-tokio")]
     #[tokio::test]
     async fn std_backpressure_try_send() {
         let (outbox, _inbox): (Outbox<u32>, _) = crate::actor::create_mailbox::<u32>(2);

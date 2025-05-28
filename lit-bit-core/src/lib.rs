@@ -44,12 +44,16 @@ pub use runtime::Transition; // If users need to construct this manually
 // Re-export key actor types for easier access
 pub use actor::address::Address;
 pub use actor::backpressure::SendError;
-#[cfg(feature = "std")]
-pub use actor::{Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, create_mailbox};
-#[cfg(not(feature = "std"))]
-pub use actor::{
-    Actor, ActorError, Inbox, Outbox, RestartStrategy, actor_task, create_mailbox_safe,
-};
+
+// Re-export actor types that are always available
+pub use actor::{Actor, ActorError, RestartStrategy, actor_task};
+
+// Re-export mailbox types based on feature flags
+#[cfg(feature = "async-tokio")]
+pub use actor::{Inbox, Outbox, create_mailbox};
+
+#[cfg(not(feature = "async-tokio"))]
+pub use actor::{Inbox, Outbox, create_mailbox_safe};
 
 // Note: static_mailbox macro is available directly from the crate root
 

@@ -2,13 +2,13 @@
 
 use super::backpressure::SendError;
 
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 pub struct Address<Event: 'static, const N: usize> {
     sender: heapless::spsc::Producer<'static, Event, N>,
     _phantom: core::marker::PhantomData<Event>,
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 impl<Event: 'static, const N: usize> Address<Event, N> {
     /// Create an Address from a heapless producer.
     #[must_use]
@@ -34,7 +34,7 @@ mod tests {
     fn address_type_sanity() {
         // TDD: Address<Event> can be constructed and is type-safe
         // This test is only meaningful for the heapless variant
-        #[cfg(not(feature = "std"))]
+        #[cfg(not(feature = "async-tokio"))]
         {
             use super::Address;
             const CAP: usize = 2;
@@ -44,7 +44,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, not(feature = "std")))]
+#[cfg(all(test, not(feature = "async-tokio")))]
 mod nostd_tests {
     use super::Address;
 
@@ -59,18 +59,18 @@ mod nostd_tests {
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 #[derive(Debug)]
 pub enum SpawnChildError {
     MutexPoisoned,
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub struct ActorCell<Event> {
     _phantom: std::marker::PhantomData<Event>,
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub struct Address<Event> {
     sender: tokio::sync::mpsc::Sender<Event>,
     actor_id: usize, // Placeholder for ActorId type
@@ -79,7 +79,7 @@ pub struct Address<Event> {
     cell: std::sync::Arc<ActorCell<Event>>, // For test access
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 impl<Event> Address<Event> {
     /// Create an Address from an Arc<ActorCell>.
     ///
@@ -197,7 +197,7 @@ impl<Event> Address<Event> {
     }
 }
 
-#[cfg(all(test, feature = "std"))]
+#[cfg(all(test, feature = "async-tokio"))]
 mod std_hierarchy_tests {
     use super::*;
     #[test]
