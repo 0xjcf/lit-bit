@@ -49,7 +49,13 @@ if [[ -n "$progress_staged" ]]; then
   
   for file in $progress_staged; do
     if [[ -f "$file" ]]; then
-      # Check for required sections
+      # Skip validation for README.md as it's an index file, not a daily progress log
+      if [[ "$(basename "$file")" == "README.md" ]]; then
+        echo "✓ $file (index file - skipping format validation)" >&2
+        continue
+      fi
+      
+      # Check for required sections (only for daily progress files)
       if ! grep -q "## Session Summary" "$file"; then
         echo "ERROR: $file missing '## Session Summary' section" >&2
         exit 1

@@ -92,16 +92,19 @@ enum ActorMessage {
 
 impl lit_bit_core::actor::Actor for TestActor {
     type Message = ActorMessage;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
-    fn on_event(&mut self, msg: ActorMessage) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            match msg {
-                ActorMessage::Increment => self.counter += 1,
-                ActorMessage::GetCount { reply_to } => {
-                    let _ = reply_to.send(self.counter);
-                }
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        match msg {
+            ActorMessage::Increment => self.counter += 1,
+            ActorMessage::GetCount { reply_to } => {
+                let _ = reply_to.send(self.counter);
             }
-        })
+        }
+        core::future::ready(())
     }
 }
 
@@ -121,13 +124,11 @@ async fn test_actor_mailbox_integration() {
     // Receive and process the message
     if let Some(msg) = inbox.recv().await {
         let mut actor = TestActor { counter: 0 };
-        actor.on_event(msg).await;
+        actor.handle(msg).await;
 
         // Verify the actor processed the message
         let (tx, rx) = oneshot::channel();
-        actor
-            .on_event(ActorMessage::GetCount { reply_to: tx })
-            .await;
+        actor.handle(ActorMessage::GetCount { reply_to: tx }).await;
         let count = rx.await.unwrap();
         assert_eq!(count, 1);
     }
@@ -161,16 +162,19 @@ enum TokioMessage {
 
 impl lit_bit_core::actor::Actor for TokioTestActor {
     type Message = TokioMessage;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
-    fn on_event(&mut self, msg: TokioMessage) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            match msg {
-                TokioMessage::Process => self.processed_count += 1,
-                TokioMessage::GetCount { reply_to } => {
-                    let _ = reply_to.send(self.processed_count);
-                }
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        match msg {
+            TokioMessage::Process => self.processed_count += 1,
+            TokioMessage::GetCount { reply_to } => {
+                let _ = reply_to.send(self.processed_count);
             }
-        })
+        }
+        core::future::ready(())
     }
 }
 

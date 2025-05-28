@@ -41,9 +41,6 @@ use panic_halt as _;
 
 use lit_bit_core::actor::{Actor, ActorError};
 
-#[cfg(feature = "std")]
-use std::time::Duration;
-
 /// A simple counter actor that processes messages with configurable delay
 #[derive(Debug)]
 pub struct CounterActor {
@@ -89,6 +86,10 @@ pub struct CounterStats {
 
 impl Actor for CounterActor {
     type Message = CounterMessage;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
     fn on_start(&mut self) -> Result<(), ActorError> {
         #[cfg(feature = "std")]
@@ -99,116 +100,54 @@ impl Actor for CounterActor {
         Ok(())
     }
 
-    #[cfg(feature = "async")]
-    fn on_event(&mut self, msg: CounterMessage) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            // Simulate processing delay
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        // Note: For simplicity in this example, we're using sync processing
+        // In a real async scenario, you'd use async operations here
+        match msg {
+            CounterMessage::Increment => {
+                self.count += 1;
+                self.processed_messages += 1;
+                #[cfg(feature = "std")]
+                println!("➕ Count: {}", self.count);
+            }
+
+            CounterMessage::Decrement => {
+                self.count = self.count.saturating_sub(1);
+                self.processed_messages += 1;
+                #[cfg(feature = "std")]
+                println!("➖ Count: {}", self.count);
+            }
+
+            CounterMessage::Add(n) => {
+                self.count = self.count.saturating_add(n);
+                self.processed_messages += 1;
+                #[cfg(feature = "std")]
+                println!("➕ Added {}, Count: {}", n, self.count);
+            }
+
+            CounterMessage::Reset => {
+                self.count = 0;
+                self.processed_messages += 1;
+                #[cfg(feature = "std")]
+                println!("🔄 Count reset to 0");
+            }
+
             #[cfg(feature = "std")]
-            if self.processing_delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(u64::from(self.processing_delay_ms)))
-                    .await;
+            CounterMessage::GetCount { reply_to } => {
+                let _ = reply_to.send(self.count);
             }
 
-            match msg {
-                CounterMessage::Increment => {
-                    self.count += 1;
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("➕ Count: {}", self.count);
-                }
-
-                CounterMessage::Decrement => {
-                    self.count = self.count.saturating_sub(1);
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("➖ Count: {}", self.count);
-                }
-
-                CounterMessage::Add(n) => {
-                    self.count = self.count.saturating_add(n);
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("➕ Added {}, Count: {}", n, self.count);
-                }
-
-                CounterMessage::Reset => {
-                    self.count = 0;
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("🔄 Count reset to 0");
-                }
-
-                #[cfg(feature = "std")]
-                CounterMessage::GetCount { reply_to } => {
-                    let _ = reply_to.send(self.count);
-                }
-
-                #[cfg(feature = "std")]
-                CounterMessage::GetStats { reply_to } => {
-                    let stats = CounterStats {
-                        current_count: self.count,
-                        processed_messages: self.processed_messages,
-                    };
-                    let _ = reply_to.send(stats);
-                }
-            }
-        })
-    }
-
-    #[cfg(not(feature = "async"))]
-    fn on_event(&mut self, msg: CounterMessage) -> impl core::future::Future<Output = ()> + Send {
-        async move {
-            // Simulate processing delay
             #[cfg(feature = "std")]
-            if self.processing_delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(u64::from(self.processing_delay_ms)))
-                    .await;
-            }
-
-            match msg {
-                CounterMessage::Increment => {
-                    self.count += 1;
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("➕ Count: {}", self.count);
-                }
-
-                CounterMessage::Decrement => {
-                    self.count = self.count.saturating_sub(1);
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("➖ Count: {}", self.count);
-                }
-
-                CounterMessage::Add(n) => {
-                    self.count = self.count.saturating_add(n);
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("➕ Added {}, Count: {}", n, self.count);
-                }
-
-                CounterMessage::Reset => {
-                    self.count = 0;
-                    self.processed_messages += 1;
-                    #[cfg(feature = "std")]
-                    println!("🔄 Count reset to 0");
-                }
-
-                #[cfg(feature = "std")]
-                CounterMessage::GetCount { reply_to } => {
-                    let _ = reply_to.send(self.count);
-                }
-
-                #[cfg(feature = "std")]
-                CounterMessage::GetStats { reply_to } => {
-                    let stats = CounterStats {
-                        current_count: self.count,
-                        processed_messages: self.processed_messages,
-                    };
-                    let _ = reply_to.send(stats);
-                }
+            CounterMessage::GetStats { reply_to } => {
+                let stats = CounterStats {
+                    current_count: self.count,
+                    processed_messages: self.processed_messages,
+                };
+                let _ = reply_to.send(stats);
             }
         }
+
+        core::future::ready(())
     }
 }
 
@@ -249,9 +188,9 @@ mod tests {
         // Test message processing
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            counter.on_event(CounterMessage::Add(5)).await;
-            counter.on_event(CounterMessage::Increment).await;
-            counter.on_event(CounterMessage::Decrement).await;
+            counter.handle(CounterMessage::Add(5)).await;
+            counter.handle(CounterMessage::Increment).await;
+            counter.handle(CounterMessage::Decrement).await;
 
             assert_eq!(counter.count, 5); // 0 + 5 + 1 - 1 = 5
             assert_eq!(counter.processed_messages, 3);

@@ -1,16 +1,19 @@
 //! Actor spawning functions for Embassy and Tokio runtimes.
 
-#[cfg(all(not(feature = "std"), feature = "embassy"))]
+#[cfg(all(not(feature = "async-tokio"), feature = "embassy"))]
 use super::{Actor, actor_task};
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 use super::{Actor, actor_task, create_mailbox};
 
-#[cfg(any(all(not(feature = "std"), feature = "embassy"), feature = "std"))]
+#[cfg(any(
+    all(not(feature = "async-tokio"), feature = "embassy"),
+    feature = "async-tokio"
+))]
 use super::address::Address;
 
 // Embassy task for running actors (must be at top level)
-#[cfg(all(not(feature = "std"), feature = "embassy"))]
+#[cfg(all(not(feature = "async-tokio"), feature = "embassy"))]
 #[embassy_executor::task]
 async fn embassy_actor_task<A: Actor + 'static, const N: usize>(
     actor: A,
@@ -20,7 +23,7 @@ async fn embassy_actor_task<A: Actor + 'static, const N: usize>(
 }
 
 // Embassy spawning function (Task 3.2)
-#[cfg(all(not(feature = "std"), feature = "embassy"))]
+#[cfg(all(not(feature = "async-tokio"), feature = "embassy"))]
 /// Spawns an actor on the Embassy executor using a statically allocated mailbox.
 ///
 /// This function requires the caller to provide a static mailbox using the `static_mailbox!` macro.
@@ -66,7 +69,7 @@ where
 }
 
 // Tokio spawning function (Task 3.3)
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub fn spawn_actor_tokio<A>(actor: A, capacity: usize) -> Address<A::Message>
 where
     A: Actor + Send + 'static,
@@ -100,8 +103,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "std")]
-    mod std_tests {
+    #[cfg(feature = "async-tokio")]
+    mod tokio_tests {
         use super::super::{Actor, spawn_actor_tokio};
         use std::sync::{Arc, Mutex};
 
@@ -117,24 +120,15 @@ mod tests {
 
         impl Actor for TestActor {
             type Message = u32;
+            type Future<'a>
+                = core::future::Ready<()>
+            where
+                Self: 'a;
 
-            #[cfg(feature = "async")]
-            fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
-                let counter = Arc::clone(&self.counter);
-                Box::pin(async move {
-                    let mut count = counter.lock().unwrap();
-                    *count += msg;
-                })
-            }
-
-            #[cfg(not(feature = "async"))]
-            #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
-            fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
-                let counter = Arc::clone(&self.counter);
-                async move {
-                    let mut count = counter.lock().unwrap();
-                    *count += msg;
-                }
+            fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+                let mut count = self.counter.lock().unwrap();
+                *count += msg;
+                core::future::ready(())
             }
         }
 
