@@ -43,7 +43,7 @@ pub enum RestartStrategy {
 ///
 /// ```rust,no_run
 /// use lit_bit_core::actor::Actor;
-/// use core::future::Future;
+/// use core::future::Ready;
 ///
 /// struct MyActor {
 ///     counter: u32,
@@ -51,13 +51,12 @@ pub enum RestartStrategy {
 ///
 /// impl Actor for MyActor {
 ///     type Message = u32;
-///     type Future<'a> = impl Future<Output = ()> + 'a where Self: 'a;
+///     type Future<'a> = Ready<()> where Self: 'a;
 ///
-///     fn handle<'a>(&'a mut self, msg: Self::Message) -> Self::Future<'a> {
-///         async move {
-///             self.counter += msg;
-///             // Async operations can be awaited here
-///         }
+///     fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+///         self.counter += msg;
+///         // For sync operations, use core::future::ready()
+///         core::future::ready(())
 ///     }
 /// }
 /// ```
