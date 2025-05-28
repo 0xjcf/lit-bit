@@ -83,6 +83,7 @@ struct TestActor {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum ActorMessage {
     Increment,
     GetCount {
@@ -153,6 +154,7 @@ struct TokioTestActor {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 enum TokioMessage {
     Process,
     GetCount {

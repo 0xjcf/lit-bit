@@ -135,12 +135,15 @@ fn action_establish_connection(context: &mut ConnectionContext, event: &Connecti
 }
 
 fn action_close_connection(context: &mut ConnectionContext, event: &ConnectionEvent) {
-    if let ConnectionEvent::Disconnect { client_id } = event {
+    if let ConnectionEvent::Disconnect {
+        client_id: _client_id,
+    } = event
+    {
         #[cfg(feature = "std")]
         {
-            let connection_id = format!("conn_{client_id}");
+            let connection_id = format!("conn_{_client_id}");
             if context.remove_connection(&connection_id) {
-                println!("❌ Connection closed for client {client_id}");
+                println!("❌ Connection closed for client {_client_id}");
             }
         }
         #[cfg(not(feature = "std"))]
@@ -153,9 +156,12 @@ fn action_close_connection(context: &mut ConnectionContext, event: &ConnectionEv
 }
 
 fn action_handle_heartbeat(_context: &mut ConnectionContext, event: &ConnectionEvent) {
-    if let ConnectionEvent::Heartbeat { client_id } = event {
+    if let ConnectionEvent::Heartbeat {
+        client_id: _client_id,
+    } = event
+    {
         #[cfg(feature = "std")]
-        println!("💓 Heartbeat received from client {client_id}");
+        println!("💓 Heartbeat received from client {_client_id}");
     }
 }
 
@@ -186,10 +192,10 @@ fn action_increment_failures_and_handle_error(
 }
 
 fn action_shutdown_all(context: &mut ConnectionContext, _event: &ConnectionEvent) {
-    let count = context.active_connections.len();
+    let _count = context.active_connections.len();
     context.active_connections.clear();
     #[cfg(feature = "std")]
-    println!("🛑 Shutting down all {count} active connections");
+    println!("🛑 Shutting down all {_count} active connections");
 }
 
 // Guard functions

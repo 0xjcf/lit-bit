@@ -12,7 +12,7 @@
 
 use lit_bit_core::actor::{Actor, ActorError};
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 use lit_bit_core::actor::spawn_actor_tokio;
 
 #[cfg(feature = "std")]
@@ -165,7 +165,7 @@ impl Actor for CalculatorActor {
     }
 }
 
-#[cfg(feature = "std")]
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎯 Basic Actor Example: Calculator");
@@ -228,18 +228,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(not(all(feature = "async-tokio", not(feature = "async-embassy"))))]
 fn main() {
     // For no_std targets, this would typically be an embassy-based main
     // or integrated into a larger embedded application
-    panic!("This example requires std feature for demonstration purposes");
+    panic!(
+        "This example requires async-tokio feature (without async-embassy) for demonstration purposes"
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
     #[tokio::test]
     async fn test_calculator_basic_operations() {
         let calculator = CalculatorActor::new(0);
@@ -266,7 +268,7 @@ mod tests {
         assert_eq!(value, 30);
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
     #[tokio::test]
     async fn test_calculator_division_by_zero() {
         let calculator = CalculatorActor::new(10);
@@ -283,7 +285,7 @@ mod tests {
         assert_eq!(value, 10); // Value should be unchanged
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
     #[tokio::test]
     async fn test_calculator_reset() {
         let calculator = CalculatorActor::new(42);
@@ -300,7 +302,7 @@ mod tests {
         assert_eq!(value, 0);
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
     #[tokio::test]
     async fn test_calculator_operation_count() {
         let calculator = CalculatorActor::new(0);

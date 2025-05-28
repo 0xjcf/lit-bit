@@ -34,12 +34,14 @@ async-trait = { version = "0.1", optional = true }
 tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"], optional = true }
 log = { version = "0.4", optional = true }
 
-# Embassy dependencies for no_std async
-embassy-futures = { version = "0.1", optional = true }
-embassy-executor = { version = "0.6", optional = true }
-
 # Panic handler for no_std examples
 panic-halt = { version = "1.0.0", optional = true }
+
+# Embassy dependencies for no_std async
+embassy-futures = { version = "0.1", optional = true }
+embassy-executor = { version = "0.6", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "integrated-timers"], optional = true }
+embassy-sync = { version = "0.6", optional = true }
+embassy-time = { version = "0.3", optional = true }
 
 # Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
 # MOVED TO TARGET-SPECIFIC BELOW
@@ -84,10 +86,13 @@ diagram = ["dep:serde"] # For serializing statechart structure
 # Async features (Phase 5 implementation)
 async = [] # Umbrella feature for async support (no dependencies by itself)
 async-tokio = ["async", "std", "dep:async-trait", "dep:futures", "dep:tokio"] # Tokio runtime integration
-async-embassy = ["async", "dep:embassy-futures", "dep:embassy-executor"] # Embassy runtime integration
+async-embassy = ["async", "dep:embassy-futures", "dep:embassy-executor", "dep:embassy-sync", "dep:embassy-time"] # Embassy runtime integration
 
 # Legacy compatibility (will be deprecated in v0.2)
 embassy = ["async-embassy"] # Alias for backward compatibility
+
+# Examples panic handler feature
+panic-halt = ["dep:panic-halt"]
 
 debug-log = ["dep:log"]
 
@@ -98,3 +103,20 @@ required-features = ["std"]
 
 [[example]]
 name = "actor_statechart_integration"
+
+[[example]]
+name = "embassy_actor_simple"
+required-features = ["async-embassy", "debug-log"]
+
+# Examples that need panic handlers for no_std
+[[example]]
+name = "heap_crash"
+required-features = ["panic-halt"]
+
+[[example]]
+name = "actor_simple_usage"
+required-features = ["panic-halt"]
+
+[[example]]
+name = "external_events"
+required-features = ["std"]

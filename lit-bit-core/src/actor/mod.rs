@@ -419,13 +419,18 @@ async fn yield_control() {
 /// # Errors
 /// Returns `ActorError` if actor startup, shutdown, or message processing fails.
 #[allow(unreachable_code)] // no_std path has infinite loop, cleanup only reachable on std
-#[cfg(not(feature = "async-tokio"))]
+#[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
 pub async fn actor_task<A: Actor, const N: usize>(
     mut actor: A,
     mut inbox: Inbox<A::Message, N>,
 ) -> Result<(), ActorError> {
     // Startup hook
-    actor.on_start()?;
+    let startup_result = actor.on_start();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = startup_result {
+        log::error!("Actor startup failed: {e:?}");
+    }
+    startup_result?;
 
     // Main processing loop (Ector pattern)
     loop {
@@ -449,7 +454,88 @@ pub async fn actor_task<A: Actor, const N: usize>(
     // Cleanup hook (unreachable in no_std)
     #[allow(unreachable_code)]
     {
-        actor.on_stop()?;
+        let stop_result = actor.on_stop();
+        #[cfg(feature = "debug-log")]
+        if let Err(ref e) = stop_result {
+            log::error!("Actor shutdown failed: {e:?}");
+        }
+        stop_result?;
+        Ok(())
+    }
+}
+
+/// Runs an actor's message processing loop (Embassy version).
+///
+/// This function implements the Embassy-specific actor task that integrates with
+/// Embassy's channel system and cooperative scheduler. It follows Embassy 0.6
+/// best practices for message processing and task lifecycle management.
+///
+/// ## Embassy Integration
+///
+/// - Uses `embassy_sync::channel::Receiver` for message reception
+/// - Integrates with Embassy's cooperative task scheduler
+/// - Provides deterministic message processing (one at a time)
+/// - Handles actor lifecycle hooks (startup/shutdown)
+///
+/// ## Error Handling
+///
+/// In embedded environments, error handling is typically simpler than in
+/// desktop applications. This function logs errors when debug logging is
+/// available but doesn't attempt complex recovery strategies.
+///
+/// # Arguments
+///
+/// * `actor` - The actor instance to run
+/// * `receiver` - Embassy channel receiver for incoming messages
+///
+/// # Errors
+/// Returns `ActorError` if actor startup or shutdown fails.
+/// Message processing errors are handled internally.
+#[cfg(feature = "async-embassy")]
+pub async fn actor_task_embassy<A, const N: usize>(
+    mut actor: A,
+    receiver: embassy_sync::channel::Receiver<
+        'static,
+        embassy_sync::blocking_mutex::raw::NoopRawMutex,
+        A::Message,
+        N,
+    >,
+) -> Result<(), ActorError>
+where
+    A: Actor,
+    A::Message: Send + 'static,
+{
+    // Startup hook
+    let startup_result = actor.on_start();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = startup_result {
+        log::error!("Actor startup failed: {e:?}");
+    }
+    startup_result?;
+
+    // Main message processing loop
+    // In Embassy, this loop will cooperatively yield when no messages are available
+    loop {
+        // Wait for next message - this will suspend the task if no messages available
+        // Embassy's channel receiver integrates with the cooperative scheduler
+        let msg = receiver.receive().await;
+
+        // Process the message atomically (one at a time)
+        // This ensures deterministic execution and prevents re-entrancy
+        actor.handle(msg).await;
+    }
+
+    // Note: This cleanup code is unreachable in the infinite loop above,
+    // but included for completeness. In embedded systems, actors typically
+    // run forever until device reset.
+    #[allow(unreachable_code)]
+    {
+        let stop_result = actor.on_stop();
+        #[cfg(feature = "debug-log")]
+        if let Err(ref e) = stop_result {
+            log::error!("Actor shutdown failed: {e:?}");
+        }
+        stop_result?;
         Ok(())
     }
 }
@@ -464,7 +550,12 @@ pub async fn actor_task<A: Actor>(
     mut inbox: Inbox<A::Message>,
 ) -> Result<(), ActorError> {
     // Startup hook
-    actor.on_start()?;
+    let startup_result = actor.on_start();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = startup_result {
+        log::error!("Actor startup failed: {e:?}");
+    }
+    startup_result?;
 
     // Main processing loop (std version)
     loop {
@@ -475,7 +566,12 @@ pub async fn actor_task<A: Actor>(
     }
 
     // Cleanup hook
-    actor.on_stop()?;
+    let stop_result = actor.on_stop();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = stop_result {
+        log::error!("Actor shutdown failed: {e:?}");
+    }
+    stop_result?;
     Ok(())
 }
 
@@ -485,10 +581,10 @@ pub mod integration;
 pub mod spawn;
 
 // Re-export spawn functions for convenience
-#[cfg(all(not(feature = "async-tokio"), feature = "embassy"))]
-pub use spawn::spawn_actor_embassy;
-#[cfg(feature = "async-tokio")]
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 pub use spawn::spawn_actor_tokio;
+#[cfg(feature = "async-embassy")]
+pub use spawn::spawn_counter_actor_embassy;
 
 #[cfg(test)]
 mod tests {

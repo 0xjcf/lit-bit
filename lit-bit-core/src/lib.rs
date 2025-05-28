@@ -21,6 +21,13 @@
 //! A Rust library for building type-safe, Harel statecharts, inspired by `XState`.
 //! Aims to be ergonomic, `no_std` compatible, and suitable for embedded to backend applications.
 
+// Prevent invalid feature combinations
+#[cfg(all(feature = "async-tokio", feature = "async-embassy"))]
+compile_error!(
+    "Features \"async-tokio\" and \"async-embassy\" are mutually exclusive. \
+     Please enable only one async runtime feature at a time."
+);
+
 // No `use core::fmt` or `use ::core::fmt` needed here if we qualify directly in trait bounds.
 
 pub mod runtime;
@@ -46,13 +53,23 @@ pub use actor::address::Address;
 pub use actor::backpressure::SendError;
 
 // Re-export actor types that are always available
-pub use actor::{Actor, ActorError, RestartStrategy, actor_task};
+pub use actor::{Actor, ActorError, RestartStrategy};
+
+// Re-export actor_task based on feature flags
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
+pub use actor::actor_task;
+
+#[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
+pub use actor::actor_task;
+
+#[cfg(feature = "async-embassy")]
+pub use actor::actor_task_embassy;
 
 // Re-export mailbox types based on feature flags
-#[cfg(feature = "async-tokio")]
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 pub use actor::{Inbox, Outbox, create_mailbox};
 
-#[cfg(not(feature = "async-tokio"))]
+#[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
 pub use actor::{Inbox, Outbox, create_mailbox_safe};
 
 // Note: static_mailbox macro is available directly from the crate root
@@ -62,6 +79,10 @@ pub mod prelude {
 }
 
 pub mod actor;
+
+// Re-export Embassy-specific types when the feature is enabled
+#[cfg(feature = "async-embassy")]
+pub use actor::spawn::CounterActor;
 
 pub trait StateMachine<const N_ACTIVE: usize = MAX_ACTIVE_REGIONS> {
     type State: Copy
@@ -103,7 +124,7 @@ mod re_export_tests {
         assert_eq!(SendError::Full(42u32), send_error);
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
     #[test]
     fn mailbox_types_are_re_exported() {
         // Test that mailbox types and functions are re-exported

@@ -57,63 +57,42 @@ test-summary:
   @cargo test 2>&1 | grep "test result"
 
 # --- Lint Tasks ---
-# Comprehensive lint: includes pedantic warnings, all features, nightly check, AND CI-exact check
-# This is the most thorough check and will catch issues before they hit CI
-# Usage: just lint [fix] OR just lint <app_name> [fix]
-lint app='workspace' fix='':
-  ./scripts/lint_app.sh {{app}} {{fix}}
+# Professional-grade comprehensive linting with feature matrix testing
+# Tests all valid feature combinations without triggering mutually exclusive conflicts
+# Usage: just lint
+lint:
+  ./scripts/lint.sh
 
-# Nightly-specific lint with all features (more permissive than CI)
-lint-nightly app='workspace' fix='':
+# Quick lint check for development (core library only, fastest feedback)
+lint-quick:
   #!/usr/bin/env bash
   set -e
-  echo "🌙 Running nightly clippy checks..."
+  echo "🔍 Quick lint check (core library only)..."
+  cargo clippy -p lit-bit-core --lib --features std -- -D warnings
+  echo "✅ Quick lint complete."
+
+# Nightly-specific lint with individual feature testing (more permissive than CI)
+lint-nightly:
+  #!/usr/bin/env bash
+  set -e
+  echo "🌙 Running nightly clippy checks with feature matrix..."
   if ! rustup toolchain list | grep -q "nightly"; then
     echo "❌ Nightly toolchain not installed. Install with: rustup toolchain install nightly"
     exit 1
   fi
   
-  if [[ "{{fix}}" == "fix" ]]; then
-    echo "🔧 Fixing nightly clippy issues..."
-    cargo +nightly clippy --workspace --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings
-  else
-    echo "🔍 Checking for nightly clippy issues..."
-    cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
-  fi
+  echo "🔍 Testing core with nightly clippy..."
+  cargo +nightly clippy -p lit-bit-core --lib --features std -- -D warnings
   echo "✅ Nightly clippy check complete."
 
-# CI-exact lint commands - matches exactly what CI runs (without --all-features)
-# Use this to catch issues that only appear in the CI environment
-# Usage: just lint-ci [stable|nightly]
-lint-ci toolchain='stable':
-  #!/usr/bin/env bash
-  set -e
-  echo "🤖 Running CI-exact clippy checks ({{toolchain}})..."
-  
-  if [[ "{{toolchain}}" == "nightly" ]]; then
-    if ! rustup toolchain list | grep -q "nightly"; then
-      echo "❌ Nightly toolchain not installed. Install with: rustup toolchain install nightly"
-      exit 1
-    fi
-    echo "🔍 Running nightly clippy (CI-exact)..."
-    cargo +nightly clippy --all-targets --workspace -- -D warnings
-  else
-    echo "🔍 Running stable clippy (CI-exact)..."
-    cargo clippy --all-targets --workspace -- -D warnings
-  fi
-  echo "✅ CI-exact clippy check complete."
+# Format check and fix
+fmt:
+  @echo "🎨 Formatting code..."
+  @cargo fmt --all
 
-# Test feature matrix (matches CI exactly) - excludes embassy feature temporarily
-test-features:
-  #!/usr/bin/env bash
-  set -e
-  echo "🧪 Testing feature matrix (workspace)..."
-  if ! command -v cargo-hack &> /dev/null; then
-    echo "❌ cargo-hack not installed. Install with: cargo install cargo-hack --locked"
-    exit 1
-  fi
-  cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy --workspace
-  echo "✅ Feature matrix test complete."
+fmt-check:
+  @echo "🎨 Checking code formatting..."
+  @cargo fmt --all --check
 
 # Build all workspace members for release
 build:

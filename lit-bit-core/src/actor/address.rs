@@ -2,75 +2,99 @@
 
 use super::backpressure::SendError;
 
-#[cfg(not(feature = "async-tokio"))]
-pub struct Address<Event: 'static, const N: usize> {
-    sender: heapless::spsc::Producer<'static, Event, N>,
-    _phantom: core::marker::PhantomData<Event>,
+// Embassy-specific Address implementation
+#[cfg(feature = "async-embassy")]
+pub struct Address<Event: 'static, const N: usize = 32> {
+    sender: embassy_sync::channel::Sender<
+        'static,
+        embassy_sync::blocking_mutex::raw::NoopRawMutex,
+        Event,
+        N,
+    >,
 }
 
-#[cfg(not(feature = "async-tokio"))]
+#[cfg(feature = "async-embassy")]
 impl<Event: 'static, const N: usize> Address<Event, N> {
-    /// Create an Address from a heapless producer.
+    /// Create an Address from an Embassy channel sender.
     #[must_use]
-    pub fn from_producer(sender: heapless::spsc::Producer<'static, Event, N>) -> Self {
-        Self {
-            sender,
-            _phantom: core::marker::PhantomData,
-        }
+    pub fn from_embassy_sender(
+        sender: embassy_sync::channel::Sender<
+            'static,
+            embassy_sync::blocking_mutex::raw::NoopRawMutex,
+            Event,
+            N,
+        >,
+    ) -> Self {
+        Self { sender }
     }
 
-    /// Try to send an event to the actor's mailbox.
+    /// Send a message with async back-pressure.
+    ///
+    /// This method will await if the channel is full, providing natural back-pressure.
+    /// In Embassy, this integrates with the cooperative scheduler to yield when blocked.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// // Send a message and await completion
+    /// address.send(MyMessage::DoWork).await;
+    /// ```
+    pub async fn send(&self, event: Event) {
+        self.sender.send(event).await;
+    }
+
+    /// Try to send a message without blocking.
+    ///
+    /// This is useful when you want to avoid blocking the current task and handle
+    /// backpressure explicitly.
     ///
     /// # Errors
-    /// Returns `SendError::Full(event)` if the mailbox is full.
-    pub fn try_send(&mut self, event: Event) -> Result<(), SendError<Event>> {
-        self.sender.enqueue(event).map_err(SendError::Full)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn address_type_sanity() {
-        // TDD: Address<Event> can be constructed and is type-safe
-        // This test is only meaningful for the heapless variant
-        #[cfg(not(feature = "async-tokio"))]
-        {
-            use super::Address;
-            const CAP: usize = 2;
-            let (prod, _cons) = crate::static_mailbox!(TEST_QUEUE: u32, CAP);
-            let _addr: Address<u32, CAP> = Address::from_producer(prod);
+    /// Returns `SendError::Full(msg)` if the channel is full.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// match address.try_send(message) {
+    ///     Ok(()) => println!("Message sent successfully"),
+    ///     Err(SendError::Full(msg)) => {
+    ///         println!("Channel full, message not sent");
+    ///         // Handle backpressure (e.g., retry later, drop message, etc.)
+    ///     }
+    ///     Err(SendError::Closed(_)) => {
+    ///         println!("Actor has stopped");
+    ///     }
+    /// }
+    /// ```
+    pub fn try_send(&self, event: Event) -> Result<(), SendError<Event>> {
+        match self.sender.try_send(event) {
+            Ok(()) => Ok(()),
+            Err(embassy_sync::channel::TrySendError::Full(event)) => Err(SendError::Full(event)),
         }
     }
 }
 
-#[cfg(all(test, not(feature = "async-tokio")))]
-mod nostd_tests {
-    use super::Address;
-
-    #[test]
-    fn try_send_fails_when_queue_full() {
-        const CAP: usize = 3;
-        let (prod, _cons) = crate::static_mailbox!(FULL_QUEUE_TEST: u8, CAP);
-        let mut addr = Address::<u8, CAP>::from_producer(prod);
-        assert!(addr.try_send(1).is_ok());
-        assert!(addr.try_send(2).is_ok());
-        assert!(addr.try_send(3).is_err());
+#[cfg(feature = "async-embassy")]
+impl<Event: 'static, const N: usize> Clone for Address<Event, N> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender,
+        }
     }
 }
 
-#[cfg(feature = "async-tokio")]
+// Tokio-specific Address implementation (only when Embassy is not enabled)
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 #[derive(Debug)]
 pub enum SpawnChildError {
     MutexPoisoned,
 }
 
-#[cfg(feature = "async-tokio")]
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 pub struct ActorCell<Event> {
     _phantom: std::marker::PhantomData<Event>,
 }
 
-#[cfg(feature = "async-tokio")]
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 pub struct Address<Event> {
     sender: tokio::sync::mpsc::Sender<Event>,
     actor_id: usize, // Placeholder for ActorId type
@@ -79,7 +103,7 @@ pub struct Address<Event> {
     cell: std::sync::Arc<ActorCell<Event>>, // For test access
 }
 
-#[cfg(feature = "async-tokio")]
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 impl<Event> Address<Event> {
     /// Create an Address from an Arc<ActorCell>.
     ///
@@ -197,7 +221,91 @@ impl<Event> Address<Event> {
     }
 }
 
-#[cfg(all(test, feature = "async-tokio"))]
+// No-std Address implementation (existing heapless-based)
+#[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
+pub struct Address<Event: 'static, const N: usize> {
+    sender: heapless::spsc::Producer<'static, Event, N>,
+    _phantom: core::marker::PhantomData<Event>,
+}
+
+#[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
+impl<Event: 'static, const N: usize> Address<Event, N> {
+    /// Create an Address from a heapless producer.
+    #[must_use]
+    pub fn from_producer(sender: heapless::spsc::Producer<'static, Event, N>) -> Self {
+        Self {
+            sender,
+            _phantom: core::marker::PhantomData,
+        }
+    }
+
+    /// Try to send an event to the actor's mailbox.
+    ///
+    /// # Errors
+    /// Returns `SendError::Full(event)` if the mailbox is full.
+    pub fn try_send(&mut self, event: Event) -> Result<(), SendError<Event>> {
+        self.sender.enqueue(event).map_err(SendError::Full)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn address_type_sanity() {
+        // TDD: Address<Event> can be constructed and is type-safe
+        // This test is only meaningful for the heapless variant
+        #[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
+        {
+            use super::Address;
+            const CAP: usize = 2;
+            let (prod, _cons) = crate::static_mailbox!(TEST_QUEUE: u32, CAP);
+            let _addr: Address<u32, CAP> = Address::from_producer(prod);
+        }
+    }
+}
+
+#[cfg(all(test, not(feature = "async-tokio"), not(feature = "async-embassy")))]
+mod nostd_tests {
+    use super::Address;
+
+    #[test]
+    fn try_send_fails_when_queue_full() {
+        const CAP: usize = 3;
+        let (prod, _cons) = crate::static_mailbox!(FULL_QUEUE_TEST: u8, CAP);
+        let mut addr = Address::<u8, CAP>::from_producer(prod);
+        assert!(addr.try_send(1).is_ok());
+        assert!(addr.try_send(2).is_ok());
+        assert!(addr.try_send(3).is_err());
+    }
+}
+
+#[cfg(all(test, feature = "async-embassy"))]
+mod embassy_tests {
+    use super::*;
+
+    #[test]
+    fn embassy_address_compiles() {
+        // Test that Embassy Address compiles correctly
+        // Actual runtime testing would require an Embassy executor
+
+        fn test_address_signature() {
+            fn _test(
+                sender: embassy_sync::channel::Sender<
+                    'static,
+                    embassy_sync::blocking_mutex::raw::NoopRawMutex,
+                    u32,
+                    32,
+                >,
+            ) {
+                let _address = Address::from_embassy_sender(sender);
+            }
+        }
+
+        test_address_signature();
+    }
+}
+
+#[cfg(all(test, feature = "async-tokio", not(feature = "async-embassy")))]
 mod std_hierarchy_tests {
     use super::*;
     #[test]
