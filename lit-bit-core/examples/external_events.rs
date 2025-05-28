@@ -133,9 +133,9 @@ fn process_external_event(
             #[cfg(feature = "std")]
             println!("  -> Event ignored: no matching transition");
         }
-        lit_bit_core::SendResult::Error(_e) => {
+        lit_bit_core::SendResult::Error(e) => {
             #[cfg(feature = "std")]
-            eprintln!("  -> Error processing event: {_e:?}");
+            eprintln!("  -> Error processing event: {e:?}");
         }
     }
 }

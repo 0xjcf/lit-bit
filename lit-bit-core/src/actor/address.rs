@@ -33,14 +33,51 @@ impl<Event: 'static, const N: usize> Address<Event, N> {
     /// This method will await if the channel is full, providing natural back-pressure.
     /// In Embassy, this integrates with the cooperative scheduler to yield when blocked.
     ///
+    /// ## Embassy Channel Semantics
+    ///
+    /// Embassy channels are designed to be **infallible** for embedded use cases. Unlike Tokio
+    /// channels, Embassy channels cannot be "closed" - they are expected to live for the
+    /// program's lifetime. This method will **always return `Ok(())`** under normal conditions.
+    ///
+    /// ## Behavioral Differences from Tokio
+    ///
+    /// - **Embassy**: Never returns `Err` - channels cannot be closed, receivers dropping
+    ///   causes potential deadlock (sender blocks forever) rather than immediate error
+    /// - **Tokio**: Returns `Err(SendError::Closed(_))` when receiver is dropped
+    ///
+    /// ## When Deadlock Can Occur
+    ///
+    /// If the receiving task is dropped or stops consuming messages, this method will:
+    /// 1. Fill the channel buffer (up to capacity `N`)
+    /// 2. Block indefinitely waiting for buffer space that will never become available
+    ///
+    /// **Prevention**: Ensure receiving tasks run for the actor's intended lifetime, typically
+    /// until system reset in embedded applications.
+    ///
+    /// # Errors
+    ///
+    /// Currently never returns an error in Embassy 0.6. The `Result` type is provided for:
+    /// - **API consistency** with Tokio backend
+    /// - **Future compatibility** if Embassy adds channel closure semantics
+    /// - **Custom error detection** if application-level "actor alive" checks are added
+    ///
     /// # Examples
     ///
     /// ```rust,no_run
-    /// // Send a message and await completion
-    /// address.send(MyMessage::DoWork).await;
+    /// // Send a message - will always succeed in Embassy unless system is broken
+    /// match address.send(MyMessage::DoWork).await {
+    ///     Ok(()) => println!("Message sent successfully"),
+    ///     Err(_) => unreachable!("Embassy channels never fail in 0.6"),
+    /// }
+    ///
+    /// // More typical Embassy usage - assume infallible
+    /// address.send(MyMessage::DoWork).await.expect("Embassy send should never fail");
     /// ```
-    pub async fn send(&self, event: Event) {
+    pub async fn send(&self, event: Event) -> Result<(), SendError<Event>> {
+        // Embassy channels are infallible by design - this will never fail
+        // unless we add custom "actor alive" checks in the future
         self.sender.send(event).await;
+        Ok(())
     }
 
     /// Try to send a message without blocking.
@@ -48,20 +85,37 @@ impl<Event: 'static, const N: usize> Address<Event, N> {
     /// This is useful when you want to avoid blocking the current task and handle
     /// backpressure explicitly.
     ///
+    /// ## Embassy Channel Behavior
+    ///
+    /// Embassy channels only have one failure mode: `SendError::Full` when the buffer
+    /// is at capacity. **There is no `SendError::Closed` variant** because Embassy
+    /// channels cannot be closed - they are designed for static, long-lived usage.
+    ///
+    /// ## Important: No "Closed" Detection
+    ///
+    /// If the receiving task has stopped consuming messages (or been dropped), this method:
+    /// - **Will succeed** as long as the buffer has space (placing messages nobody will read)
+    /// - **Will return `Full`** once the buffer fills up (NOT a "Closed" error)
+    /// - **Cannot distinguish** between "slow consumer" and "no consumer"
+    ///
+    /// This means message loss is possible if you drop messages on `Full` errors without
+    /// knowing whether a consumer is still active.
+    ///
     /// # Errors
-    /// Returns `SendError::Full(msg)` if the channel is full.
+    /// Returns `SendError::Full(msg)` if the channel buffer is at capacity.
+    /// **Never returns `SendError::Closed`** in Embassy - that variant is unused.
     ///
     /// # Examples
     ///
     /// ```rust,no_run
     /// match address.try_send(message) {
-    ///     Ok(()) => println!("Message sent successfully"),
+    ///     Ok(()) => println!("Message queued successfully"),
     ///     Err(SendError::Full(msg)) => {
-    ///         println!("Channel full, message not sent");
+    ///         println!("Channel buffer full - might be slow/missing consumer");
     ///         // Handle backpressure (e.g., retry later, drop message, etc.)
     ///     }
     ///     Err(SendError::Closed(_)) => {
-    ///         println!("Actor has stopped");
+    ///         unreachable!("Embassy channels never close in 0.6");
     ///     }
     /// }
     /// ```

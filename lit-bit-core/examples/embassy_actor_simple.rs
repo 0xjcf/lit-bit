@@ -87,9 +87,26 @@ pub async fn run_embassy_actor_example(spawner: Spawner) {
         .expect("Failed to spawn actor");
 
     // Send some messages to the actor
-    address.send(10).await;
-    address.send(20).await;
-    address.send(30).await;
+    // Embassy channels are infallible, so we can use expect() safely
+    address
+        .send(10)
+        .await
+        .expect("Embassy send should never fail");
+    address
+        .send(20)
+        .await
+        .expect("Embassy send should never fail");
+
+    // Alternative: handle the Result explicitly (though it's always Ok in Embassy)
+    match address.send(30).await {
+        Ok(()) => {
+            // This is the normal path for Embassy
+        }
+        Err(_) => {
+            // This should never happen in Embassy 0.6, but provides API consistency
+            panic!("Unexpected send failure in Embassy");
+        }
+    }
 
     // In a real application, you would continue with your main logic here
     // The actor will continue running and processing messages
