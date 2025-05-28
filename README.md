@@ -376,10 +376,4 @@ This project is licensed under the terms of the MIT license and the Apache Licen
 
 **lit-bit** provides a production-ready minimal actor model layer that enables safe, single-threaded event loops and mailbox-based communication for both embedded and async Rust environments.
 
-- **Purpose:** Integrate statecharts into concurrent systems (embedded or async) using message-passing actors.
-- **APIs:**
-    - `Actor` trait: implement for your state machine or use the provided wrapper.
-    - `Address<Event>`: type-safe handle for sending events/messages.
-    - **Mailboxes:**
-        - `heapless::spsc::Queue` for `no_std`/embedded (fail-fast, zero-alloc)
-        - `
+*Built with ❤️ for the Rust embedded and systems programming community.*

@@ -56,20 +56,24 @@ impl TestActor {
 
 impl Actor for TestActor {
     type Message = TestEvent;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
-    fn on_event(&mut self, msg: TestEvent) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.processed_events.push(msg.clone());
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        self.processed_events.push(msg.clone());
 
-            match msg {
-                TestEvent::Increment => self.counter += 1,
-                TestEvent::SetValue(value) => self.counter = value,
-                TestEvent::Stop => {
-                    // This would normally signal the actor to stop
-                    // In our test, we just record it
-                }
+        match msg {
+            TestEvent::Increment => self.counter += 1,
+            TestEvent::SetValue(value) => self.counter = value,
+            TestEvent::Stop => {
+                // This would normally signal the actor to stop
+                // In our test, we just record it
             }
-        })
+        }
+
+        core::future::ready(())
     }
 
     fn on_start(&mut self) -> Result<(), ActorError> {
@@ -111,12 +115,15 @@ impl MockStateMachine {
 
 impl Actor for MockStateMachine {
     type Message = u32;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
-    fn on_event(&mut self, event: u32) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.events_received.push(event);
-            self.state = event;
-        })
+    fn handle(&mut self, event: Self::Message) -> Self::Future<'_> {
+        self.events_received.push(event);
+        self.state = event;
+        core::future::ready(())
     }
 }
 
@@ -154,11 +161,11 @@ mod tests {
         let mut actor = TestActor::new();
 
         // Process various events
-        actor.on_event(TestEvent::Increment).await;
+        actor.handle(TestEvent::Increment).await;
         assert_eq!(actor.counter, 1);
         assert_eq!(actor.processed_events, vec![TestEvent::Increment]);
 
-        actor.on_event(TestEvent::SetValue(42)).await;
+        actor.handle(TestEvent::SetValue(42)).await;
         assert_eq!(actor.counter, 42);
         assert_eq!(
             actor.processed_events,
@@ -171,11 +178,11 @@ mod tests {
         let mut mock_sm = MockStateMachine::new();
 
         // Test direct event forwarding
-        mock_sm.on_event(100).await;
+        mock_sm.handle(100).await;
         assert_eq!(mock_sm.state, 100);
         assert_eq!(mock_sm.events_received, vec![100]);
 
-        mock_sm.on_event(200).await;
+        mock_sm.handle(200).await;
         assert_eq!(mock_sm.state, 200);
         assert_eq!(mock_sm.events_received, vec![100, 200]);
     }
@@ -324,7 +331,7 @@ mod integration_tests {
         ];
 
         for event in events.clone() {
-            actor.on_event(event).await;
+            actor.handle(event).await;
         }
 
         // Verify final state
@@ -341,7 +348,7 @@ mod integration_tests {
         let mut actor = TestActor::new();
 
         // Normal operation
-        actor.on_event(TestEvent::Increment).await;
+        actor.handle(TestEvent::Increment).await;
         assert_eq!(actor.counter, 1);
 
         // Test panic handling - we can't easily test the actual panic hook

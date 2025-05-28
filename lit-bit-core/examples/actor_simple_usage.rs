@@ -50,23 +50,16 @@ impl SimpleActor {
 
 impl Actor for SimpleActor {
     type Message = u32;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
-    #[cfg(feature = "async")]
-    fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.count += msg;
-            #[cfg(feature = "std")]
-            println!("Count is now: {}", self.count);
-        })
-    }
-
-    #[cfg(not(feature = "async"))]
-    fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
-        async move {
-            self.count += msg;
-            #[cfg(feature = "std")]
-            println!("Count is now: {}", self.count);
-        }
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        self.count += msg;
+        #[cfg(feature = "std")]
+        println!("Count is now: {}", self.count);
+        core::future::ready(())
     }
 
     fn on_start(&mut self) -> Result<(), ActorError> {
@@ -98,8 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Actor created with re-exported types!");
 
     // Test the actor
-    actor.on_event(5).await;
-    actor.on_event(10).await;
+    actor.handle(5).await;
+    actor.handle(10).await;
 
     println!("Final count: {}", actor.count);
     println!("\n✅ Example completed successfully!");

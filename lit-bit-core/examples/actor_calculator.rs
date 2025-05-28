@@ -68,7 +68,7 @@ pub struct CalculatorStats {
 impl CalculatorActor {
     /// Private method that handles the core message processing logic.
     /// This is the single source of truth for all calculator operations.
-    fn handle(&mut self, msg: CalcMessage) {
+    fn process_message(&mut self, msg: CalcMessage) {
         match msg {
             CalcMessage::Add(n) => {
                 self.value = self.value.saturating_add(n);
@@ -136,6 +136,10 @@ impl CalculatorActor {
 
 impl Actor for CalculatorActor {
     type Message = CalcMessage;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
     fn on_start(&mut self) -> Result<(), ActorError> {
         #[cfg(feature = "std")]
@@ -155,18 +159,9 @@ impl Actor for CalculatorActor {
         Ok(())
     }
 
-    #[cfg(feature = "async")]
-    fn on_event(&mut self, msg: CalcMessage) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.handle(msg);
-        })
-    }
-
-    #[cfg(not(feature = "async"))]
-    fn on_event(&mut self, msg: CalcMessage) -> impl core::future::Future<Output = ()> + Send {
-        async move {
-            self.handle(msg);
-        }
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        self.process_message(msg);
+        core::future::ready(())
     }
 }
 

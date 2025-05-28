@@ -76,14 +76,18 @@ panic-halt = "1.0.0"
 [features]
 default = [] # Keep default empty for no_std focus
 
-std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:serde_json", "dep:tracing", "dep:futures", "futures/std", "dep:tokio"]
-# The `async` feature requires `std` because tokio's runtime features (rt, time) require std
-async = ["std", "dep:async-trait", "dep:futures", "dep:tokio"]
+# Core features
+std = ["dep:anyhow", "dep:thiserror", "dep:serde", "dep:serde_json", "dep:tracing", "dep:futures", "futures/std"]
+alloc = ["dep:futures", "futures/alloc"]
 diagram = ["dep:serde"] # For serializing statechart structure
-embassy = ["dep:embassy-futures", "dep:embassy-executor"] # Feature flag for Embassy executor support (temporarily excluded from CI due to generic task limitations)
 
-# Example of combining features for specific use cases:
-# async-std = ["async", "std", "dep:tokio"]
+# Async features (Phase 5 implementation)
+async = [] # Umbrella feature for async support (no dependencies by itself)
+async-tokio = ["async", "std", "dep:async-trait", "dep:futures", "dep:tokio"] # Tokio runtime integration
+async-embassy = ["async", "dep:embassy-futures", "dep:embassy-executor"] # Embassy runtime integration
+
+# Legacy compatibility (will be deprecated in v0.2)
+embassy = ["async-embassy"] # Alias for backward compatibility
 
 debug-log = ["dep:log"]
 

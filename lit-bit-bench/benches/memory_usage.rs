@@ -26,11 +26,14 @@ impl BenchActor {
 
 impl Actor for BenchActor {
     type Message = u32;
+    type Future<'a>
+        = core::future::Ready<()>
+    where
+        Self: 'a;
 
-    fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
-        Box::pin(async move {
-            self.state = msg;
-        })
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        self.state = msg;
+        core::future::ready(())
     }
 }
 

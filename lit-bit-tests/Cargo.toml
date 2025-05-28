@@ -9,7 +9,7 @@ repository = "https://github.com/0xjcf/lit-bit"
 publish = false  # Never publish this crate
 
 [dependencies]
-lit-bit-core = { workspace = true, features = ["std"] }
+lit-bit-core = { workspace = true, features = ["async-tokio"] }
 lit-bit-macro = { workspace = true }
 heapless = "0.8.0"
 

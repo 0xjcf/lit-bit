@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use core::panic::PanicInfo;
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 use static_cell::StaticCell;
 
 /// Error type for actor lifecycle and supervision hooks.
@@ -26,29 +26,85 @@ pub enum RestartStrategy {
     RestForOne,
 }
 
-/// Minimal Actor trait with supervision hooks.
+/// Core Actor trait using Generic Associated Types (GATs) for zero-cost async.
 ///
-/// - `Message`: The event/message type handled by this actor.
-/// - `on_event`: Handle a single event (async for compatibility with both std and `no_std` async).
-/// - `on_start`: Optional startup hook (default: Ok(())).
-/// - `on_stop`: Optional shutdown hook (default: Ok(())).
-/// - `on_panic`: Supervision hook for panic handling (default: `OneForOne`).
+/// This trait provides the foundation for both sync and async actors while maintaining
+/// `#![no_std]` compatibility. The GAT-based design allows for stack-allocated futures
+/// without heap allocation.
 ///
-/// ## Stability Note
+/// ## Design Principles
 ///
-/// The `on_event` method uses different implementations based on feature flags:
-/// - **With `async` feature**: Uses `async-trait` for stable Rust compatibility
-/// - **Without `async` feature**: Uses `impl Future` (requires nightly Rust with `async_fn_in_trait` feature)
-#[allow(unused_variables)]
-#[cfg_attr(not(feature = "async"), allow(async_fn_in_trait))]
+/// - **Zero-cost abstraction**: No heap allocation in `no_std` environments
+/// - **Deterministic execution**: One message processed at a time per actor
+/// - **Platform-agnostic**: Works with Tokio, Embassy, and custom executors
+/// - **Backward compatible**: Existing sync code continues to work unchanged
+///
+/// ## Usage
+///
+/// ```rust,no_run
+/// use lit_bit_core::actor::Actor;
+/// use core::future::Future;
+///
+/// struct MyActor {
+///     counter: u32,
+/// }
+///
+/// impl Actor for MyActor {
+///     type Message = u32;
+///     type Future<'a> = impl Future<Output = ()> + 'a where Self: 'a;
+///
+///     fn handle<'a>(&'a mut self, msg: Self::Message) -> Self::Future<'a> {
+///         async move {
+///             self.counter += msg;
+///             // Async operations can be awaited here
+///         }
+///     }
+/// }
+/// ```
 pub trait Actor: Send {
+    /// The message type this actor handles
     type Message: Send + 'static;
 
-    #[cfg(feature = "async")]
-    fn on_event(&mut self, msg: Self::Message) -> futures::future::BoxFuture<'_, ()>;
+    /// The future type returned by `handle()` - uses GATs for zero-cost async
+    type Future<'a>: core::future::Future<Output = ()> + Send + 'a
+    where
+        Self: 'a;
 
-    #[cfg(not(feature = "async"))]
-    fn on_event(&mut self, msg: Self::Message) -> impl core::future::Future<Output = ()> + Send;
+    /// Handle a single message asynchronously.
+    ///
+    /// This method is called for each message received by the actor. The implementation
+    /// should process the message and return a future that completes when processing
+    /// is done. The actor runtime ensures that only one message is processed at a time,
+    /// maintaining deterministic execution.
+    ///
+    /// ## Atomicity Guarantee
+    ///
+    /// The actor runtime guarantees that:
+    /// - Only one call to `handle()` is active at a time per actor
+    /// - No new messages are dequeued until the current future completes
+    /// - Actor state is protected during async operations (Actix-style atomicity)
+    ///
+    /// ## Examples
+    ///
+    /// ### Sync-style handler (compiles to sync code)
+    /// ```rust,no_run
+    /// fn handle<'a>(&'a mut self, msg: u32) -> Self::Future<'a> {
+    ///     async move {
+    ///         self.counter += msg; // Synchronous operation
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// ### Async handler with I/O
+    /// ```rust,no_run
+    /// fn handle<'a>(&'a mut self, msg: SensorRequest) -> Self::Future<'a> {
+    ///     async move {
+    ///         let reading = self.sensor.read().await; // Async I/O
+    ///         self.process_reading(reading);
+    ///     }
+    /// }
+    /// ```
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_>;
 
     /// Called when the actor starts. Default: Ok(())
     ///
@@ -70,20 +126,124 @@ pub trait Actor: Send {
     }
 
     /// Called if the actor panics. Default: `RestartStrategy::OneForOne`
-    fn on_panic(&self, info: &PanicInfo) -> RestartStrategy {
+    fn on_panic(&self, _info: &PanicInfo) -> RestartStrategy {
         RestartStrategy::OneForOne
     }
 }
 
+/// Ergonomic async trait for use when heap allocation is available.
+///
+/// This trait provides a more ergonomic API using `async fn` syntax when the `std` or `alloc`
+/// features are enabled. It automatically boxes futures to provide a uniform interface.
+///
+/// ## When to Use
+///
+/// - Use `AsyncActor` when you have `std` or `alloc` available and prefer ergonomic syntax
+/// - Use `Actor` for `no_std` environments or when you need zero-cost abstractions
+///
+/// ## Automatic Implementation
+///
+/// Any type implementing `AsyncActor` automatically implements `Actor` via a blanket impl.
+///
+/// ## Examples
+///
+/// ```rust,no_run
+/// use lit_bit_core::actor::AsyncActor;
+///
+/// struct HttpActor {
+///     client: HttpClient,
+/// }
+///
+/// #[async_trait::async_trait]
+/// impl AsyncActor for HttpActor {
+///     type Message = HttpRequest;
+///
+///     async fn handle(&mut self, msg: HttpRequest) {
+///         let response = self.client.get(&msg.url).await;
+///         // Process response...
+///     }
+/// }
+/// ```
+#[cfg(any(feature = "std", feature = "alloc"))]
+pub trait AsyncActor: Send {
+    /// The message type this actor handles
+    type Message: Send + 'static;
+
+    /// Handle a single message asynchronously using ergonomic async fn syntax.
+    ///
+    /// Note: This method returns a boxed future for ergonomic use when heap allocation
+    /// is available. The actual implementation should use async fn syntax when possible.
+    fn handle(&mut self, msg: Self::Message) -> futures::future::BoxFuture<'_, ()>;
+
+    /// Called when the actor starts. Default: Ok(())
+    ///
+    /// # Errors
+    /// Returns `Err(ActorError)` if actor startup fails.
+    fn on_start(&mut self) -> Result<(), ActorError> {
+        Ok(())
+    }
+
+    /// Called when the actor stops. Default: Ok(())
+    ///
+    /// # Errors
+    /// Returns `Err(ActorError)` if actor shutdown fails.
+    fn on_stop(self) -> Result<(), ActorError>
+    where
+        Self: Sized,
+    {
+        Ok(())
+    }
+
+    /// Called if the actor panics. Default: `RestartStrategy::OneForOne`
+    fn on_panic(&self, _info: &PanicInfo) -> RestartStrategy {
+        RestartStrategy::OneForOne
+    }
+}
+
+/// Blanket implementation of Actor for any `AsyncActor` when heap allocation is available.
+///
+/// This allows `AsyncActor` implementations to be used anywhere Actor is expected,
+/// providing seamless interoperability between the ergonomic and zero-cost APIs.
+#[cfg(any(feature = "std", feature = "alloc"))]
+impl<T> Actor for T
+where
+    T: AsyncActor,
+{
+    type Message = T::Message;
+    type Future<'a>
+        = futures::future::BoxFuture<'a, ()>
+    where
+        Self: 'a;
+
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        AsyncActor::handle(self, msg)
+    }
+
+    fn on_start(&mut self) -> Result<(), ActorError> {
+        AsyncActor::on_start(self)
+    }
+
+    fn on_stop(self) -> Result<(), ActorError>
+    where
+        Self: Sized,
+    {
+        AsyncActor::on_stop(self)
+    }
+
+    fn on_panic(&self, info: &PanicInfo) -> RestartStrategy {
+        AsyncActor::on_panic(self, info)
+    }
+}
+
 // Conditional mailbox type aliases (Task 2.1)
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 pub type Inbox<T, const N: usize> = heapless::spsc::Consumer<'static, T, N>;
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 pub type Outbox<T, const N: usize> = heapless::spsc::Producer<'static, T, N>;
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub type Inbox<T> = tokio::sync::mpsc::Receiver<T>;
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 
 // Platform-specific mailbox creation functions (Tasks 2.2-2.3)
@@ -118,7 +278,7 @@ pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 /// # Panics
 ///
 /// Panics if called more than once for the same static queue (prevents double-split).
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 #[macro_export]
 macro_rules! static_mailbox {
     ($(#[$attr:meta])* $name:ident: $msg_type:ty, $capacity:expr) => {{
@@ -150,17 +310,17 @@ macro_rules! static_mailbox {
     }};
 }
 
-/// Creates a mailbox from a statically allocated queue using StaticCell (safe alternative).
+/// Creates a mailbox from a statically allocated queue using `StaticCell` (safe alternative).
 ///
 /// This function provides a safe way to create mailboxes from static memory without
 /// requiring unsafe code. It uses `StaticCell` to ensure safe one-time initialization.
 ///
-/// For most use cases, prefer the `static_mailbox!` macro which handles the StaticCell
+/// For most use cases, prefer the `static_mailbox!` macro which handles the `StaticCell`
 /// creation automatically.
 ///
 /// # Arguments
 ///
-/// * `cell` - A StaticCell containing an uninitialized heapless queue
+/// * `cell` - A `StaticCell` containing an uninitialized heapless queue
 ///
 /// # Examples
 ///
@@ -173,7 +333,7 @@ macro_rules! static_mailbox {
 ///
 /// let (outbox, inbox) = create_mailbox_safe(&QUEUE_CELL);
 /// ```
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 #[must_use]
 pub fn create_mailbox_safe<T, const N: usize>(
     cell: &'static StaticCell<heapless::spsc::Queue<T, N>>,
@@ -182,7 +342,7 @@ pub fn create_mailbox_safe<T, const N: usize>(
     queue.split()
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 #[must_use]
 pub fn create_mailbox<T>(capacity: usize) -> (Outbox<T>, Inbox<T>) {
     tokio::sync::mpsc::channel(capacity)
@@ -218,7 +378,7 @@ pub fn create_mailbox<T>(capacity: usize) -> (Outbox<T>, Inbox<T>) {
 ///
 /// This ensures the message loop doesn't busy-wait when no messages are available,
 /// while still allowing rapid message processing when messages are present.
-#[cfg(all(not(feature = "std"), not(feature = "embassy")))]
+#[cfg(all(not(feature = "async-tokio"), not(feature = "embassy")))]
 async fn yield_control() {
     use core::future::Future;
     use core::pin::Pin;
@@ -252,7 +412,7 @@ async fn yield_control() {
 /// # Errors
 /// Returns `ActorError` if actor startup, shutdown, or message processing fails.
 #[allow(unreachable_code)] // no_std path has infinite loop, cleanup only reachable on std
-#[cfg(not(feature = "std"))]
+#[cfg(not(feature = "async-tokio"))]
 pub async fn actor_task<A: Actor, const N: usize>(
     mut actor: A,
     mut inbox: Inbox<A::Message, N>,
@@ -276,7 +436,7 @@ pub async fn actor_task<A: Actor, const N: usize>(
                 yield_control().await;
             }
         };
-        actor.on_event(msg).await;
+        actor.handle(msg).await;
     }
 
     // Cleanup hook (unreachable in no_std)
@@ -291,7 +451,7 @@ pub async fn actor_task<A: Actor, const N: usize>(
 ///
 /// # Errors
 /// Returns `ActorError` if actor startup, shutdown, or message processing fails.
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub async fn actor_task<A: Actor>(
     mut actor: A,
     mut inbox: Inbox<A::Message>,
@@ -304,7 +464,7 @@ pub async fn actor_task<A: Actor>(
         let Some(msg) = inbox.recv().await else {
             break; // Channel closed
         };
-        actor.on_event(msg).await;
+        actor.handle(msg).await;
     }
 
     // Cleanup hook
@@ -318,9 +478,9 @@ pub mod integration;
 pub mod spawn;
 
 // Re-export spawn functions for convenience
-#[cfg(all(not(feature = "std"), feature = "embassy"))]
+#[cfg(all(not(feature = "async-tokio"), feature = "embassy"))]
 pub use spawn::spawn_actor_embassy;
-#[cfg(feature = "std")]
+#[cfg(feature = "async-tokio")]
 pub use spawn::spawn_actor_tokio;
 
 #[cfg(test)]
@@ -340,20 +500,14 @@ mod tests {
 
     impl Actor for TestActor {
         type Message = u32;
+        type Future<'a>
+            = core::future::Ready<()>
+        where
+            Self: 'a;
 
-        #[cfg(feature = "async")]
-        fn on_event(&mut self, msg: u32) -> futures::future::BoxFuture<'_, ()> {
-            Box::pin(async move {
-                self.counter += msg;
-            })
-        }
-
-        #[cfg(not(feature = "async"))]
-        #[allow(clippy::manual_async_fn)] // Need Send bound for thread safety
-        fn on_event(&mut self, msg: u32) -> impl core::future::Future<Output = ()> + Send {
-            async move {
-                self.counter += msg;
-            }
+        fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+            self.counter += msg;
+            core::future::ready(())
         }
     }
 
