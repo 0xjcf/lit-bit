@@ -9,24 +9,26 @@ repository = "https://github.com/0xjcf/lit-bit"
 publish = false  # Never publish this crate
 
 [dependencies]
-lit-bit-core = { workspace = true, features = ["async-tokio"] }
+lit-bit-core = { workspace = true }
 lit-bit-macro = { workspace = true }
 heapless = "0.8.0"
 
 # Test dependencies
 proptest = "1.4"
-tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# For async testing
-futures = "0.3"
-async-trait = "0.1"
+# Optional async dependencies
+tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"], optional = true }
+futures = { version = "0.3", optional = true }
+async-trait = { version = "0.1", optional = true }
 
 [features]
 # Feature flags for conditional compilation
-embassy = ["lit-bit-core/embassy"]
+default = ["async-tokio"]
+async-tokio = ["lit-bit-core/async-tokio", "dep:tokio", "dep:futures", "dep:async-trait"]
+embassy = ["lit-bit-core/async-embassy"]
 
 [dev-dependencies]
 # Additional test utilities if needed

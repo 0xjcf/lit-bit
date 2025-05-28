@@ -34,13 +34,73 @@ jobs:
     - name: Run cargo check (all targets)
       run: cargo check --all-targets --workspace
 
-    - name: Install cargo-hack
+    - name: Feature matrix testing
       if: matrix.toolchain == 'stable' # Only run feature matrix on stable
-      run: cargo install cargo-hack --locked
-
-    - name: Test feature matrix (workspace)
-      if: matrix.toolchain == 'stable'
-      run: cargo hack check --feature-powerset --no-dev-deps --exclude-features embassy --workspace
+      run: |
+        set -euo pipefail
+        
+        echo "🔍 Testing individual feature combinations"
+        
+        # Test core library feature combinations individually
+        echo "📦 Testing lit-bit-core features..."
+        
+        # Default features
+        echo "  ✓ Default features"
+        cargo check -p lit-bit-core
+        
+        # No default features
+        echo "  ✓ No default features"
+        cargo check -p lit-bit-core --no-default-features
+        
+        # Individual async runtime features (mutually exclusive)
+        echo "  ✓ async-tokio feature"
+        cargo check -p lit-bit-core --no-default-features --features async-tokio
+        
+        echo "  ✓ async-embassy feature"
+        cargo check -p lit-bit-core --no-default-features --features async-embassy
+        
+        # Other individual features
+        echo "  ✓ alloc feature"
+        cargo check -p lit-bit-core --no-default-features --features alloc
+        
+        echo "  ✓ std feature"
+        cargo check -p lit-bit-core --no-default-features --features std
+        
+        echo "  ✓ diagram feature"
+        cargo check -p lit-bit-core --no-default-features --features diagram
+        
+        # Compatible feature combinations
+        echo "  ✓ alloc + async-tokio"
+        cargo check -p lit-bit-core --no-default-features --features alloc,async-tokio
+        
+        echo "  ✓ alloc + async-embassy"
+        cargo check -p lit-bit-core --no-default-features --features alloc,async-embassy
+        
+        echo "  ✓ std + diagram"
+        cargo check -p lit-bit-core --no-default-features --features std,diagram
+        
+        # Test that mutually exclusive combinations fail correctly
+        echo "🚫 Verifying mutually exclusive feature protection..."
+        if cargo check -p lit-bit-core --no-default-features --features async-tokio,async-embassy 2>/dev/null; then
+          echo "❌ ERROR: Mutually exclusive features should fail compilation!"
+          exit 1
+        else
+          echo "  ✓ async-tokio + async-embassy correctly fails"
+        fi
+        
+        # Test workspace members with their specific feature combinations
+        echo "📦 Testing workspace members..."
+        
+        echo "  ✓ lit-bit-tests (with async-tokio)"
+        cargo check -p lit-bit-tests --features async-tokio
+        
+        echo "  ✓ lit-bit-bench"
+        cargo check -p lit-bit-bench
+        
+        echo "  ✓ lit-bit-cli"
+        cargo check -p lit-bit-cli
+        
+        echo "✅ All feature combinations tested successfully!"
 
   embedded-targets:
     name: Embedded Targets

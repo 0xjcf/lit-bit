@@ -43,6 +43,7 @@ struct SimpleActor {
 }
 
 impl SimpleActor {
+    #[allow(dead_code)] // Used in std builds
     fn new() -> Self {
         Self { count: 0 }
     }
@@ -102,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(not(feature = "std"))]
+#[allow(dead_code)] // Entry point for no_std builds
 fn main() {
     // For no_std targets, just demonstrate that the types are accessible
     let _actor = SimpleActor::new();

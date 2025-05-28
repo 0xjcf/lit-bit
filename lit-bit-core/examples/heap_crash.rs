@@ -33,6 +33,7 @@ use riscv_rt::entry;
 fn main() -> ! {
     // Attempt to allocate on the heap — should crash due to dummy allocator
     let _leaked = Box::leak(Box::new(1234u32));
+    #[allow(clippy::empty_loop)]
     loop {}
 }
 
@@ -50,6 +51,7 @@ use panic_halt as _;
 fn main() -> ! {
     // Attempt to allocate on the heap — should crash due to dummy allocator
     let _leaked = Box::leak(Box::new(5678u32));
+    #[allow(clippy::empty_loop)]
     loop {}
 }
 
@@ -84,6 +86,7 @@ extern "C" fn _start() -> ! {
     let _leaked = Box::leak(Box::new(9999u32));
     // For architectures without a specific runtime, we loop indefinitely
     // The allocation attempt above should have already caused a panic
+    #[allow(clippy::empty_loop)]
     loop {}
 }
 
