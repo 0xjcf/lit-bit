@@ -104,6 +104,7 @@ pub trait Actor: Send {
     ///     }
     /// }
     /// ```
+    #[must_use]
     fn handle(&mut self, msg: Self::Message) -> Self::Future<'_>;
 
     /// Called when the actor starts. Default: Ok(())
@@ -173,6 +174,7 @@ pub trait AsyncActor: Send {
     ///
     /// Note: This method returns a boxed future for ergonomic use when heap allocation
     /// is available. The actual implementation should use async fn syntax when possible.
+    #[must_use]
     fn handle(&mut self, msg: Self::Message) -> futures::future::BoxFuture<'_, ()>;
 
     /// Called when the actor starts. Default: Ok(())
@@ -353,6 +355,12 @@ pub fn create_mailbox<T>(capacity: usize) -> (Outbox<T>, Inbox<T>) {
 /// This provides a default yield implementation that allows the executor to schedule
 /// other tasks when the message queue is empty. The implementation returns `Poll::Pending`
 /// once before completing, which gives the executor an opportunity to run other tasks.
+///
+/// ## Future Improvement
+///
+/// TODO: Replace with `core::task::yield_now()` when it stabilizes (currently behind
+/// `#![feature(async_yield)]` in nightly). This will simplify the implementation
+/// and provide better integration with the standard library.
 ///
 /// ## Customization for Different Executors
 ///

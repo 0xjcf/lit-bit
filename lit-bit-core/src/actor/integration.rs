@@ -19,6 +19,7 @@ use crate::{SendResult, StateMachine};
 // TODO: Phase 5 - Resolve blanket implementation conflict
 // This implementation conflicts with the AsyncActor blanket impl.
 // We'll provide a more specific integration pattern in Phase 5.
+// Consider creating a GitHub issue to track this architectural decision.
 /*
 impl<SM> Actor for SM
 where

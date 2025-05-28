@@ -32,7 +32,7 @@ This directory contains daily progress logs organized by date, based on actual g
 - **Phase 04**: Minimal Actor Layer
 
 ### 🚧 Current Phase
-- **Phase 05**: Async & Side-Effects (Sprint 1 Complete ✅)
+- **Phase 05**: Async & Side Effects (Sprint 1 Complete ✅)
 
 ### 📊 Key Metrics
 - **All CI Jobs Passing** ✅
