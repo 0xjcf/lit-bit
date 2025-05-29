@@ -424,6 +424,8 @@ pub(crate) mod intermediate_tree {
         pub guard_handler: Option<&'ast Expr>, // Changed from Path
         pub action_handler: Option<&'ast Expr>, // Changed from Path
         pub on_keyword_span: Span,
+        /// Indicates whether this transition's action handler contains async blocks
+        pub has_async_action: bool,
     }
 
     #[derive(Debug)]
@@ -443,6 +445,8 @@ pub(crate) mod intermediate_tree {
         pub state_keyword_span: Span,
         pub name_span: Span,
         pub declared_initial_child_expression: Option<&'ast Path>,
+        /// Indicates whether this state contains any async handlers (entry, exit, or transition actions)
+        pub has_async_handlers: bool,
     }
 
     pub(crate) struct TmpStateTreeBuilder<'ast> {
@@ -777,6 +781,7 @@ pub(crate) mod intermediate_tree {
                     .default_child_declaration
                     .as_ref()
                     .map(|dcd| &dcd.child_state_expression),
+                has_async_handlers: false,
             };
             self.all_states.push(new_state_node);
 
@@ -800,20 +805,35 @@ pub(crate) mod intermediate_tree {
                     // trans_ast is now &Box<TransitionDefinitionAst> due to pattern matching
                     // Auto-deref should allow direct field access on trans_ast as if it were &TransitionDefinitionAst
                     crate::StateBodyItemAst::Transition(trans_ast) => {
-                        transitions_for_this_state.push(TmpTransition {
-                            event_pattern: &trans_ast.event_pattern, // Changed from event_name
-                            target_state_path_ast: &trans_ast.target_state_path,
-                            target_state_idx: None,
-                            guard_handler: trans_ast
-                                .guard_clause
-                                .as_ref()
-                                .map(|gc| &gc.condition_function_expression),
-                            action_handler: trans_ast
-                                .action_clause
-                                .as_ref()
-                                .map(|ac| &ac.transition_action_expression),
-                            on_keyword_span: trans_ast.on_keyword_token.span,
-                        });
+                        if let Some(action_clause) = &trans_ast.action_clause {
+                            transitions_for_this_state.push(TmpTransition {
+                                event_pattern: &trans_ast.event_pattern,
+                                target_state_path_ast: &trans_ast.target_state_path,
+                                target_state_idx: None,
+                                guard_handler: trans_ast
+                                    .guard_clause
+                                    .as_ref()
+                                    .map(|gc| &gc.condition_function_expression),
+                                action_handler: Some(&action_clause.transition_action_expression),
+                                on_keyword_span: trans_ast.on_keyword_token.span,
+                                has_async_action: Self::expression_contains_async(
+                                    &action_clause.transition_action_expression,
+                                ),
+                            });
+                        } else {
+                            transitions_for_this_state.push(TmpTransition {
+                                event_pattern: &trans_ast.event_pattern,
+                                target_state_path_ast: &trans_ast.target_state_path,
+                                target_state_idx: None,
+                                guard_handler: trans_ast
+                                    .guard_clause
+                                    .as_ref()
+                                    .map(|gc| &gc.condition_function_expression),
+                                action_handler: None,
+                                on_keyword_span: trans_ast.on_keyword_token.span,
+                                has_async_action: false, // No action means no async action
+                            });
+                        }
                     }
                     crate::StateBodyItemAst::NestedState(nested_state_decl_ast) => {
                         let child_idx = self.process_state_declaration(
@@ -828,10 +848,26 @@ pub(crate) mod intermediate_tree {
             }
 
             if let Some(state_to_update) = self.all_states.get_mut(current_node_index) {
+                // Check entry handler for async
+                let has_async_entry =
+                    entry_handler_opt.is_some_and(Self::expression_contains_async);
+
+                // Check exit handler for async
+                let has_async_exit = exit_handler_opt.is_some_and(Self::expression_contains_async);
+
+                // Check transitions for async actions
+                let has_async_transitions = transitions_for_this_state
+                    .iter()
+                    .any(|t| t.has_async_action);
+
+                // Set overall async detection
+                let has_async_handlers = has_async_entry || has_async_exit || has_async_transitions;
+
                 state_to_update.children_indices = children_indices_for_this_state;
                 state_to_update.entry_handler = entry_handler_opt;
                 state_to_update.exit_handler = exit_handler_opt;
                 state_to_update.transitions = transitions_for_this_state;
+                state_to_update.has_async_handlers = has_async_handlers;
             } else {
                 return Err(syn::Error::new(
                     state_decl_ast.name.span(),
@@ -839,6 +875,28 @@ pub(crate) mod intermediate_tree {
                 ));
             }
             Ok(current_node_index)
+        }
+
+        /// Helper function to detect if an expression contains top-level async blocks.
+        /// This implements the research recommendation to focus on syn::Expr::Async detection only.
+        pub(crate) fn expression_contains_async(expr: &Expr) -> bool {
+            match expr {
+                Expr::Async(_) => true,
+                // For other expression types, we don't do deep analysis per research guidance
+                _ => false,
+            }
+        }
+
+        /// Determines if the entire statechart contains any async handlers.
+        ///
+        /// This function scans all states in the statechart to detect if any entry/exit handlers
+        /// or transition actions contain async blocks. This information is used to decide whether
+        /// to generate sync-only code (zero-cost) or async-compatible code.
+        ///
+        /// Returns true if any state has async handlers, false if all handlers are sync-only.
+        #[allow(dead_code)] // Will be used in full async integration
+        pub(crate) fn contains_async_handlers(&self) -> bool {
+            self.all_states.iter().any(|state| state.has_async_handlers)
         }
     }
 }
@@ -1061,8 +1119,45 @@ pub(crate) mod code_generator {
     ) -> SynResult<TokenStream> {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         let mut state_node_initializers = Vec::new();
+
+        // Detect async usage and provide helpful error messages for now
+        // TODO: Full async integration with Actor trait system in Sprint 3 continuation
         for tmp_state in &builder.all_states {
-            // ... existing id, parent_id, initial_child_id, entry_action, exit_action expressions ...
+            // Check for async handlers and emit helpful errors
+            if let Some(entry_expr) = tmp_state.entry_handler {
+                if TmpStateTreeBuilder::expression_contains_async(entry_expr) {
+                    return Err(SynError::new(
+                        entry_expr.span(),
+                        "Async entry handlers are not yet supported. Async handlers require integration with the Actor trait system. Please use sync entry handlers for now, or consider using the actor layer for async operations."
+                    ));
+                }
+            }
+
+            if let Some(exit_expr) = tmp_state.exit_handler {
+                if TmpStateTreeBuilder::expression_contains_async(exit_expr) {
+                    return Err(SynError::new(
+                        exit_expr.span(),
+                        "Async exit handlers are not yet supported. Async handlers require integration with the Actor trait system. Please use sync exit handlers for now, or consider using the actor layer for async operations."
+                    ));
+                }
+            }
+
+            // Check transitions for async actions
+            for transition in &tmp_state.transitions {
+                if transition.has_async_action {
+                    if let Some(action_expr) = transition.action_handler {
+                        return Err(SynError::new(
+                            action_expr.span(),
+                            "Async transition actions are not yet supported. Async actions require integration with the Actor trait system. Please use sync action handlers for now, or consider using the actor layer for async operations."
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Continue with sync-only code generation (zero-cost path maintained)
+        for tmp_state in &builder.all_states {
+            // ... existing id, parent_id, initial_child_id expressions ...
             let current_state_id_variant = generated_ids
                 .full_path_to_variant_ident
                 .get(&tmp_state.full_path_name)
@@ -1097,6 +1192,7 @@ pub(crate) mod code_generator {
                 })
                 .unwrap_or_else(|| quote! { None });
 
+            // Pure sync code generation (maintaining zero-cost abstractions)
             let entry_action_expr = tmp_state.entry_handler.map_or_else(
                 || quote! { None },
                 |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
@@ -1137,6 +1233,23 @@ pub(crate) mod code_generator {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         let mut transition_initializers = Vec::new();
         let mut matcher_fns = Vec::new();
+
+        // First pass: Check for async transition actions and emit helpful errors
+        // TODO: Full async integration with Actor trait system
+        for tmp_state in &builder.all_states {
+            for tmp_trans in &tmp_state.transitions {
+                if tmp_trans.has_async_action {
+                    if let Some(action_expr) = tmp_trans.action_handler {
+                        return Err(SynError::new(
+                            action_expr.span(),
+                            "Async transition actions are not yet supported. Async actions require integration with the Actor trait system. Please use sync action handlers for now, or consider using the actor layer for async operations."
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Continue with sync-only code generation (zero-cost path maintained)
         for tmp_state in &builder.all_states {
             let from_state_id_variant = generated_ids.full_path_to_variant_ident.get(&tmp_state.full_path_name)
                 .ok_or_else(|| SynError::new(tmp_state.name_span, "Internal error: 'from_state' full_path_name not found in generated IDs map"))?;
@@ -4214,6 +4327,118 @@ mod tests {
                 "_",
                 "Wildcard pattern should not be modified, got: {prefixed_str}"
             );
+        }
+    }
+
+    #[test]
+    fn test_async_detection_and_helpful_errors() {
+        // Test that sync handlers continue to work (zero-cost path maintained)
+        let sync_input = r#"
+            name: SyncMachine,
+            context: u32,
+            event: TestEvent,
+            initial: SyncState,
+            
+            state SyncState {
+                entry: self.sync_entry_function;
+                exit: self.sync_exit_function;
+                on TestEvent::SyncEvent => SyncState [action self.sync_action_function];
+            }
+        "#;
+
+        // This should parse and build successfully (regression test)
+        let sync_result = parse_dsl(sync_input);
+        assert!(sync_result.is_ok(), "Sync handlers should continue to work");
+
+        if let Ok(sync_ast) = sync_result {
+            let mut sync_builder = crate::intermediate_tree::TmpStateTreeBuilder::new();
+            let sync_build_result = sync_builder.build_from_ast(&sync_ast);
+            assert!(
+                sync_build_result.is_ok(),
+                "Sync state machine should build successfully"
+            );
+
+            // Verify that sync-only machine has no async handlers detected
+            assert!(
+                !sync_builder.contains_async_handlers(),
+                "Sync-only machine should not detect async handlers"
+            );
+        }
+
+        // Test that async handlers are detected and produce helpful error messages
+        let async_entry_input = r#"
+            name: AsyncMachine,
+            context: u32,
+            event: TestEvent,
+            initial: AsyncState,
+            
+            state AsyncState {
+                entry: async { some_async_work().await; };
+                on TestEvent::SomeEvent => AsyncState;
+            }
+        "#;
+
+        let async_result = parse_dsl(async_entry_input);
+        if let Ok(async_ast) = async_result {
+            let mut async_builder = crate::intermediate_tree::TmpStateTreeBuilder::new();
+            let async_build_result = async_builder.build_from_ast(&async_ast);
+
+            // Should build the intermediate representation successfully
+            assert!(
+                async_build_result.is_ok(),
+                "Should parse async DSL into intermediate representation"
+            );
+
+            // Verify that async handlers are detected
+            assert!(
+                async_builder.contains_async_handlers(),
+                "Should detect async handlers in state machine"
+            );
+
+            // Verify specific state has async handlers
+            let async_state = async_builder
+                .all_states
+                .iter()
+                .find(|state| state.local_name.to_string() == "AsyncState")
+                .expect("Should find AsyncState");
+            assert!(
+                async_state.has_async_handlers,
+                "AsyncState should be marked as having async handlers"
+            );
+
+            // Test that code generation produces helpful error message
+            let generated_ids = crate::code_generator::generate_state_id_logic(
+                &async_builder,
+                &format_ident!("AsyncMachine"),
+            )
+            .expect("Should generate state IDs");
+            let states_result = crate::code_generator::generate_states_array(
+                &async_builder,
+                &generated_ids,
+                &async_ast.context_type,
+                &async_ast.event_type,
+            );
+
+            // Should fail with helpful error message about async entry handlers
+            assert!(
+                states_result.is_err(),
+                "Should fail when generating code with async handlers"
+            );
+            if let Err(error) = states_result {
+                let error_msg = error.to_string();
+                assert!(
+                    error_msg.contains("Async entry handlers are not yet supported"),
+                    "Should mention async entry handlers are not supported"
+                );
+                assert!(
+                    error_msg.contains("Actor trait system"),
+                    "Should mention Actor trait integration requirement"
+                );
+                assert!(
+                    error_msg.contains("sync entry handlers for now"),
+                    "Should suggest using sync handlers for now"
+                );
+            }
         }
     }
 }

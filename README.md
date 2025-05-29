@@ -1,8 +1,6 @@
 # lit-bit: A `#![no_std]` Statechart Library for Rust
 
-[![Heap/Unsafe-Free CI](https://img.shields.io/badge/heap--unsafe--free-checked-brightgreen?logo=rust&label=Heap%2FUnsafe%20Scan)](https://github.com/0xjcf/lit-bit/actions)
-
-![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/0xjcf/lit-bit)
+[![Heap/Unsafe-Free CI](https://img.shields.io/badge/heap--unsafe--free-checked-brightgreen?logo=rust&label=Heap%2FUnsafe%20Scan)](https://github.com/0xjcf/lit-bit/actions) ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/0xjcf/lit-bit?utm_source=oss&utm_medium=github&utm_campaign=0xjcf%2Flit-bit&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
 **Build robust, reactive systems with XState-inspired statecharts that run everywhere from microcontrollers to cloud servers.**
 
