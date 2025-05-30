@@ -283,8 +283,7 @@ fn bench_kpi_validation(c: &mut Criterion) {
 
         // Report memory usage once after benchmark completes
         println!(
-            "Single actor + N=8 mailbox memory usage: {} bytes (target: ≤512B)",
-            final_memory_used
+            "Single actor + N=8 mailbox memory usage: {final_memory_used} bytes (target: ≤512B)"
         );
     });
 

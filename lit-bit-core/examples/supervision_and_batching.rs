@@ -198,8 +198,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let completed_children = supervisor.poll_children();
         for (child_id, result) in completed_children {
             match result {
-                Ok(()) => println!("Child {} completed successfully", child_id),
-                Err(err) => println!("Child {} failed with error: {:?}", child_id, err),
+                Ok(()) => println!("Child {child_id} completed successfully"),
+                Err(err) => println!("Child {child_id} failed with error: {err:?}"),
             }
         }
     }
