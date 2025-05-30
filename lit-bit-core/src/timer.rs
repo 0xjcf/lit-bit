@@ -17,8 +17,7 @@ fn duration_to_u64_micros(duration: Duration) -> u64 {
     // Ensure we don't silently truncate large durations
     debug_assert!(
         duration_micros <= u64::MAX as u128,
-        "Duration too large for timer: {} microseconds exceeds u64::MAX",
-        duration_micros
+        "Duration too large for timer: {duration_micros} microseconds exceeds u64::MAX"
     );
 
     // Use saturating conversion to handle overflow gracefully
