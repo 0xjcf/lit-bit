@@ -1489,23 +1489,6 @@ pub(crate) mod code_generator {
         // Detect overall async usage for conditional code generation (Task 4.1)
         let has_any_async_handlers = builder.contains_async_handlers();
 
-        // Early validation: Reject async handlers until full async support is implemented
-        if has_any_async_handlers {
-            // Find the first state with async handlers to provide a specific error location
-            if let Some(async_state) = builder
-                .all_states
-                .iter()
-                .find(|state| state.has_async_handlers)
-            {
-                return Err(SynError::new(
-                    async_state.name_span,
-                    "Async entry handlers are not yet supported in the current version. \
-                     Full async support requires integration with the Actor trait system. \
-                     Please use sync entry handlers for now, or wait for the async actor integration in a future release."
-                ));
-            }
-        }
-
         // Generate state nodes with conditional async support
         for tmp_state in &builder.all_states {
             let current_state_id_variant = generated_ids
@@ -2000,15 +1983,13 @@ pub(crate) mod code_generator {
 
             let spawn_timer_fn_ident = format_ident!("spawn_timers_for_{}", state_id_variant);
             let mut timer_spawning_code = Vec::new();
-            let mut timer_task_idents = Vec::new(); // Collect timer task identifiers
+            let mut timer_handle_collection_code = Vec::new(); // NEW: separate collection for handle push statements
 
             // Generate spawning code for each timer transition in this state
             for (timer_idx, timer_trans) in tmp_state.timer_transitions.iter().enumerate() {
                 let duration_expr = timer_trans.duration_expression;
                 let timer_task_ident =
                     format_ident!("timer_task_{}_{}", state_id_variant, timer_idx);
-
-                timer_task_idents.push(timer_task_ident.clone()); // Collect for handle storage
 
                 // Generate the timer event that will be sent when timer fires
                 let _timer_event_ident =
@@ -2059,35 +2040,41 @@ pub(crate) mod code_generator {
                     };
                 };
                 timer_spawning_code.push(timer_task_code);
+
+                // Generate the corresponding handle collection code for this specific timer
+                let handle_collection_code = quote! {
+                    #[cfg(feature = "async-tokio")]
+                    timer_handles.push(TimerHandle::Tokio(#timer_task_ident));
+
+                    #[cfg(all(feature = "embassy", not(feature = "async-tokio")))]
+                    timer_handles.push(TimerHandle::Embassy(Box::pin(#timer_task_ident)));
+                };
+                timer_handle_collection_code.push(handle_collection_code);
             }
 
             // Generate the complete timer spawning function for this state
             let spawn_function = quote! {
                 #[cfg(any(feature = "async-tokio", feature = "embassy"))]
-                fn #spawn_timer_fn_ident(event_sender: impl Clone + Send + 'static) -> Vec<TimerHandle> {
+                fn #spawn_timer_fn_ident<S>(event_sender: S) -> Vec<TimerHandle>
+                where
+                    S: TimerEventSender<#event_type_path> + Clone + Send + 'static,
+                {
                     use std::future::Future;
                     let mut timer_handles = Vec::new();
 
                     #(#timer_spawning_code)*
 
                     // Collect all timer task handles for cancellation
-                    #[cfg(feature = "async-tokio")]
-                    {
-                        // For Tokio, collect the spawned task handles
-                        #(timer_handles.push(TimerHandle::Tokio(#timer_task_idents));)*
-                    }
-
-                    #[cfg(all(feature = "embassy", not(feature = "async-tokio")))]
-                    {
-                        // For Embassy, store futures for later spawning
-                        #(timer_handles.push(TimerHandle::Embassy(Box::pin(#timer_task_idents)));)*
-                    }
+                    #(#timer_handle_collection_code)*
 
                     timer_handles
                 }
 
                 #[cfg(not(any(feature = "async-tokio", feature = "embassy")))]
-                fn #spawn_timer_fn_ident(_event_sender: impl Clone + Send + 'static) -> Vec<TimerHandle> {
+                fn #spawn_timer_fn_ident<S>(_event_sender: S) -> Vec<TimerHandle>
+                where
+                    S: TimerEventSender<#event_type_path> + Clone + Send + 'static,
+                {
                     // Timer transitions are not available without async feature
                     // This ensures zero-cost for sync-only builds
                     Vec::new()
@@ -2120,6 +2107,17 @@ pub(crate) mod code_generator {
                 use std::pin::Pin;
                 use std::future::Future;
 
+                /// Trait for types that can send timer events.
+                /// This ensures that the event_sender parameter has the required try_send method.
+                pub trait TimerEventSender<Event> {
+                    /// Error type returned by try_send
+                    type Error;
+
+                    /// Attempts to send an event without blocking.
+                    /// Returns an error if the send fails (e.g., mailbox full).
+                    fn try_send(&self, event: Event) -> Result<(), Self::Error>;
+                }
+
                 /// Timer handle for cancellation support
                 #[derive(Debug)]
                 pub enum TimerHandle {
@@ -2149,10 +2147,13 @@ pub(crate) mod code_generator {
                 #(#timer_spawn_functions)*
 
                 /// Starts timers for a state when it's entered
-                pub fn start_timers_for_state(
+                pub fn start_timers_for_state<S>(
                     state: #state_id_enum_name,
-                    event_sender: impl Clone + Send + 'static
-                ) -> Vec<TimerHandle> {
+                    event_sender: S
+                ) -> Vec<TimerHandle>
+                where
+                    S: TimerEventSender<#event_type_path> + Clone + Send + 'static,
+                {
                     match state {
                         #(#state_timer_handlers)*
                         _ => {
@@ -2178,11 +2179,20 @@ pub(crate) mod code_generator {
                 #[derive(Debug)]
                 pub struct TimerHandle;
 
+                /// Dummy trait for timer event sender (no-op for non-async builds)
+                pub trait TimerEventSender<Event> {
+                    type Error;
+                    fn try_send(&self, event: Event) -> Result<(), Self::Error>;
+                }
+
                 /// No-op timer handling when async is disabled (zero-cost)
-                pub fn start_timers_for_state(
+                pub fn start_timers_for_state<S>(
                     _state: #state_id_enum_name,
-                    _event_sender: impl Clone + Send + 'static
-                ) -> Vec<TimerHandle> {
+                    _event_sender: S
+                ) -> Vec<TimerHandle>
+                where
+                    S: TimerEventSender<#event_type_path> + Clone + Send + 'static,
+                {
                     // Timer transitions not available without async
                     Vec::new()
                 }
@@ -2565,6 +2575,30 @@ pub fn statechart(input: TokenStream) -> TokenStream {
         use lit_bit_core::{/* StateMachine, -- Removed */ Runtime, StateNode, Transition, ActionFn, GuardFn, MAX_ACTIVE_REGIONS};
     };
 
+    // Generate sync-to-async adapter function if async handlers are detected
+    let has_any_async_handlers = builder.contains_async_handlers();
+    let sync_to_async_adapter_fn = if has_any_async_handlers {
+        quote! {
+            // Generate sync-to-async adapter function for compatibility
+            #[cfg(any(feature = "async", feature = "async-tokio", feature = "embassy"))]
+            fn sync_to_async_adapter<C, E>(
+                sync_fn: fn(&mut C, &E)
+            ) -> impl Fn(&mut C, &E) -> core::pin::Pin<Box<dyn core::future::Future<Output = ()> + '_>>
+            where
+                C: 'static,
+                E: 'static,
+            {
+                move |context: &mut C, event: &E| {
+                    Box::pin(async move {
+                        sync_fn(context, event);
+                    })
+                }
+            }
+        }
+    } else {
+        quote! {} // Empty when no async handlers
+    };
+
     let final_code = quote! {
         mod generated_state_machine {
             #core_types_definitions
@@ -2576,6 +2610,9 @@ pub fn statechart(input: TokenStream) -> TokenStream {
             // then paths like `crate::TestContext` or simply `TestContext` (if a `use super::*` is effective
             // at the module where `statechart!` is invoked) should work when these #context_type_path tokens expand.
             // The `use super::*` in the test module `mod basic_machine_integration_test` should make them visible.
+
+            #sync_to_async_adapter_fn
+
             #state_id_enum_ts
             #states_array_ts
             #transitions_array_ts
@@ -5141,7 +5178,7 @@ mod tests {
             );
         }
 
-        // Test that async handlers are detected and produce helpful error messages
+        // Test that async handlers are now properly supported
         let async_entry_input = r#"
             name: AsyncMachine,
             context: u32,
@@ -5182,7 +5219,7 @@ mod tests {
                 "AsyncState should be marked as having async handlers"
             );
 
-            // Test that code generation produces helpful error message
+            // Test that code generation now succeeds for async handlers
             let generated_ids = crate::code_generator::generate_state_id_logic(
                 &async_builder,
                 &format_ident!("AsyncMachine"),
@@ -5195,24 +5232,25 @@ mod tests {
                 &async_ast.event_type,
             );
 
-            // Should fail with helpful error message about async entry handlers
+            // Should now succeed when generating code with async handlers
             assert!(
-                states_result.is_err(),
-                "Should fail when generating code with async handlers"
+                states_result.is_ok(),
+                "Should succeed when generating code with async handlers: {:?}",
+                states_result.err()
             );
-            if let Err(error) = states_result {
-                let error_msg = error.to_string();
+
+            // Verify that the generated code contains async-specific types
+            if let Ok(states_array) = states_result {
+                let states_code = states_array.to_string();
                 assert!(
-                    error_msg.contains("Async entry handlers are not yet supported"),
-                    "Should mention async entry handlers are not supported"
+                    states_code.contains("AsyncStateNode")
+                        || states_code.contains("lit_bit_core :: AsyncStateNode"),
+                    "Generated code should use AsyncStateNode for async handlers"
                 );
                 assert!(
-                    error_msg.contains("Actor trait system"),
-                    "Should mention Actor trait integration requirement"
-                );
-                assert!(
-                    error_msg.contains("sync entry handlers for now"),
-                    "Should suggest using sync handlers for now"
+                    states_code.contains("async")
+                        || states_code.contains("#[cfg(any(feature = \"async\""),
+                    "Generated code should include async feature flags"
                 );
             }
         }

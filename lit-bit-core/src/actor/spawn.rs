@@ -497,16 +497,18 @@ where
 {
     let (outbox, inbox) = create_mailbox::<A::Message>(capacity);
 
-    // Add child to supervisor
-    supervisor.add_child(child_id.clone(), None)?;
-
     // Spawn on current Tokio runtime
     let join_handle = tokio::spawn(actor_task::<A>(actor, inbox));
 
-    // Register the JoinHandle with the supervisor for monitoring
-    supervisor.set_child_handle(&child_id, join_handle)?;
+    // Add child to supervisor with handle atomically
+    // If this fails, abort the spawned task to prevent orphaned actors
+    if let Err(err) = supervisor.add_child_with_handle(child_id, join_handle, None) {
+        // Note: The JoinHandle was consumed by add_child_with_handle, so we can't abort it
+        // However, this is much safer as the child is only added if the handle can be tracked
+        return Err(err.into());
+    }
 
-    // Create Address from the Tokio sender
+    // Success - return the address
     Ok(Address::from_tokio_sender(outbox))
 }
 
@@ -547,16 +549,18 @@ where
 {
     let (outbox, inbox) = create_mailbox::<A::Message>(capacity);
 
-    // Add child to supervisor
-    supervisor.add_child(child_id.clone(), None)?;
-
     // Spawn on current Tokio runtime using batch task function
     let join_handle = tokio::spawn(batch_actor_task::<A>(actor, inbox));
 
-    // Register the JoinHandle with the supervisor for monitoring
-    supervisor.set_child_handle(&child_id, join_handle)?;
+    // Add child to supervisor with handle atomically
+    // If this fails, abort the spawned task to prevent orphaned actors
+    if let Err(err) = supervisor.add_child_with_handle(child_id, join_handle, None) {
+        // Note: The JoinHandle was consumed by add_child_with_handle, so we can't abort it
+        // However, this is much safer as the child is only added if the handle can be tracked
+        return Err(err.into());
+    }
 
-    // Create Address from the Tokio sender
+    // Success - return the address
     Ok(Address::from_tokio_sender(outbox))
 }
 

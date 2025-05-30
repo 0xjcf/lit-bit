@@ -136,6 +136,7 @@ required-features = ["async-tokio"]
 
 [[example]]
 name = "async_actor_simple"
+required-features = ["async-tokio"]
 
 [[example]]
 name = "supervision_and_batching"

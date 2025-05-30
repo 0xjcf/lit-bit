@@ -6,6 +6,29 @@
 
 use core::time::Duration;
 
+/// Converts a Duration to u64 microseconds with overflow protection.
+///
+/// This helper function ensures consistent behavior when converting Duration
+/// to u64 microseconds across the codebase, clamping to u64::MAX on overflow.
+#[cfg(any(feature = "async-embassy", test))]
+fn duration_to_u64_micros(duration: Duration) -> u64 {
+    let duration_micros = duration.as_micros();
+
+    // Ensure we don't silently truncate large durations
+    debug_assert!(
+        duration_micros <= u64::MAX as u128,
+        "Duration too large for timer: {} microseconds exceeds u64::MAX",
+        duration_micros
+    );
+
+    // Use saturating conversion to handle overflow gracefully
+    if duration_micros > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        duration_micros as u64
+    }
+}
+
 /// Platform-neutral timer service trait for async sleep operations.
 ///
 /// This trait provides zero-cost abstractions for timer operations across
@@ -59,22 +82,7 @@ impl TimerService for EmbassyTimer {
     type SleepFuture = embassy_time::Timer;
 
     fn sleep(duration: Duration) -> Self::SleepFuture {
-        let duration_micros = duration.as_micros();
-
-        // Ensure we don't silently truncate large durations
-        debug_assert!(
-            duration_micros <= u64::MAX as u128,
-            "Duration too large for Embassy timer: {} microseconds exceeds u64::MAX",
-            duration_micros
-        );
-
-        // Use saturating conversion to handle overflow gracefully
-        let embassy_micros = if duration_micros > u64::MAX as u128 {
-            u64::MAX
-        } else {
-            duration_micros as u64
-        };
-
+        let embassy_micros = duration_to_u64_micros(duration);
         embassy_time::Timer::after(embassy_time::Duration::from_micros(embassy_micros))
     }
 }
@@ -203,12 +211,8 @@ mod tests {
         let max_duration = Duration::MAX;
         let micros = max_duration.as_micros();
 
-        // Verify our conversion logic
-        let safe_micros = if micros > u64::MAX as u128 {
-            u64::MAX
-        } else {
-            micros as u64
-        };
+        // Verify our conversion logic using the helper function
+        let safe_micros = duration_to_u64_micros(max_duration);
 
         // Should clamp to u64::MAX when overflow occurs
         if micros > u64::MAX as u128 {
@@ -220,31 +224,20 @@ mod tests {
 
     #[test]
     fn test_duration_safe_conversion_logic() {
-        // Test the exact conversion logic we use in EmbassyTimer
-        fn safe_duration_conversion(duration: Duration) -> u64 {
-            let duration_micros = duration.as_micros();
-            if duration_micros > u64::MAX as u128 {
-                u64::MAX
-            } else {
-                duration_micros as u64
-            }
-        }
+        // Test the exact conversion logic we use in EmbassyTimer using the helper function
 
         // Test normal durations
-        assert_eq!(safe_duration_conversion(Duration::from_secs(1)), 1_000_000);
-        assert_eq!(
-            safe_duration_conversion(Duration::from_millis(500)),
-            500_000
-        );
-        assert_eq!(safe_duration_conversion(Duration::from_micros(123)), 123);
+        assert_eq!(duration_to_u64_micros(Duration::from_secs(1)), 1_000_000);
+        assert_eq!(duration_to_u64_micros(Duration::from_millis(500)), 500_000);
+        assert_eq!(duration_to_u64_micros(Duration::from_micros(123)), 123);
 
         // Test edge case: exactly u64::MAX microseconds
         let max_micros_duration = Duration::from_micros(u64::MAX);
-        assert_eq!(safe_duration_conversion(max_micros_duration), u64::MAX);
+        assert_eq!(duration_to_u64_micros(max_micros_duration), u64::MAX);
 
         // Test overflow case: Duration::MAX
         let max_duration = Duration::MAX;
-        assert_eq!(safe_duration_conversion(max_duration), u64::MAX);
+        assert_eq!(duration_to_u64_micros(max_duration), u64::MAX);
 
         // Verify that Duration::MAX actually overflows u64
         assert!(max_duration.as_micros() > u64::MAX as u128);

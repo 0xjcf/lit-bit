@@ -5,6 +5,10 @@ use lit_bit_bench::utils::TrackingAllocator;
 use lit_bit_core::actor::{Actor, create_mailbox};
 use lit_bit_macro::statechart;
 
+// Install TrackingAllocator as the global allocator to track all heap allocations
+#[global_allocator]
+static GLOBAL_ALLOCATOR: TrackingAllocator = TrackingAllocator::new();
+
 // Note: For more advanced zero-allocation testing, a custom global allocator
 // could be implemented here to track allocation counts globally
 
@@ -98,11 +102,9 @@ fn bench_statechart_memory_footprint(c: &mut Criterion) {
             BenchmarkId::new("statechart_size", num_states),
             num_states,
             |b, &num_states| {
-                let allocator = TrackingAllocator::new();
-
                 b.iter(|| {
                     // Measure actual memory usage using tracking allocator
-                    allocator.reset();
+                    GLOBAL_ALLOCATOR.reset();
 
                     // Create multiple statecharts to simulate memory usage
                     let statecharts: Vec<_> = (0..num_states)
@@ -115,7 +117,7 @@ fn bench_statechart_memory_footprint(c: &mut Criterion) {
                         })
                         .collect();
 
-                    let memory_used = allocator.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
                     black_box((statecharts, memory_used));
                 });
             },
@@ -133,11 +135,9 @@ fn bench_mailbox_memory_usage(c: &mut Criterion) {
             BenchmarkId::new("queue_capacity", capacity),
             capacity,
             |b, &capacity| {
-                let allocator = TrackingAllocator::new();
-
                 b.iter(|| {
                     // Measure actual mailbox memory usage
-                    allocator.reset();
+                    GLOBAL_ALLOCATOR.reset();
 
                     // Create real mailbox instances with the given capacity
                     let (outbox, inbox) = create_mailbox::<u32>(capacity);
@@ -147,7 +147,7 @@ fn bench_mailbox_memory_usage(c: &mut Criterion) {
                         let _ = outbox.try_send(u32::try_from(i).unwrap_or(u32::MAX));
                     }
 
-                    let memory_used = allocator.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
                     black_box((outbox, inbox, memory_used));
                 });
             },
@@ -165,11 +165,9 @@ fn bench_actor_system_scaling(c: &mut Criterion) {
             BenchmarkId::new("memory_per_actor", num_actors),
             num_actors,
             |b, &num_actors| {
-                let allocator = TrackingAllocator::new();
-
                 b.iter(|| {
                     // Measure memory usage with real actor instances
-                    allocator.reset();
+                    GLOBAL_ALLOCATOR.reset();
 
                     // Create real actors with typical state and behavior
                     let actors: Vec<BenchActor> = (0..num_actors)
@@ -180,7 +178,7 @@ fn bench_actor_system_scaling(c: &mut Criterion) {
                     let mailboxes: Vec<_> =
                         (0..num_actors).map(|_| create_mailbox::<u32>(16)).collect();
 
-                    let memory_used = allocator.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
                     black_box((actors, mailboxes, memory_used));
                 });
             },
@@ -192,12 +190,11 @@ fn bench_actor_system_scaling(c: &mut Criterion) {
 
 fn bench_zero_allocation_paths(c: &mut Criterion) {
     let mut group = c.benchmark_group("zero_allocation");
-    let allocator = TrackingAllocator::new();
 
     group.bench_function("no_std_transition", |b| {
         b.iter(|| {
             // Verify zero-allocation state transitions
-            allocator.reset();
+            GLOBAL_ALLOCATOR.reset();
 
             // Create and exercise a statechart that should not allocate
             let mut machine = MemoryBenchMachine::new(
@@ -206,14 +203,14 @@ fn bench_zero_allocation_paths(c: &mut Criterion) {
             )
             .expect("Failed to create machine");
 
-            let initial_count = allocator.allocated_bytes();
+            let initial_count = GLOBAL_ALLOCATOR.allocated_bytes();
 
             // Perform transitions that should not allocate
             let result1 = machine.send(&MemoryBenchEvent::Increment);
             let result2 = machine.send(&MemoryBenchEvent::Toggle);
             let result3 = machine.send(&MemoryBenchEvent::Reset);
 
-            let final_count = allocator.allocated_bytes();
+            let final_count = GLOBAL_ALLOCATOR.allocated_bytes();
             let allocations = final_count.saturating_sub(initial_count);
 
             // Assert zero allocations occurred during transitions
@@ -231,14 +228,14 @@ fn bench_zero_allocation_paths(c: &mut Criterion) {
 
         b.iter(|| {
             // Verify static mailbox operations don't allocate
-            allocator.reset();
-            let initial_count = allocator.allocated_bytes();
+            GLOBAL_ALLOCATOR.reset();
+            let initial_count = GLOBAL_ALLOCATOR.allocated_bytes();
 
             // Perform mailbox operations that should not allocate
             let send_result = outbox.try_send(42);
             let recv_result = inbox.try_recv();
 
-            let final_count = allocator.allocated_bytes();
+            let final_count = GLOBAL_ALLOCATOR.allocated_bytes();
             let allocations = final_count.saturating_sub(initial_count);
 
             // Assert zero allocations occurred
@@ -258,11 +255,10 @@ fn bench_kpi_validation(c: &mut Criterion) {
 
     // Validate the 512B RAM overhead target for single actor with N=8 queue
     group.bench_function("single_actor_512b_target", |b| {
-        let allocator = TrackingAllocator::new();
         let mut final_memory_used = 0;
 
         b.iter(|| {
-            allocator.reset();
+            GLOBAL_ALLOCATOR.reset();
 
             // Create a single actor with 8-capacity mailbox
             let actor = BenchActor::new(64); // Reasonable state size
@@ -273,7 +269,7 @@ fn bench_kpi_validation(c: &mut Criterion) {
                 let _ = outbox.try_send(i);
             }
 
-            let memory_used = allocator.allocated_bytes();
+            let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
             final_memory_used = memory_used; // Capture for reporting later
 
             // In real embedded systems, this should be ≤ 512B
@@ -357,15 +353,13 @@ fn bench_memory_scaling_characteristics(c: &mut Criterion) {
             BenchmarkId::new("mailbox_scaling", mailbox_size),
             mailbox_size,
             |b, &size| {
-                let allocator = TrackingAllocator::new();
-
                 b.iter(|| {
-                    allocator.reset();
+                    GLOBAL_ALLOCATOR.reset();
 
                     let actor = BenchActor::new(32);
                     let (outbox, _inbox) = create_mailbox::<u32>(size);
 
-                    let memory_used = allocator.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
                     let memory_per_slot = if size > 0 { memory_used / size } else { 0 };
 
                     black_box((actor, outbox, memory_used, memory_per_slot));
@@ -380,10 +374,8 @@ fn bench_memory_scaling_characteristics(c: &mut Criterion) {
             BenchmarkId::new("statechart_scaling", num_states),
             num_states,
             |b, &num_states| {
-                let allocator = TrackingAllocator::new();
-
                 b.iter(|| {
-                    allocator.reset();
+                    GLOBAL_ALLOCATOR.reset();
 
                     let statecharts: Vec<_> = (0..num_states)
                         .map(|_| {
@@ -395,7 +387,7 @@ fn bench_memory_scaling_characteristics(c: &mut Criterion) {
                         })
                         .collect();
 
-                    let memory_used = allocator.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
                     let memory_per_statechart = if num_states > 0 {
                         memory_used / num_states
                     } else {

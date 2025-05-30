@@ -77,6 +77,9 @@ where
 
     /// Time window for restart counting (in milliseconds)
     restart_window_ms: u64,
+
+    /// Sequence counter for tracking child start order (for RestForOne strategy)
+    next_start_sequence: u64,
 }
 
 /// Information about a supervised child actor.
@@ -86,6 +89,9 @@ struct ChildInfo {
 
     /// Number of restarts within the current window
     restart_count: usize,
+
+    /// Sequence number indicating the order this child was added (for RestForOne strategy)
+    start_sequence: u64,
 
     /// Timestamp of the first restart in the current window
     #[cfg(feature = "std")]
@@ -125,6 +131,7 @@ where
             default_restart_strategy: RestartStrategy::OneForOne,
             max_restarts: 5,
             restart_window_ms: 60_000, // 60 seconds
+            next_start_sequence: 0,
         }
     }
 
@@ -150,6 +157,7 @@ where
             default_restart_strategy: default_strategy,
             max_restarts,
             restart_window_ms,
+            next_start_sequence: 0,
         }
     }
 
@@ -176,12 +184,13 @@ where
         let child_info = ChildInfo {
             restart_strategy: strategy,
             restart_count: 0,
+            start_sequence: self.next_start_sequence,
 
             #[cfg(feature = "std")]
             window_start: std::time::Instant::now(),
 
             #[cfg(not(feature = "std"))]
-            window_start_ms: 0, // Will be set on first restart
+            window_start_ms: Self::current_time_ms(), // Initialize with current time for proper rate limiting
 
             #[cfg(feature = "async-tokio")]
             join_handle: None,
@@ -193,6 +202,7 @@ where
         #[cfg(feature = "async-tokio")]
         {
             self.children.insert(child_id, child_info);
+            self.next_start_sequence += 1;
             Ok(())
         }
 
@@ -200,7 +210,9 @@ where
         {
             self.children
                 .insert(child_id, child_info)
-                .map(|_| ())
+                .map(|_| {
+                    self.next_start_sequence += 1;
+                })
                 .map_err(|_| SupervisorError::CapacityExceeded)
         }
     }
@@ -297,11 +309,19 @@ where
 
             RestartStrategy::RestForOne => {
                 // Restart the failed child and all children started after it
-                // Note: This requires tracking child start order, which is simplified here
-                // In a full implementation, you would maintain a start order list
+                if let Some(failed_child_info) = self.children.get(failed_child_id) {
+                    let failed_sequence = failed_child_info.start_sequence;
 
-                // For now, implement as OneForOne (could be enhanced to track order)
-                alloc::vec![failed_child_id.clone()]
+                    // Collect the failed child and all children with sequence >= failed_sequence
+                    self.children
+                        .iter()
+                        .filter(|(_, child_info)| child_info.start_sequence >= failed_sequence)
+                        .map(|(child_id, _)| child_id.clone())
+                        .collect()
+                } else {
+                    // Failed child not found, restart nothing
+                    alloc::vec![]
+                }
             }
         }
     }
@@ -333,8 +353,20 @@ where
             }
 
             RestartStrategy::RestForOne => {
-                // For now, implement as OneForOne
-                let _ = result.push(failed_child_id.clone());
+                // Restart the failed child and all children started after it
+                if let Some(failed_child_info) = self.children.get(failed_child_id) {
+                    let failed_sequence = failed_child_info.start_sequence;
+
+                    // Collect the failed child and all children with sequence >= failed_sequence
+                    for (child_id, child_info) in &self.children {
+                        if child_info.start_sequence >= failed_sequence
+                            && result.push(child_id.clone()).is_err()
+                        {
+                            break; // Vec is full
+                        }
+                    }
+                }
+                // If failed child not found, result remains empty (restart nothing)
             }
         }
 
@@ -356,6 +388,55 @@ where
         } else {
             Err(SupervisorError::ChildNotFound)
         }
+    }
+
+    /// Adds a child actor to supervision with its JoinHandle atomically (Tokio-specific).
+    ///
+    /// This method combines `add_child` and `set_child_handle` into a single atomic operation,
+    /// preventing the race condition where a child is added but the handle cannot be set.
+    /// This is the preferred method for spawning supervised actors.
+    ///
+    /// # Arguments
+    /// * `child_id` - Unique identifier for the child
+    /// * `handle` - JoinHandle for monitoring the child task
+    /// * `restart_strategy` - Optional custom restart strategy (uses default if None)
+    ///
+    /// # Returns
+    /// `Ok(())` if the child was added successfully, `Err(SupervisorError)` if the operation failed.
+    #[cfg(feature = "async-tokio")]
+    pub fn add_child_with_handle(
+        &mut self,
+        child_id: ChildId,
+        handle: JoinHandle<Result<(), ActorError>>,
+        restart_strategy: Option<RestartStrategy>,
+    ) -> Result<(), SupervisorError> {
+        // Check if child already exists
+        if self.children.contains_key(&child_id) {
+            return Err(SupervisorError::ChildAlreadyExists);
+        }
+
+        let strategy = restart_strategy.unwrap_or(self.default_restart_strategy);
+
+        let child_info = ChildInfo {
+            restart_strategy: strategy,
+            restart_count: 0,
+            start_sequence: self.next_start_sequence,
+
+            #[cfg(feature = "std")]
+            window_start: std::time::Instant::now(),
+
+            #[cfg(not(feature = "std"))]
+            window_start_ms: Self::current_time_ms(), // Initialize with current time for proper rate limiting
+
+            join_handle: Some(handle),
+
+            #[cfg(not(feature = "async-tokio"))]
+            is_running: true,
+        };
+
+        self.children.insert(child_id, child_info);
+        self.next_start_sequence += 1;
+        Ok(())
     }
 
     /// Checks for completed child tasks and returns their results (Tokio-specific).
@@ -635,5 +716,101 @@ mod tests {
 
         let msg = SupervisorMessage::ChildPanicked { id: 1 };
         let _future = supervisor.handle(msg);
+    }
+
+    #[test]
+    fn rest_for_one_strategy_ordering() {
+        let mut supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Add children in specific order
+        assert!(
+            supervisor
+                .add_child(1, Some(RestartStrategy::RestForOne))
+                .is_ok()
+        );
+        assert!(
+            supervisor
+                .add_child(2, Some(RestartStrategy::RestForOne))
+                .is_ok()
+        );
+        assert!(
+            supervisor
+                .add_child(3, Some(RestartStrategy::RestForOne))
+                .is_ok()
+        );
+        assert!(
+            supervisor
+                .add_child(4, Some(RestartStrategy::RestForOne))
+                .is_ok()
+        );
+
+        // Test RestForOne for middle child (child 2 fails)
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = supervisor.get_children_to_restart(&2, RestartStrategy::RestForOne);
+            // Should restart child 2, 3, and 4 (all children started at or after child 2)
+            assert_eq!(to_restart.len(), 3);
+            assert!(to_restart.contains(&2));
+            assert!(to_restart.contains(&3));
+            assert!(to_restart.contains(&4));
+            assert!(!to_restart.contains(&1)); // Child 1 should not be restarted
+        }
+
+        #[cfg(not(any(feature = "std", feature = "alloc")))]
+        {
+            let to_restart = supervisor.get_children_to_restart(&2, RestartStrategy::RestForOne);
+            // Should restart child 2, 3, and 4
+            assert_eq!(to_restart.len(), 3);
+
+            // Check that the correct children are included
+            let mut contains_2 = false;
+            let mut contains_3 = false;
+            let mut contains_4 = false;
+            let mut contains_1 = false;
+
+            for child_id in &to_restart {
+                match *child_id {
+                    1 => contains_1 = true,
+                    2 => contains_2 = true,
+                    3 => contains_3 = true,
+                    4 => contains_4 = true,
+                    _ => {}
+                }
+            }
+
+            assert!(contains_2);
+            assert!(contains_3);
+            assert!(contains_4);
+            assert!(!contains_1); // Child 1 should not be restarted
+        }
+
+        // Test RestForOne for first child (child 1 fails)
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = supervisor.get_children_to_restart(&1, RestartStrategy::RestForOne);
+            // Should restart all children (1, 2, 3, 4) since child 1 was first
+            assert_eq!(to_restart.len(), 4);
+            assert!(to_restart.contains(&1));
+            assert!(to_restart.contains(&2));
+            assert!(to_restart.contains(&3));
+            assert!(to_restart.contains(&4));
+        }
+
+        // Test RestForOne for last child (child 4 fails)
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = supervisor.get_children_to_restart(&4, RestartStrategy::RestForOne);
+            // Should restart only child 4 (last child)
+            assert_eq!(to_restart.len(), 1);
+            assert!(to_restart.contains(&4));
+        }
+
+        // Test RestForOne for non-existent child
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = supervisor.get_children_to_restart(&999, RestartStrategy::RestForOne);
+            // Should restart nothing if child doesn't exist
+            assert_eq!(to_restart.len(), 0);
+        }
     }
 }

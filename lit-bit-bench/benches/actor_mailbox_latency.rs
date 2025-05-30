@@ -1,21 +1,20 @@
 //! Latency benchmarks for actor mailbox operations
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use futures::executor;
 use lit_bit_core::actor::{Actor, create_mailbox};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 // Test actor for latency benchmarks
 #[derive(Debug)]
 struct LatencyTestActor {
     messages_processed: u64,
-    total_processing_time: Duration,
 }
 
 impl LatencyTestActor {
     fn new() -> Self {
         Self {
             messages_processed: 0,
-            total_processing_time: Duration::ZERO,
         }
     }
 }
@@ -28,15 +27,13 @@ impl Actor for LatencyTestActor {
         Self: 'a;
 
     fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
-        let start = Instant::now();
-
+        // Clean message processing without timing overhead for accurate benchmarks
         match msg {
             LatencyTestMessage::Increment => {
                 self.messages_processed += 1;
             }
             LatencyTestMessage::Reset => {
                 self.messages_processed = 0;
-                self.total_processing_time = Duration::ZERO;
             }
             LatencyTestMessage::Ping => {
                 // Simple ping message for latency testing
@@ -44,7 +41,6 @@ impl Actor for LatencyTestActor {
             }
         }
 
-        self.total_processing_time += start.elapsed();
         core::future::ready(())
     }
 }
@@ -85,7 +81,7 @@ fn bench_mailbox_send_receive(c: &mut Criterion) {
                     // Process all messages
                     while let Ok(msg) = inbox.try_recv() {
                         let future = actor.handle(msg);
-                        std::mem::drop(black_box(future));
+                        executor::block_on(future); // Properly poll the future to completion
                     }
 
                     let elapsed = start.elapsed();
@@ -124,7 +120,7 @@ fn bench_mailbox_backpressure(c: &mut Criterion) {
             // Process messages to free up space
             while let Ok(msg) = inbox.try_recv() {
                 let future = actor.handle(msg);
-                std::mem::drop(black_box(future));
+                executor::block_on(future); // Properly poll the future to completion
             }
 
             // Now we should be able to send again
@@ -183,7 +179,7 @@ fn bench_throughput_validation(c: &mut Criterion) {
                 if outbox.try_send(msg).is_err() {
                     while let Ok(received_msg) = inbox.try_recv() {
                         let future = actor.handle(received_msg);
-                        std::mem::drop(black_box(future));
+                        executor::block_on(future); // Properly poll the future to completion
                     }
                     // Try sending again
                     outbox.try_send(msg).expect("Should succeed after draining");
@@ -193,7 +189,7 @@ fn bench_throughput_validation(c: &mut Criterion) {
             // Process remaining messages
             while let Ok(msg) = inbox.try_recv() {
                 let future = actor.handle(msg);
-                std::mem::drop(black_box(future));
+                executor::block_on(future); // Properly poll the future to completion
             }
 
             black_box(actor.messages_processed);
@@ -226,7 +222,7 @@ fn bench_memory_efficiency(c: &mut Criterion) {
                         outbox.try_send(LatencyTestMessage::Ping).unwrap();
                         if let Ok(msg) = inbox.try_recv() {
                             let future = actor.handle(msg);
-                            std::mem::drop(black_box(future));
+                            executor::block_on(future); // Properly poll the future to completion
                         }
                         black_box((actor, outbox, inbox));
                     }
@@ -255,7 +251,7 @@ fn bench_latency_targets(c: &mut Criterion) {
                 .expect("Failed to send");
             let msg = inbox.try_recv().expect("Failed to receive");
             let future = actor.handle(msg);
-            std::mem::drop(black_box(future));
+            executor::block_on(future); // Properly poll the future to completion
 
             let latency = start.elapsed();
             black_box(latency);
@@ -293,7 +289,7 @@ mod iai_benches {
     fn iai_actor_handle() {
         let mut actor = LatencyTestActor::new();
         let future = actor.handle(LatencyTestMessage::Increment);
-        black_box(future);
+        executor::block_on(future); // Properly poll the future to completion
     }
 
     #[library_benchmark]

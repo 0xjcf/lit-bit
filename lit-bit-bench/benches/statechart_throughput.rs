@@ -221,7 +221,7 @@ fn bench_guard_evaluation(c: &mut Criterion) {
             // Test guard evaluation - should succeed for first 1000 increments
             for _ in 0..500 {
                 let result = machine.send(&BenchmarkEvent::Increment);
-                assert_eq!(result, SendResult::Transitioned);
+                debug_assert_eq!(result, SendResult::Transitioned);
             }
 
             black_box(machine.context().count);

@@ -14,6 +14,7 @@ use lit_bit_core::actor::{
     },
     supervision::SupervisorActor,
 };
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -36,7 +37,73 @@ impl WorkerActor {
     }
 
     fn set_should_fail(&self, should_fail: bool) {
-        *self.should_fail.lock().unwrap() = should_fail;
+        // Handle poisoned mutex gracefully by recovering the data
+        match self.should_fail.lock() {
+            Ok(mut guard) => *guard = should_fail,
+            Err(poisoned) => {
+                // Recover from poisoning and set the value
+                let mut guard = poisoned.into_inner();
+                *guard = should_fail;
+                eprintln!(
+                    "Warning: Worker {} mutex was poisoned, recovered gracefully",
+                    self.id
+                );
+            }
+        }
+    }
+
+    /// Safely checks if the actor should fail, handling mutex poisoning
+    fn should_fail(&self) -> bool {
+        match self.should_fail.lock() {
+            Ok(guard) => *guard,
+            Err(poisoned) => {
+                // If poisoned, assume safe default (don't fail) and recover
+                let guard = poisoned.into_inner();
+                let result = *guard;
+                eprintln!(
+                    "Warning: Worker {} should_fail mutex was poisoned, recovered gracefully",
+                    self.id
+                );
+                result
+            }
+        }
+    }
+
+    /// Safely resets the fail flag, handling mutex poisoning
+    fn reset_fail_flag(&self) {
+        match self.should_fail.lock() {
+            Ok(mut guard) => *guard = false,
+            Err(poisoned) => {
+                // Recover from poisoning and reset
+                let mut guard = poisoned.into_inner();
+                *guard = false;
+                eprintln!(
+                    "Warning: Worker {} fail flag mutex was poisoned, recovered gracefully",
+                    self.id
+                );
+            }
+        }
+    }
+
+    /// Safely updates the processed count, handling mutex poisoning
+    fn update_processed_count(&self, value: u32) -> u32 {
+        match self.processed_count.lock() {
+            Ok(mut guard) => {
+                *guard += value;
+                *guard
+            }
+            Err(poisoned) => {
+                // Recover from poisoning and update
+                let mut guard = poisoned.into_inner();
+                *guard += value;
+                let total = *guard;
+                eprintln!(
+                    "Warning: Worker {} processed_count mutex was poisoned, recovered gracefully",
+                    self.id
+                );
+                total
+            }
+        }
     }
 }
 
@@ -52,30 +119,62 @@ impl Actor for WorkerActor {
 
     fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
         Box::pin(async move {
-            match msg {
-                WorkerMessage::DoWork(value) => {
-                    // Check if we should fail
-                    if *self.should_fail.lock().unwrap() {
-                        // Reset the fail flag and panic
-                        *self.should_fail.lock().unwrap() = false;
-                        panic!("Worker {} failing as requested!", self.id);
+            // Use catch_unwind to handle failures gracefully for supervision
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                match msg {
+                    WorkerMessage::DoWork(value) => {
+                        // Check if we should fail
+                        if self.should_fail() {
+                            // Reset the fail flag and simulate failure
+                            self.reset_fail_flag();
+                            // Instead of panicking directly, we'll trigger a controlled failure
+                            Err(format!("Worker {} failing as requested!", self.id))
+                        } else {
+                            Ok(value)
+                        }
                     }
-
-                    // Simulate some work
-                    sleep(Duration::from_millis(10)).await;
-
-                    // Update processed count
-                    let mut count = self.processed_count.lock().unwrap();
-                    *count += value;
-
-                    println!(
-                        "Worker {} processed value {}, total: {}",
-                        self.id, value, *count
-                    );
+                    WorkerMessage::FailNext => {
+                        println!("Worker {} will fail on next message", self.id);
+                        self.set_should_fail(true);
+                        Ok(0) // Return dummy value for FailNext
+                    }
                 }
-                WorkerMessage::FailNext => {
-                    println!("Worker {} will fail on next message", self.id);
-                    self.set_should_fail(true);
+            }));
+
+            match result {
+                Ok(Ok(value)) => {
+                    // Normal processing path
+                    if value > 0 {
+                        // Skip processing for FailNext (value = 0)
+                        // Simulate some work
+                        sleep(Duration::from_millis(10)).await;
+
+                        // Update processed count
+                        let updated_count = self.update_processed_count(value);
+
+                        println!(
+                            "Worker {} processed value {}, total: {}",
+                            self.id, value, updated_count
+                        );
+                    }
+                }
+                Ok(Err(error_msg)) => {
+                    // Controlled failure - log the error and exit gracefully
+                    eprintln!("Worker {} controlled failure: {}", self.id, error_msg);
+                    // The actor task will complete normally, allowing supervisor to detect completion
+                    // and decide whether to restart based on its restart strategy
+                }
+                Err(panic_payload) => {
+                    // Caught an unexpected panic - handle it gracefully
+                    let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Unknown panic occurred".to_string()
+                    };
+                    eprintln!("Worker {} caught unexpected panic: {}", self.id, panic_msg);
+                    // Task completes gracefully even after catching a panic
                 }
             }
         })
@@ -184,7 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test actor failure and restart (simplified - would need actual restart logic)
     worker_addr.send(WorkerMessage::FailNext).await?;
 
-    // This message should cause the actor to panic
+    // This message should cause the actor to fail gracefully (controlled failure)
     // In a full implementation, the supervisor would detect this and restart
     let _ = worker_addr.send(WorkerMessage::DoWork(100)).await;
 
