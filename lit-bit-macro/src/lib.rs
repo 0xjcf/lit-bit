@@ -1231,6 +1231,119 @@ pub(crate) mod code_generator {
         }
     }
 
+    /// Checks if the state machine uses timer transitions (after clauses).
+    /// This is used to determine if TimerFired variant validation is needed.
+    pub(crate) fn has_timer_transitions(builder: &TmpStateTreeBuilder) -> bool {
+        builder
+            .all_states
+            .iter()
+            .any(|state| !state.timer_transitions.is_empty())
+    }
+
+    /// Generates compile-time validation code to ensure the event enum contains
+    /// the required TimerFired variant when timer transitions are used.
+    ///
+    /// This function generates code that will fail to compile with helpful error
+    /// messages if the TimerFired variant is missing or incorrectly structured.
+    pub(crate) fn generate_timer_validation_code(
+        event_type_path: &syn::Path,
+        state_id_enum_name: &Ident,
+    ) -> TokenStream {
+        quote! {
+            // Compile-time validation for TimerFired variant
+            // This code ensures the event enum has the required structure for timer transitions
+            #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+            const _: () = {
+                // Trait to validate TimerFired variant exists with correct structure
+                trait ValidateTimerFiredVariant<StateId> {
+                    fn validate_timer_fired_variant() -> bool;
+                }
+
+                // Implementation that will only compile if TimerFired variant exists
+                // with the correct structure: TimerFired { state_id: StateId, timer_id: usize }
+                impl ValidateTimerFiredVariant<#state_id_enum_name> for #event_type_path {
+                    fn validate_timer_fired_variant() -> bool {
+                        // This function body will only compile if the TimerFired variant exists
+                        // and has the correct structure
+                        #[allow(unreachable_code)]
+                        {
+                            // Test that we can construct the TimerFired variant
+                            let _test_timer_event = #event_type_path::TimerFired {
+                                state_id: unsafe { core::mem::zeroed::<#state_id_enum_name>() },
+                                timer_id: 0usize,
+                            };
+
+                            // Test that we can pattern match the TimerFired variant
+                            let _test_match = match _test_timer_event {
+                                #event_type_path::TimerFired { state_id: _, timer_id: _ } => true,
+                                _ => false,
+                            };
+
+                            true
+                        }
+                    }
+                }
+
+                // Call the validation function to trigger compilation checks
+                let _: bool = <#event_type_path as ValidateTimerFiredVariant<#state_id_enum_name>>::validate_timer_fired_variant();
+
+                // Additional validation: ensure the fields have the correct types
+                fn _validate_timer_fired_field_types() {
+                    // This will only compile if the TimerFired variant has the exact structure we expect
+                    let _dummy_event = #event_type_path::TimerFired {
+                        state_id: unsafe { core::mem::zeroed::<#state_id_enum_name>() },
+                        timer_id: 0usize,
+                    };
+
+                    // Extract fields to verify types
+                    if let #event_type_path::TimerFired { state_id, timer_id } = _dummy_event {
+                        // Verify state_id is the correct enum type
+                        let _: #state_id_enum_name = state_id;
+                        // Verify timer_id is usize
+                        let _: usize = timer_id;
+                    }
+                }
+            };
+        }
+    }
+
+    /// Generates a helpful compile-time error message with instructions for adding
+    /// the TimerFired variant when timer transitions are detected.
+    pub(crate) fn generate_timer_requirement_documentation(
+        event_type_path: &syn::Path,
+        state_id_enum_name: &Ident,
+    ) -> TokenStream {
+        let event_type_str = quote!(#event_type_path).to_string();
+        let state_id_str = quote!(#state_id_enum_name).to_string();
+
+        quote! {
+            #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+            #[doc = ""]
+            #[doc = "TIMER TRANSITIONS DETECTED"]
+            #[doc = ""]
+            #[doc = "Your state machine uses timer transitions (after clauses), which require"]
+            #[doc = "your event enum to include a TimerFired variant with the following structure:"]
+            #[doc = ""]
+            #[doc = concat!("```rust")]
+            #[doc = concat!("#[derive(Debug, Clone, PartialEq)]")]
+            #[doc = concat!("pub enum ", #event_type_str, " {")]
+            #[doc = concat!("    // ... your other variants")]
+            #[doc = concat!("    TimerFired {")]
+            #[doc = concat!("        state_id: ", #state_id_str, ",")]
+            #[doc = concat!("        timer_id: usize,")]
+            #[doc = concat!("    },")]
+            #[doc = concat!("    // ... your other variants")]
+            #[doc = concat!("}")]
+            #[doc = concat!("```")]
+            #[doc = ""]
+            #[doc = "The TimerFired variant is used internally by the state machine"]
+            #[doc = "to handle timer events. If compilation fails with errors related"]
+            #[doc = "to TimerFired, please add this variant to your event enum."]
+            #[doc = ""]
+            const _TIMER_TRANSITION_DOCUMENTATION: () = ();
+        }
+    }
+
     // Helper to extract a full path TokenStream from a syn::Pat for event pattern matching
     fn extract_pat_tokens(pat: &syn::Pat) -> proc_macro2::TokenStream {
         quote! { #pat }
@@ -2568,6 +2681,26 @@ pub fn statechart(input: TokenStream) -> TokenStream {
         context_type_path,
     );
 
+    // Check if timer transitions are used and generate validation if needed
+    let timer_validation_ts = if code_generator::has_timer_transitions(&builder) {
+        // Generate validation code and documentation for TimerFired variant
+        let validation_code = code_generator::generate_timer_validation_code(
+            event_type_path,
+            &generated_ids_info.state_id_enum_name,
+        );
+        let documentation = code_generator::generate_timer_requirement_documentation(
+            event_type_path,
+            &generated_ids_info.state_id_enum_name,
+        );
+
+        quote! {
+            #documentation
+            #validation_code
+        }
+    } else {
+        quote! {} // No validation needed if no timer transitions
+    };
+
     let state_id_enum_ts = generated_ids_info.enum_definition_tokens;
 
     let core_types_definitions = quote! {
@@ -2619,6 +2752,7 @@ pub fn statechart(input: TokenStream) -> TokenStream {
             #machine_def_const_ts
             #machine_impl_ts
             #timer_handling_ts
+            #timer_validation_ts
         }
         pub use generated_state_machine::*;
     };
@@ -5254,6 +5388,113 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_timer_validation_functions_work() {
+        use crate::code_generator::{
+            generate_timer_requirement_documentation, generate_timer_validation_code,
+            has_timer_transitions,
+        };
+
+        // Test that state machine without timer transitions returns false
+        let dsl_no_timers = r#"
+            name: NoTimerMachine,
+            context: u32,
+            event: TestEvent,
+            initial: SimpleState,
+            
+            state SimpleState {
+                on TestEvent::SomeEvent => SimpleState;
+            }
+        "#;
+
+        let ast_no_timers = parse_dsl(dsl_no_timers).expect("Should parse DSL without timers");
+        let mut builder_no_timers = crate::intermediate_tree::TmpStateTreeBuilder::new();
+        builder_no_timers
+            .build_from_ast(&ast_no_timers)
+            .expect("Should build AST without timers");
+
+        assert!(
+            !has_timer_transitions(&builder_no_timers),
+            "Should detect no timer transitions in state machine without after clauses"
+        );
+
+        // Test that state machine with timer transitions returns true
+        let dsl_with_timers = r#"
+            name: TimerMachine,
+            context: u32,
+            event: TestEvent,
+            initial: TimerState,
+            
+            state TimerState {
+                after(5000) => IdleState;
+                on TestEvent::SomeEvent => TimerState;
+            }
+            state IdleState {
+                on TestEvent::BackToTimer => TimerState;
+            }
+        "#;
+
+        let ast_with_timers = parse_dsl(dsl_with_timers).expect("Should parse DSL with timers");
+        let mut builder_with_timers = crate::intermediate_tree::TmpStateTreeBuilder::new();
+        builder_with_timers
+            .build_from_ast(&ast_with_timers)
+            .expect("Should build AST with timers");
+
+        assert!(
+            has_timer_transitions(&builder_with_timers),
+            "Should detect timer transitions in state machine with after clauses"
+        );
+
+        // Test validation code generation doesn't panic and produces reasonable output
+        let event_type_path: syn::Path =
+            syn::parse_str("TestEvent").expect("Should parse event type path");
+        let state_id_enum_name = format_ident!("TimerMachineStateId");
+
+        let validation_code = generate_timer_validation_code(&event_type_path, &state_id_enum_name);
+        let validation_string = validation_code.to_string();
+
+        // Verify validation code contains expected elements
+        assert!(
+            validation_string.contains("ValidateTimerFiredVariant"),
+            "Validation code should contain trait name"
+        );
+        assert!(
+            validation_string.contains("TimerFired"),
+            "Validation code should reference TimerFired variant"
+        );
+        assert!(
+            validation_string.contains("state_id"),
+            "Validation code should reference state_id field"
+        );
+        assert!(
+            validation_string.contains("timer_id"),
+            "Validation code should reference timer_id field"
+        );
+
+        // Test documentation generation
+        let documentation =
+            generate_timer_requirement_documentation(&event_type_path, &state_id_enum_name);
+        let doc_string = documentation.to_string();
+
+        // Verify documentation contains helpful information
+        assert!(
+            doc_string.contains("TIMER TRANSITIONS DETECTED"),
+            "Documentation should contain clear header"
+        );
+        assert!(
+            doc_string.contains("TimerFired"),
+            "Documentation should mention TimerFired variant"
+        );
+        assert!(
+            doc_string.contains("TestEvent"),
+            "Documentation should include event type name"
+        );
+        assert!(
+            doc_string.contains("TimerMachineStateId"),
+            "Documentation should include state ID enum name"
+        );
     }
 
     // --- Tests for Code Generation (Stage 3) ---

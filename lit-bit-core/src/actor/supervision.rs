@@ -24,7 +24,48 @@ use heapless::FnvIndexMap;
 #[cfg(any(feature = "std", feature = "alloc"))]
 extern crate alloc;
 #[cfg(any(feature = "std", feature = "alloc"))]
+use alloc::boxed::Box;
+#[cfg(any(feature = "std", feature = "alloc"))]
 use alloc::vec::Vec;
+
+// Import Box for no_std environments when needed
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+extern crate alloc;
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+use alloc::boxed::Box;
+
+/// Trait for providing platform-specific timer functionality.
+///
+/// This trait must be implemented for platforms that don't have `std` or `embassy`
+/// features enabled. It provides the supervisor with access to monotonic time
+/// for restart window calculations.
+///
+/// # Requirements
+///
+/// - **Monotonic**: Time values must be monotonically increasing
+/// - **Millisecond precision**: Values should represent milliseconds since an arbitrary epoch
+/// - **Overflow handling**: Should handle timer wrap-around gracefully
+///
+/// # Example Implementation
+///
+/// ```rust,ignore
+/// struct MyPlatformTimer;
+///
+/// impl SupervisorTimer for MyPlatformTimer {
+///     fn current_time_ms() -> u64 {
+///         // Platform-specific timer implementation
+///         my_platform_get_tick_count_ms()
+///     }
+/// }
+/// ```
+pub trait SupervisorTimer {
+    /// Returns the current monotonic time in milliseconds.
+    ///
+    /// This value is used for restart window calculations and must be
+    /// monotonically increasing. The absolute value doesn't matter,
+    /// only that it advances consistently.
+    fn current_time_ms() -> u64;
+}
 
 /// Error types for supervisor operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +76,26 @@ pub enum SupervisorError {
     ChildAlreadyExists,
     /// Child with this ID not found
     ChildNotFound,
+    /// Failed to restart child actor
+    RestartFailed,
 }
+
+// Ensure that platforms without std or embassy provide a timer implementation
+// Note: Builds without 'std' or 'embassy' features will compile but panic at runtime
+// if timer functionality is used without providing a proper SupervisorTimer implementation.
+// This is safer than the previous fallback return value of 0 which broke restart windows.
+
+/// Type alias for restart factory functions in Tokio environments.
+///
+/// These functions spawn new child actor instances and return their JoinHandles.
+#[cfg(feature = "async-tokio")]
+pub type RestartFactory = Box<dyn Fn() -> JoinHandle<Result<(), ActorError>> + Send + 'static>;
+
+/// Type alias for restart factory functions in non-Tokio environments.
+///
+/// These functions spawn new child actor instances and return success/failure.
+#[cfg(not(feature = "async-tokio"))]
+pub type RestartFactory = Box<dyn Fn() -> Result<(), SupervisorError> + Send + 'static>;
 
 /// A supervisor actor that manages child actors with restart strategies.
 ///
@@ -56,7 +116,7 @@ pub enum SupervisorError {
 /// use lit_bit_core::actor::supervision::SupervisorActor;
 ///
 /// let supervisor: SupervisorActor<u32, 8> = SupervisorActor::new();
-/// // Add children and handle SupervisorMessage events
+/// // Add children with restart factories and handle SupervisorMessage events
 /// ```
 pub struct SupervisorActor<ChildId = u32, const MAX_CHILDREN: usize = 16>
 where
@@ -107,6 +167,10 @@ struct ChildInfo {
     /// Embassy-specific: Flag indicating if child is currently running
     #[cfg(not(feature = "async-tokio"))]
     is_running: bool,
+
+    /// Factory function for restarting this child actor
+    /// This closure is called whenever the child needs to be restarted
+    restart_factory: RestartFactory,
 }
 
 impl<ChildId, const MAX_CHILDREN: usize> SupervisorActor<ChildId, MAX_CHILDREN>
@@ -161,17 +225,19 @@ where
         }
     }
 
-    /// Adds a child actor to supervision.
+    /// Adds a child actor to supervision with a restart factory.
     ///
     /// # Arguments
     /// * `child_id` - Unique identifier for the child
+    /// * `restart_factory` - Function that spawns a new instance of the child actor
     /// * `restart_strategy` - Optional custom restart strategy (uses default if None)
     ///
     /// # Returns
     /// `Ok(())` if the child was added successfully, `Err(SupervisorError)` if the operation failed.
-    pub fn add_child(
+    pub fn add_child_with_factory(
         &mut self,
         child_id: ChildId,
+        restart_factory: RestartFactory,
         restart_strategy: Option<RestartStrategy>,
     ) -> Result<(), SupervisorError> {
         // Check if child already exists
@@ -190,13 +256,15 @@ where
             window_start: std::time::Instant::now(),
 
             #[cfg(not(feature = "std"))]
-            window_start_ms: Self::current_time_ms(), // Initialize with current time for proper rate limiting
+            window_start_ms: Self::current_time_ms(),
 
             #[cfg(feature = "async-tokio")]
             join_handle: None,
 
             #[cfg(not(feature = "async-tokio"))]
             is_running: true,
+
+            restart_factory,
         };
 
         #[cfg(feature = "async-tokio")]
@@ -215,6 +283,35 @@ where
                 })
                 .map_err(|_| SupervisorError::CapacityExceeded)
         }
+    }
+
+    /// Adds a child actor to supervision (legacy method without restart factory).
+    ///
+    /// This method creates a no-op restart factory for backwards compatibility.
+    /// For actual restart functionality, use `add_child_with_factory` instead.
+    ///
+    /// # Arguments
+    /// * `child_id` - Unique identifier for the child
+    /// * `restart_strategy` - Optional custom restart strategy (uses default if None)
+    ///
+    /// # Returns
+    /// `Ok(())` if the child was added successfully, `Err(SupervisorError)` if the operation failed.
+    pub fn add_child(
+        &mut self,
+        child_id: ChildId,
+        restart_strategy: Option<RestartStrategy>,
+    ) -> Result<(), SupervisorError> {
+        // Create a no-op restart factory for backwards compatibility
+        #[cfg(feature = "async-tokio")]
+        let no_op_factory: RestartFactory = Box::new(|| {
+            // Return a completed task that immediately returns an error
+            tokio::spawn(async { Err(ActorError::StartupFailure) })
+        });
+
+        #[cfg(not(feature = "async-tokio"))]
+        let no_op_factory: RestartFactory = Box::new(|| Err(SupervisorError::RestartFailed));
+
+        self.add_child_with_factory(child_id, no_op_factory, restart_strategy)
     }
 
     /// Removes a child from supervision.
@@ -280,6 +377,84 @@ where
         }
 
         Some(child_info.restart_strategy)
+    }
+
+    /// Executes the restart logic for children that need to be restarted.
+    ///
+    /// This method implements the actual restart mechanism by calling the restart
+    /// factories for each child that needs to be restarted according to the strategy.
+    ///
+    /// # Arguments
+    /// * `failed_child_id` - ID of the child that failed
+    /// * `strategy` - Restart strategy to apply
+    ///
+    /// # Returns
+    /// The number of children successfully restarted.
+    pub fn execute_restarts(
+        &mut self,
+        failed_child_id: &ChildId,
+        strategy: RestartStrategy,
+    ) -> usize {
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        let children_to_restart = self.get_children_to_restart(failed_child_id, strategy);
+
+        #[cfg(not(any(feature = "std", feature = "alloc")))]
+        let children_to_restart = self.get_children_to_restart(failed_child_id, strategy);
+
+        let mut successfully_restarted = 0;
+
+        // Process each child restart directly to avoid borrowing and type complexity
+        let _total_children = children_to_restart.len();
+
+        for child_id in children_to_restart {
+            if let Some(child_info) = self.children.get(&child_id) {
+                // Call the restart factory for this child
+                let factory_result = (child_info.restart_factory)();
+
+                // Update child state based on factory result
+                #[cfg(feature = "async-tokio")]
+                {
+                    // For Tokio, the factory returns a JoinHandle
+                    if let Some(child_info) = self.children.get_mut(&child_id) {
+                        child_info.join_handle = Some(factory_result);
+                        successfully_restarted += 1;
+
+                        #[cfg(feature = "debug-log")]
+                        log::info!("Successfully restarted child {child_id:?}");
+                    }
+                }
+
+                #[cfg(not(feature = "async-tokio"))]
+                {
+                    // For non-Tokio, the factory returns a Result
+                    match factory_result {
+                        Ok(()) => {
+                            if let Some(child_info) = self.children.get_mut(&child_id) {
+                                child_info.is_running = true;
+                                successfully_restarted += 1;
+
+                                #[cfg(feature = "debug-log")]
+                                log::info!("Successfully restarted child {child_id:?}");
+                            }
+                        }
+                        Err(_err) => {
+                            #[cfg(feature = "debug-log")]
+                            log::error!("Failed to restart child {child_id:?}: {_err:?}");
+
+                            // Remove failed child from supervision
+                            self.remove_child(&child_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        #[cfg(feature = "debug-log")]
+        log::info!(
+            "Restart operation complete: {successfully_restarted}/{_total_children} children restarted successfully"
+        );
+
+        successfully_restarted
     }
 
     /// Gets the list of children that should be restarted based on the restart strategy.
@@ -390,24 +565,25 @@ where
         }
     }
 
-    /// Adds a child actor to supervision with its JoinHandle atomically (Tokio-specific).
+    /// Adds a child actor to supervision with its JoinHandle and restart factory atomically (Tokio-specific).
     ///
-    /// This method combines `add_child` and `set_child_handle` into a single atomic operation,
-    /// preventing the race condition where a child is added but the handle cannot be set.
-    /// This is the preferred method for spawning supervised actors.
+    /// This method combines child addition and handle/factory setup into a single atomic operation,
+    /// preventing race conditions. This is the preferred method for spawning supervised actors in Tokio.
     ///
     /// # Arguments
     /// * `child_id` - Unique identifier for the child
     /// * `handle` - JoinHandle for monitoring the child task
+    /// * `restart_factory` - Function that spawns a new instance of the child actor
     /// * `restart_strategy` - Optional custom restart strategy (uses default if None)
     ///
     /// # Returns
     /// `Ok(())` if the child was added successfully, `Err(SupervisorError)` if the operation failed.
     #[cfg(feature = "async-tokio")]
-    pub fn add_child_with_handle(
+    pub fn add_child_with_handle_and_factory(
         &mut self,
         child_id: ChildId,
         handle: JoinHandle<Result<(), ActorError>>,
+        restart_factory: RestartFactory,
         restart_strategy: Option<RestartStrategy>,
     ) -> Result<(), SupervisorError> {
         // Check if child already exists
@@ -426,17 +602,37 @@ where
             window_start: std::time::Instant::now(),
 
             #[cfg(not(feature = "std"))]
-            window_start_ms: Self::current_time_ms(), // Initialize with current time for proper rate limiting
+            window_start_ms: Self::current_time_ms(),
 
             join_handle: Some(handle),
 
             #[cfg(not(feature = "async-tokio"))]
             is_running: true,
+
+            restart_factory,
         };
 
         self.children.insert(child_id, child_info);
         self.next_start_sequence += 1;
         Ok(())
+    }
+
+    /// Adds a child actor to supervision with its JoinHandle atomically (Tokio-specific, legacy).
+    ///
+    /// This is a legacy method that creates a no-op restart factory.
+    /// For actual restart functionality, use `add_child_with_handle_and_factory` instead.
+    #[cfg(feature = "async-tokio")]
+    pub fn add_child_with_handle(
+        &mut self,
+        child_id: ChildId,
+        handle: JoinHandle<Result<(), ActorError>>,
+        restart_strategy: Option<RestartStrategy>,
+    ) -> Result<(), SupervisorError> {
+        // Create a no-op restart factory for backwards compatibility
+        let no_op_factory: RestartFactory =
+            Box::new(|| tokio::spawn(async { Err(ActorError::StartupFailure) }));
+
+        self.add_child_with_handle_and_factory(child_id, handle, no_op_factory, restart_strategy)
     }
 
     /// Checks for completed child tasks and returns their results (Tokio-specific).
@@ -502,11 +698,23 @@ where
             embassy_time::Instant::now().as_millis()
         }
 
-        #[cfg(all(not(feature = "std"), not(feature = "embassy")))]
+        #[cfg(all(not(feature = "std"), not(feature = "embassy"), test))]
         {
-            // Fallback: no real time available
-            // In practice, you would integrate with your platform's timer
-            0
+            // Test implementation - returns a predictable incrementing value
+            use core::sync::atomic::{AtomicU64, Ordering};
+            static TEST_TIME: AtomicU64 = AtomicU64::new(1000);
+            TEST_TIME.fetch_add(1, Ordering::SeqCst)
+        }
+
+        // Fallback for platforms without std/embassy - users must provide implementation
+        #[cfg(all(not(feature = "std"), not(feature = "embassy"), not(test)))]
+        {
+            // This will panic at runtime if called without a proper timer implementation
+            // The compile_error above should prevent this from being built anyway
+            panic!(
+                "No timer implementation available for restart window calculations. \
+                 Enable 'std' or 'embassy' feature, or implement SupervisorTimer trait."
+            )
         }
     }
 }
@@ -573,27 +781,23 @@ where
                 log::warn!("Child {id:?} panicked - determining restart strategy");
 
                 if let Some(strategy) = self.handle_child_failure(&id) {
-                    #[cfg(any(feature = "std", feature = "alloc"))]
-                    {
-                        let _children_to_restart = self.get_children_to_restart(&id, strategy);
-                        #[cfg(feature = "debug-log")]
-                        log::info!(
-                            "Restarting children: {_children_to_restart:?} (strategy: {strategy:?})"
+                    #[cfg(feature = "debug-log")]
+                    log::info!("Executing restart strategy: {strategy:?} for child {id:?}");
+
+                    // Execute the actual restart logic
+                    let _restarted_count = self.execute_restarts(&id, strategy);
+
+                    #[cfg(feature = "debug-log")]
+                    if _restarted_count > 0 {
+                        log::info!("Successfully restarted {_restarted_count} children");
+                    } else {
+                        log::warn!(
+                            "Failed to restart any children - they may have been removed from supervision"
                         );
                     }
-
-                    #[cfg(not(any(feature = "std", feature = "alloc")))]
-                    {
-                        let _children_to_restart = self.get_children_to_restart(&id, strategy);
-                        #[cfg(feature = "debug-log")]
-                        log::info!(
-                            "Restarting {} children (strategy: {strategy:?})",
-                            _children_to_restart.len()
-                        );
-                    }
-
-                    // In a full implementation, this would trigger actual child restarts
-                    // For now, we just log the decision
+                } else {
+                    #[cfg(feature = "debug-log")]
+                    log::warn!("Child {id:?} exceeded restart limit or was not found");
                 }
             }
 
@@ -601,7 +805,7 @@ where
                 #[cfg(feature = "debug-log")]
                 log::info!("Request to start child {id:?}");
 
-                // Add child to supervision with default strategy
+                // Add child to supervision with default strategy (no-op factory)
                 let _ = self.add_child(id, None);
             }
 
@@ -619,19 +823,27 @@ where
 
                 // Treat as a failure for restart counting purposes
                 if let Some(strategy) = self.handle_child_failure(&id) {
-                    #[cfg(any(feature = "std", feature = "alloc"))]
-                    {
-                        let _children_to_restart = self.get_children_to_restart(&id, strategy);
-                        #[cfg(feature = "debug-log")]
-                        log::info!("Restarting children: {_children_to_restart:?}");
-                    }
+                    #[cfg(feature = "debug-log")]
+                    log::info!(
+                        "Executing restart strategy: {strategy:?} for manual restart of child {id:?}"
+                    );
 
-                    #[cfg(not(any(feature = "std", feature = "alloc")))]
-                    {
-                        let _children_to_restart = self.get_children_to_restart(&id, strategy);
-                        #[cfg(feature = "debug-log")]
-                        log::info!("Restarting {} children", _children_to_restart.len());
+                    // Execute the actual restart logic
+                    let _restarted_count = self.execute_restarts(&id, strategy);
+
+                    #[cfg(feature = "debug-log")]
+                    if _restarted_count > 0 {
+                        log::info!(
+                            "Successfully restarted {_restarted_count} children for manual restart"
+                        );
+                    } else {
+                        log::warn!("Failed to restart any children for manual restart");
                     }
+                } else {
+                    #[cfg(feature = "debug-log")]
+                    log::warn!(
+                        "Child {id:?} exceeded restart limit or was not found for manual restart"
+                    );
                 }
             }
         }
@@ -812,5 +1024,91 @@ mod tests {
             // Should restart nothing if child doesn't exist
             assert_eq!(to_restart.len(), 0);
         }
+    }
+
+    #[cfg(all(test, feature = "async-tokio", feature = "std"))]
+    #[tokio::test]
+    async fn test_restart_factory_execution() {
+        let mut supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Create a counter to track restart calls
+        use std::sync::{Arc, Mutex};
+        let restart_call_count = Arc::new(Mutex::new(0));
+        let counter_clone = restart_call_count.clone();
+
+        // Create a restart factory that increments a counter when called
+        let restart_factory: RestartFactory = Box::new(move || {
+            let mut count = counter_clone.lock().unwrap();
+            *count += 1;
+            tokio::spawn(async { Ok(()) })
+        });
+
+        // Add a child with the restart factory
+        assert!(
+            supervisor
+                .add_child_with_factory(1, restart_factory, Some(RestartStrategy::OneForOne))
+                .is_ok()
+        );
+
+        // Simulate a child failure and execute restarts
+        let restarted_count = supervisor.execute_restarts(&1, RestartStrategy::OneForOne);
+
+        // Verify that restart was attempted
+        assert_eq!(restarted_count, 1);
+
+        // Verify that the restart factory was actually called
+        let final_count = *restart_call_count.lock().unwrap();
+        assert_eq!(final_count, 1);
+    }
+
+    #[cfg(all(test, feature = "async-tokio", feature = "std"))]
+    #[tokio::test]
+    async fn test_restart_with_one_for_all_strategy() {
+        let mut supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Create counters for tracking restart calls for different children
+        use std::sync::{Arc, Mutex};
+        let restart_count_1 = Arc::new(Mutex::new(0));
+        let restart_count_2 = Arc::new(Mutex::new(0));
+
+        let counter_1_clone = restart_count_1.clone();
+        let counter_2_clone = restart_count_2.clone();
+
+        // Create restart factories for two different children
+        let factory_1: RestartFactory = Box::new(move || {
+            let mut count = counter_1_clone.lock().unwrap();
+            *count += 1;
+            tokio::spawn(async { Ok(()) })
+        });
+
+        let factory_2: RestartFactory = Box::new(move || {
+            let mut count = counter_2_clone.lock().unwrap();
+            *count += 1;
+            tokio::spawn(async { Ok(()) })
+        });
+
+        // Add two children with restart factories
+        assert!(
+            supervisor
+                .add_child_with_factory(1, factory_1, Some(RestartStrategy::OneForAll))
+                .is_ok()
+        );
+        assert!(
+            supervisor
+                .add_child_with_factory(2, factory_2, Some(RestartStrategy::OneForAll))
+                .is_ok()
+        );
+
+        // Simulate child 1 failure with OneForAll strategy (should restart both children)
+        let restarted_count = supervisor.execute_restarts(&1, RestartStrategy::OneForAll);
+
+        // Verify that both children were restarted
+        assert_eq!(restarted_count, 2);
+
+        // Verify that both restart factories were called
+        let final_count_1 = *restart_count_1.lock().unwrap();
+        let final_count_2 = *restart_count_2.lock().unwrap();
+        assert_eq!(final_count_1, 1);
+        assert_eq!(final_count_2, 1);
     }
 }

@@ -20,7 +20,7 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Receiver;
 
 /// Error types for spawn operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpawnError {
     /// Supervisor-related error
     Supervisor(crate::actor::supervision::SupervisorError),
