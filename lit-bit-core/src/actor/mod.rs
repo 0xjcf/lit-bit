@@ -26,6 +26,253 @@ pub enum RestartStrategy {
     RestForOne,
 }
 
+/// Supervisor message for communication between supervisor and child actors.
+///
+/// This message type enables the OTP-style supervision patterns described in the research.
+/// Supervisors can receive notifications about child lifecycle events and react accordingly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupervisorMessage<ChildId = u32> {
+    /// Child actor has started successfully
+    ChildStarted { id: ChildId },
+    /// Child actor has stopped gracefully
+    ChildStopped { id: ChildId },
+    /// Child actor has panicked or failed
+    ChildPanicked { id: ChildId },
+    /// Request to start a new child actor
+    StartChild { id: ChildId },
+    /// Request to stop a child actor
+    StopChild { id: ChildId },
+    /// Request to restart a child actor
+    RestartChild { id: ChildId },
+}
+
+/// Supervisor trait for managing child actors with restart strategies.
+///
+/// Implements OTP-style supervision patterns as described in the research document.
+/// Supervisors can monitor children and apply restart strategies when failures occur.
+///
+/// ## Design Principles
+///
+/// - **Platform-agnostic**: Works with both Tokio (JoinHandle monitoring) and Embassy (message signaling)
+/// - **Zero-allocation**: Uses fixed-size child lists in `no_std` environments
+/// - **Deterministic**: Failure notifications are processed as regular messages
+/// - **Restart strategies**: Supports OneForOne, OneForAll, and RestForOne patterns
+///
+/// ## Usage
+///
+/// ```rust,no_run
+/// use lit_bit_core::actor::{Supervisor, SupervisorMessage, RestartStrategy};
+/// use lit_bit_core::Address;
+/// use heapless::Vec;
+///
+/// struct MySupervisor<ChildMsg> {
+///     children: Vec<(u32, Address<ChildMsg, 8>), 4>,
+/// }
+///
+/// impl<ChildMsg> Supervisor for MySupervisor<ChildMsg> {
+///     type ChildId = u32;
+///     
+///     fn on_child_failure(&mut self, child_id: u32) -> RestartStrategy {
+///         // Restart only the failed child
+///         RestartStrategy::OneForOne
+///     }
+/// }
+/// ```
+pub trait Supervisor {
+    /// Type used to identify child actors
+    type ChildId: Clone + PartialEq + core::fmt::Debug;
+
+    /// Called when a child actor fails or panics.
+    ///
+    /// The supervisor should return the appropriate restart strategy to handle the failure.
+    /// The framework will then apply the strategy by restarting the appropriate actors.
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the failed child actor
+    ///
+    /// # Returns
+    /// The restart strategy to apply for this failure
+    fn on_child_failure(&mut self, child_id: Self::ChildId) -> RestartStrategy;
+
+    /// Called when a child actor starts successfully.
+    ///
+    /// Default implementation does nothing. Override to track child state or perform
+    /// additional setup after child startup.
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the child actor that started
+    fn on_child_started(&mut self, _child_id: Self::ChildId) {}
+
+    /// Called when a child actor stops gracefully.
+    ///
+    /// Default implementation does nothing. Override to track child state or perform
+    /// cleanup after child shutdown.
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the child actor that stopped
+    fn on_child_stopped(&mut self, _child_id: Self::ChildId) {}
+}
+
+/// Batch processing trait for high-throughput message handling.
+///
+/// Implements zero-allocation message batching as described in the research document.
+/// Actors can opt into batch processing to improve throughput by processing multiple
+/// queued messages in a single wake-up cycle.
+///
+/// ## Design Principles
+///
+/// - **Zero-allocation**: Uses existing queue memory, no additional buffers
+/// - **Optional**: Actors can implement either `Actor` or `BatchActor` or both
+/// - **Deterministic**: Messages are processed in FIFO order within each batch
+/// - **Bounded**: Configurable batch size limits prevent monopolizing the executor
+/// - **Platform-agnostic**: Works with both heapless and Tokio channels
+///
+/// ## Performance Benefits
+///
+/// - Reduced context switching overhead (fewer executor wake-ups)
+/// - Better CPU cache locality (processing related messages together)
+/// - Amortized per-message overhead across the batch
+/// - Higher overall throughput for high-frequency message scenarios
+///
+/// ## Usage
+///
+/// ```rust,no_run
+/// use lit_bit_core::actor::BatchActor;
+///
+/// struct HighThroughputActor {
+///     processed_count: u32,
+/// }
+///
+/// impl BatchActor for HighThroughputActor {
+///     type Message = u32;
+///     type Future<'a> = core::future::Ready<()> where Self: 'a;
+///
+///     fn handle_batch(&mut self, messages: &[Self::Message]) -> Self::Future<'_> {
+///         // Process all messages in the batch
+///         for &msg in messages {
+///             self.processed_count += msg;
+///         }
+///         core::future::ready(())
+///     }
+///
+///     fn max_batch_size(&self) -> usize {
+///         16 // Process up to 16 messages per batch
+///     }
+/// }
+/// ```
+pub trait BatchActor: Send {
+    /// The message type this actor handles
+    type Message: Send + 'static;
+
+    /// The future type returned by `handle_batch()` - uses GATs for zero-cost async
+    type Future<'a>: core::future::Future<Output = ()> + Send + 'a
+    where
+        Self: 'a;
+
+    /// Handle a batch of messages asynchronously.
+    ///
+    /// This method is called with a slice of pending messages from the actor's mailbox.
+    /// The implementation should process all messages in the slice before returning.
+    ///
+    /// ## Atomicity Guarantee
+    ///
+    /// The actor runtime guarantees that:
+    /// - Only one call to `handle_batch()` is active at a time per actor
+    /// - All messages in the batch are processed before dequeuing new messages
+    /// - The batch slice contains messages in FIFO order
+    ///
+    /// ## Batch Size
+    ///
+    /// The actual batch size depends on:
+    /// - Number of messages currently queued (up to `max_batch_size()`)
+    /// - Runtime batch size limits (to maintain fairness with other actors)
+    /// - Platform-specific queue draining capabilities
+    ///
+    /// ## Examples
+    ///
+    /// ### Sync-style batch handler
+    /// ```rust,no_run
+    /// # use lit_bit_core::actor::BatchActor;
+    /// # struct MyActor;
+    /// # impl BatchActor for MyActor {
+    /// #     type Message = u32;
+    /// #     type Future<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> where Self: 'a;
+    /// #     fn max_batch_size(&self) -> usize { 32 }
+    /// #     fn handle_batch(&mut self, messages: &[u32]) -> Self::Future<'_> {
+    /// Box::pin(async move {
+    ///     for &value in messages {
+    ///         // self.accumulator += value; // Synchronous processing
+    ///     }
+    /// })
+    /// #     }
+    /// # }
+    /// ```
+    ///
+    /// ### Async batch handler with I/O
+    /// ```rust,no_run
+    /// # use lit_bit_core::actor::BatchActor;
+    /// # struct MyActor;
+    /// # struct IoRequest;
+    /// # impl BatchActor for MyActor {
+    /// #     type Message = IoRequest;
+    /// #     type Future<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> where Self: 'a;
+    /// #     fn max_batch_size(&self) -> usize { 32 }
+    /// #     fn handle_batch(&mut self, messages: &[IoRequest]) -> Self::Future<'_> {
+    /// Box::pin(async move {
+    ///     for request in messages {
+    ///         // let result = self.io_device.process(request).await;
+    ///         // self.handle_result(result);
+    ///     }
+    /// })
+    /// #     }
+    /// # }
+    #[must_use]
+    fn handle_batch(&mut self, messages: &[Self::Message]) -> Self::Future<'_>;
+
+    /// Maximum number of messages to process in a single batch.
+    ///
+    /// This setting helps balance throughput and fairness:
+    /// - **Higher values**: Better throughput for high-frequency messages
+    /// - **Lower values**: Better responsiveness and fairness with other actors
+    ///
+    /// ## Platform Considerations
+    ///
+    /// - **Embassy**: Lower values (8-32) recommended to avoid starving other tasks
+    /// - **Tokio**: Higher values (64-256) acceptable due to work-stealing scheduler
+    /// - **Real-time**: Very low values (1-8) for deterministic latency
+    ///
+    /// ## Default Implementation
+    ///
+    /// Returns 32 as a reasonable default that balances throughput and fairness.
+    fn max_batch_size(&self) -> usize {
+        32
+    }
+
+    /// Called when the actor starts. Default: Ok(())
+    ///
+    /// # Errors
+    /// Returns `Err(ActorError)` if actor startup fails.
+    fn on_start(&mut self) -> Result<(), ActorError> {
+        Ok(())
+    }
+
+    /// Called when the actor stops. Default: Ok(())
+    ///
+    /// # Errors
+    /// Returns `Err(ActorError)` if actor shutdown fails.
+    fn on_stop(self) -> Result<(), ActorError>
+    where
+        Self: Sized,
+    {
+        Ok(())
+    }
+
+    /// Called if the actor panics. Default: `RestartStrategy::OneForOne`
+    fn on_panic(&self, _info: &PanicInfo) -> RestartStrategy {
+        RestartStrategy::OneForOne
+    }
+}
+
 /// Core Actor trait using Generic Associated Types (GATs) for zero-cost async.
 ///
 /// This trait provides the foundation for both sync and async actors while maintaining
@@ -87,22 +334,34 @@ pub trait Actor: Send {
     ///
     /// ### Sync-style handler (compiles to sync code)
     /// ```rust,no_run
-    /// fn handle<'a>(&'a mut self, msg: u32) -> Self::Future<'a> {
-    ///     async move {
-    ///         self.counter += msg; // Synchronous operation
-    ///     }
-    /// }
+    /// # use lit_bit_core::actor::Actor;
+    /// # struct MyActor;
+    /// # impl Actor for MyActor {
+    /// #     type Message = u32;
+    /// #     type Future<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> where Self: 'a;
+    /// #     fn handle(&mut self, msg: u32) -> Self::Future<'_> {
+    /// Box::pin(async move {
+    ///     // self.counter += msg; // Synchronous operation
+    /// })
+    /// #     }
+    /// # }
     /// ```
     ///
     /// ### Async handler with I/O
     /// ```rust,no_run
-    /// fn handle<'a>(&'a mut self, msg: SensorRequest) -> Self::Future<'a> {
-    ///     async move {
-    ///         let reading = self.sensor.read().await; // Async I/O
-    ///         self.process_reading(reading);
-    ///     }
-    /// }
-    /// ```
+    /// # use lit_bit_core::actor::Actor;
+    /// # struct MyActor;
+    /// # struct SensorRequest;
+    /// # impl Actor for MyActor {
+    /// #     type Message = SensorRequest;
+    /// #     type Future<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> where Self: 'a;
+    /// #     fn handle(&mut self, msg: SensorRequest) -> Self::Future<'_> {
+    /// Box::pin(async move {
+    ///     // let reading = self.sensor.read().await; // Async I/O
+    ///     // self.process_reading(reading);
+    /// })
+    /// #     }
+    /// # }
     #[must_use]
     fn handle(&mut self, msg: Self::Message) -> Self::Future<'_>;
 
@@ -148,21 +407,30 @@ pub trait Actor: Send {
 /// ## Examples
 ///
 /// ```rust,no_run
+/// # #[cfg(any(feature = "std", feature = "alloc"))]
+/// # {
 /// use lit_bit_core::actor::AsyncActor;
+/// use futures::future::BoxFuture;
 ///
 /// struct HttpActor {
-///     client: HttpClient,
+///     // client: HttpClient,
 /// }
 ///
-/// #[async_trait::async_trait]
+/// struct HttpRequest {
+///     url: String,
+/// }
+///
 /// impl AsyncActor for HttpActor {
 ///     type Message = HttpRequest;
 ///
-///     async fn handle(&mut self, msg: HttpRequest) {
-///         let response = self.client.get(&msg.url).await;
-///         // Process response...
+///     fn handle(&mut self, msg: HttpRequest) -> BoxFuture<'_, ()> {
+///         Box::pin(async move {
+///             // let response = self.client.get(&msg.url).await;
+///             // Process response...
+///         })
 ///     }
 /// }
+/// # }
 /// ```
 #[cfg(any(feature = "std", feature = "alloc"))]
 pub trait AsyncActor: Send {
@@ -575,16 +843,273 @@ pub async fn actor_task<A: Actor>(
     Ok(())
 }
 
+/// Runs a batch-aware actor's message processing loop (Embassy version).
+///
+/// This function implements batch processing for Embassy actors, following the research
+/// document's recommendations for zero-allocation message batching. It drains available
+/// messages from the channel and processes them in batches.
+///
+/// ## Batching Strategy
+///
+/// - Waits for at least one message (blocking)
+/// - Drains all available messages up to `max_batch_size()`
+/// - Processes the batch in a single `handle_batch()` call
+/// - Yields control after each batch (cooperative scheduling)
+///
+/// ## Performance Benefits
+///
+/// - Fewer Embassy channel receive operations
+/// - Better cache locality for related messages
+/// - Reduced task switching overhead
+/// - Higher throughput for high-frequency message scenarios
+///
+/// # Arguments
+///
+/// * `actor` - The batch actor instance to run
+/// * `receiver` - Embassy channel receiver for incoming messages
+///
+/// # Errors
+/// Returns `ActorError` if actor startup or shutdown fails.
+#[cfg(feature = "async-embassy")]
+pub async fn batch_actor_task_embassy<A, const N: usize>(
+    mut actor: A,
+    receiver: embassy_sync::channel::Receiver<
+        'static,
+        embassy_sync::blocking_mutex::raw::NoopRawMutex,
+        A::Message,
+        N,
+    >,
+) -> Result<(), ActorError>
+where
+    A: BatchActor,
+    A::Message: Send + 'static,
+{
+    // Startup hook
+    let startup_result = actor.on_start();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = startup_result {
+        log::error!("Batch actor startup failed: {e:?}");
+    }
+    startup_result?;
+
+    // Prepare a static buffer for batching messages
+    // Using heapless for zero-allocation message collection
+    let mut batch_buffer: heapless::Vec<A::Message, 64> = heapless::Vec::new();
+
+    // Main batch processing loop
+    loop {
+        // Wait for at least one message
+        let first_message = receiver.receive().await;
+        batch_buffer.clear();
+        batch_buffer.push(first_message).ok(); // Safe: buffer is empty
+
+        // Drain additional messages up to batch limit
+        let max_batch = actor.max_batch_size().min(64); // Constrained by buffer size
+        while batch_buffer.len() < max_batch {
+            match receiver.try_receive() {
+                Ok(msg) => {
+                    if batch_buffer.push(msg).is_err() {
+                        break; // Buffer full
+                    }
+                }
+                Err(_) => break, // No more messages available
+            }
+        }
+
+        // Process the batch
+        actor.handle_batch(&batch_buffer).await;
+
+        // Yield control to maintain cooperative scheduling
+        #[cfg(feature = "embassy")]
+        embassy_futures::yield_now().await;
+    }
+
+    // Cleanup hook (unreachable in embedded)
+    #[allow(unreachable_code)]
+    {
+        let stop_result = actor.on_stop();
+        #[cfg(feature = "debug-log")]
+        if let Err(ref e) = stop_result {
+            log::error!("Batch actor shutdown failed: {e:?}");
+        }
+        stop_result?;
+        Ok(())
+    }
+}
+
+/// Runs a batch-aware actor's message processing loop (Tokio version).
+///
+/// This function implements batch processing for Tokio actors, using Tokio's channel
+/// capabilities to efficiently drain pending messages and process them in batches.
+///
+/// ## Batching Strategy
+///
+/// - Uses `recv().await` for the first message (blocking)
+/// - Uses `try_recv()` to drain additional messages without blocking
+/// - Processes batches up to `max_batch_size()` messages
+/// - Respects Tokio's cooperative scheduling budget
+///
+/// ## Performance Benefits
+///
+/// - Fewer Tokio channel operations
+/// - Reduced task wake-up overhead
+/// - Better throughput for high-frequency messaging
+/// - Maintained fairness through batch size limits
+///
+/// # Arguments
+///
+/// * `actor` - The batch actor instance to run
+/// * `inbox` - Tokio channel receiver for incoming messages
+///
+/// # Errors
+/// Returns `ActorError` if actor startup or shutdown fails.
+#[cfg(feature = "async-tokio")]
+pub async fn batch_actor_task<A: BatchActor>(
+    mut actor: A,
+    mut inbox: Inbox<A::Message>,
+) -> Result<(), ActorError> {
+    // Startup hook
+    let startup_result = actor.on_start();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = startup_result {
+        log::error!("Batch actor startup failed: {e:?}");
+    }
+    startup_result?;
+
+    // Main batch processing loop
+    let mut batch_buffer = Vec::new();
+
+    loop {
+        // Wait for at least one message
+        let first_message = match inbox.recv().await {
+            Some(msg) => msg,
+            None => break, // Channel closed
+        };
+
+        batch_buffer.clear();
+        batch_buffer.push(first_message);
+
+        // Drain additional messages up to batch limit
+        let max_batch = actor.max_batch_size();
+        while batch_buffer.len() < max_batch {
+            match inbox.try_recv() {
+                Ok(msg) => batch_buffer.push(msg),
+                Err(_) => break, // No more messages available
+            }
+        }
+
+        // Process the batch
+        actor.handle_batch(&batch_buffer).await;
+
+        // Tokio's cooperative scheduling will automatically yield if needed
+        // due to the async/await points above
+    }
+
+    // Cleanup hook
+    let stop_result = actor.on_stop();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = stop_result {
+        log::error!("Batch actor shutdown failed: {e:?}");
+    }
+    stop_result?;
+    Ok(())
+}
+
+/// Runs a batch-aware actor's message processing loop (no_std version).
+///
+/// This function implements batch processing for no_std environments without Embassy,
+/// using heapless SPSC queues for zero-allocation message batching.
+///
+/// ## Batching Strategy
+///
+/// - Polls for the first message with yielding
+/// - Drains all available messages from the SPSC queue
+/// - Processes batches up to `max_batch_size()` messages
+/// - Uses configurable yield mechanism for executor compatibility
+///
+/// # Arguments
+///
+/// * `actor` - The batch actor instance to run
+/// * `inbox` - Heapless SPSC consumer for incoming messages
+///
+/// # Errors
+/// Returns `ActorError` if actor startup or shutdown fails.
+#[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
+pub async fn batch_actor_task<A: BatchActor, const N: usize>(
+    mut actor: A,
+    mut inbox: Inbox<A::Message, N>,
+) -> Result<(), ActorError> {
+    // Startup hook
+    let startup_result = actor.on_start();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = startup_result {
+        log::error!("Batch actor startup failed: {e:?}");
+    }
+    startup_result?;
+
+    // Prepare a static buffer for batching messages
+    let mut batch_buffer: heapless::Vec<A::Message, 64> = heapless::Vec::new();
+
+    // Main batch processing loop
+    loop {
+        // Wait for at least one message
+        let first_message = loop {
+            if let Some(msg) = inbox.dequeue() {
+                break msg;
+            }
+            // Yield and continue
+            yield_control().await;
+        };
+
+        batch_buffer.clear();
+        batch_buffer.push(first_message).ok(); // Safe: buffer is empty
+
+        // Drain additional messages up to batch limit
+        let max_batch = actor.max_batch_size().min(64); // Constrained by buffer size
+        while batch_buffer.len() < max_batch {
+            if let Some(msg) = inbox.dequeue() {
+                if batch_buffer.push(msg).is_err() {
+                    break; // Buffer full
+                }
+            } else {
+                break; // No more messages available
+            }
+        }
+
+        // Process the batch
+        actor.handle_batch(&batch_buffer).await;
+
+        // Yield control to allow other tasks to run
+        yield_control().await;
+    }
+
+    // Cleanup hook (unreachable in no_std)
+    #[allow(unreachable_code)]
+    {
+        let stop_result = actor.on_stop();
+        #[cfg(feature = "debug-log")]
+        if let Err(ref e) = stop_result {
+            log::error!("Batch actor shutdown failed: {e:?}");
+        }
+        stop_result?;
+        Ok(())
+    }
+}
+
 pub mod address;
 pub mod backpressure;
 pub mod integration;
 pub mod spawn;
+pub mod supervision; // Task 5.1: Supervision with Async
 
 // Re-export spawn functions for convenience
-#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
-pub use spawn::spawn_actor_tokio;
 #[cfg(feature = "async-embassy")]
 pub use spawn::spawn_counter_actor_embassy;
+#[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
+pub use spawn::{
+    spawn_actor_tokio, spawn_batch_actor_tokio, spawn_supervised_actor_tokio,
+    spawn_supervised_batch_actor_tokio,
+};
 
 #[cfg(test)]
 mod tests {

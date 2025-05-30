@@ -3,7 +3,9 @@ use quote::{format_ident, quote};
 use syn::{
     braced, bracketed,
     parse::{Parse, ParseStream, Result},
-    parse_macro_input, Ident, ItemEnum, Path, Token,
+    parse_macro_input,
+    spanned::Spanned,
+    Ident, ItemEnum, Path, Token,
 };
 
 // Define keywords for parsing
@@ -14,6 +16,7 @@ mod keywords {
     syn::custom_keyword!(initial);
     syn::custom_keyword!(state);
     syn::custom_keyword!(on);
+    syn::custom_keyword!(after);
     syn::custom_keyword!(entry);
     syn::custom_keyword!(exit);
     syn::custom_keyword!(action);
@@ -182,12 +185,17 @@ impl Parse for StateDeclarationAst {
                 body_items.push(StateBodyItemAst::Transition(
                     content_in_braces.parse()?, // Parse directly
                 ));
+            } else if content_in_braces.peek(keywords::after) {
+                // Timer transitions: after(Duration) => State
+                body_items.push(StateBodyItemAst::AfterTransition(
+                    content_in_braces.parse()?,
+                ));
             } else if content_in_braces.peek(keywords::state) {
                 body_items.push(StateBodyItemAst::NestedState(Box::new(
                     content_in_braces.parse()?,
                 )));
             } else {
-                return Err(content_in_braces.error("Unexpected token inside state block. Expected 'initial', 'entry', 'exit', 'on', or nested 'state'."));
+                return Err(content_in_braces.error("Unexpected token inside state block. Expected 'initial', 'entry', 'exit', 'on', 'after', or nested 'state'."));
             }
         }
 
@@ -232,7 +240,8 @@ impl Parse for DefaultChildDeclarationAst {
 enum StateBodyItemAst {
     EntryHook(LifecycleHookAst),
     ExitHook(LifecycleHookAst),
-    Transition(TransitionDefinitionAst), // Stores TransitionDefinitionAst directly by value
+    Transition(TransitionDefinitionAst), // Regular transitions: on Event => State
+    AfterTransition(AfterTransitionAst), // Timer transitions: after(Duration) => State
     NestedState(Box<StateDeclarationAst>),
 }
 
@@ -288,10 +297,139 @@ struct TransitionDefinitionAst {
     semi_token: Token![;],
 }
 
+/// AST structure for timer-based transitions using `after(duration) => State` syntax
+#[derive(Debug)]
+#[allow(dead_code)]
+struct AfterTransitionAst {
+    after_keyword_token: keywords::after,
+    paren_token: syn::token::Paren,
+    duration_expression: syn::Expr,
+    arrow_token: Token![=>],
+    target_state_path: Path,
+    action_clause: Option<TransitionActionAst>,
+    semi_token: Token![;],
+}
+
+impl Parse for AfterTransitionAst {
+    fn parse(input: ParseStream) -> Result<Self> {
+        let after_keyword_token: keywords::after = input.parse()?;
+
+        let content;
+        let paren_token = syn::parenthesized!(content in input);
+        let duration_expression: syn::Expr = content.parse()?;
+
+        // Validate duration expression
+        Self::validate_duration_expression(&duration_expression)?;
+
+        if !content.is_empty() {
+            return Err(
+                content.error("Unexpected tokens after duration expression inside parentheses")
+            );
+        }
+
+        let arrow_token: Token![=>] = input.parse()?;
+        let target_state_path: Path = input.parse()?;
+
+        let action_clause: Option<TransitionActionAst> = if input.peek(syn::token::Bracket) {
+            let fork = input.fork();
+            let content_in_brackets_for_action;
+            syn::bracketed!(content_in_brackets_for_action in fork);
+
+            if content_in_brackets_for_action.peek(keywords::action)
+                || content_in_brackets_for_action.peek(Ident)
+            {
+                Some(input.parse()?)
+            } else if content_in_brackets_for_action.peek(Token![.]) {
+                let content_to_error_on;
+                let _bracket_token_for_error = syn::bracketed!(content_to_error_on in input);
+                let dot_token: Token![.] = content_to_error_on.parse()?;
+                return Err(syn::Error::new(dot_token.span, "Leading dot notation for action handlers (e.g., `[.foo]`) is not yet supported. Use `[self.foo]` or `[path::to::foo]`."));
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let semi_token: Token![;] = input.parse()?;
+
+        Ok(AfterTransitionAst {
+            after_keyword_token,
+            paren_token,
+            duration_expression,
+            arrow_token,
+            target_state_path,
+            action_clause,
+            semi_token,
+        })
+    }
+}
+
+impl AfterTransitionAst {
+    /// Validates that the duration expression is either an integer literal
+    /// or a path that can be resolved to core::time::Duration
+    fn validate_duration_expression(expr: &syn::Expr) -> Result<()> {
+        match expr {
+            // Accept integer literals (will be converted to Duration)
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Int(_),
+                ..
+            }) => Ok(()),
+
+            // Accept paths that could resolve to Duration
+            syn::Expr::Path(expr_path) => {
+                Self::validate_duration_path(&expr_path.path)
+            },
+
+            // Reject all other expression types
+            _ => Err(syn::Error::new(
+                expr.span(),
+                "Duration expression must be either an integer literal (for milliseconds) or a path to core::time::Duration (e.g., `Duration::from_secs(5)`, `core::time::Duration::ZERO`)"
+            ))
+        }
+    }
+
+    /// Validates that a path expression could plausibly resolve to a Duration value
+    fn validate_duration_path(path: &syn::Path) -> Result<()> {
+        let path_string = path
+            .segments
+            .iter()
+            .map(|seg| seg.ident.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+
+        // Check for common Duration patterns
+        let is_valid_duration_path =
+            // Direct Duration references
+            path_string.contains("Duration") ||
+            // core::time module
+            path_string.starts_with("core::time::") ||
+            // std::time module
+            path_string.starts_with("std::time::") ||
+            // Relative time paths
+            path_string.starts_with("time::") ||
+            // Just "Duration" (assuming it's in scope)
+            path_string == "Duration";
+
+        if is_valid_duration_path {
+            Ok(())
+        } else {
+            Err(syn::Error::new(
+                path.span(),
+                format!(
+                    "Duration path '{path_string}' does not appear to resolve to a Duration type. \
+                    Expected paths like `Duration::from_secs(5)`, `core::time::Duration::ZERO`, \
+                    or `std::time::Duration::from_millis(100)`"
+                ),
+            ))
+        }
+    }
+}
+
 impl Parse for TransitionDefinitionAst {
     fn parse(input: ParseStream) -> Result<Self> {
         let on_keyword_token: keywords::on = input.parse()?;
-        let event_pattern: syn::Pat = syn::Pat::parse_single(input)?; // Changed from event_name: Ident
+        let event_pattern: syn::Pat = syn::Pat::parse_single(input)?;
 
         let guard_clause: Option<GuardConditionAst> = if input.peek(syn::token::Bracket) {
             let fork = input.fork();
@@ -334,7 +472,7 @@ impl Parse for TransitionDefinitionAst {
 
         Ok(TransitionDefinitionAst {
             on_keyword_token,
-            event_pattern, // Changed from event_name
+            event_pattern,
             guard_clause,
             arrow_token,
             target_state_path,
@@ -358,6 +496,12 @@ impl Parse for GuardConditionAst {
         let bracket_token = bracketed!(content in input);
         let guard_keyword_token: keywords::guard = content.parse()?;
         let condition_function_expression: syn::Expr = content.parse()?; // Changed from Path
+
+        // Validate that the guard expression doesn't contain async constructs
+        crate::intermediate_tree::TmpStateTreeBuilder::reject_async_in_guard_expr(
+            &condition_function_expression,
+        )?;
+
         if !content.is_empty() {
             return Err(
                 content.error("Unexpected tokens after guard condition expression inside brackets")
@@ -440,6 +584,7 @@ pub(crate) mod intermediate_tree {
         pub entry_handler: Option<&'ast Expr>,
         pub exit_handler: Option<&'ast Expr>,
         pub transitions: Vec<TmpTransition<'ast>>,
+        pub timer_transitions: Vec<TmpTimerTransition<'ast>>, // NEW: separate field for timer transitions
         pub is_parallel: bool,
         #[allow(dead_code)]
         pub state_keyword_span: Span,
@@ -447,6 +592,17 @@ pub(crate) mod intermediate_tree {
         pub declared_initial_child_expression: Option<&'ast Path>,
         /// Indicates whether this state contains any async handlers (entry, exit, or transition actions)
         pub has_async_handlers: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    pub(crate) struct TmpTimerTransition<'ast> {
+        pub duration_expression: &'ast syn::Expr,
+        pub target_state_path_ast: &'ast Path,
+        pub target_state_idx: Option<usize>,
+        pub action_handler: Option<&'ast Expr>,
+        pub after_keyword_span: Span,
+        /// Indicates whether this timer transition's action handler contains async blocks
+        pub has_async_action: bool,
     }
 
     pub(crate) struct TmpStateTreeBuilder<'ast> {
@@ -688,6 +844,7 @@ pub(crate) mod intermediate_tree {
 
         fn resolve_and_validate_transition_targets(&mut self) -> SynResult<()> {
             for i in 0..self.all_states.len() {
+                // Resolve regular transition targets
                 let transitions_info: Vec<(&'ast Path, Span)> = self.all_states[i]
                     .transitions
                     .iter()
@@ -708,6 +865,29 @@ pub(crate) mod intermediate_tree {
                 let state_transitions = &mut self.all_states[i].transitions;
                 for (j, transition) in state_transitions.iter_mut().enumerate() {
                     transition.target_state_idx = resolved_indices[j];
+                }
+
+                // Resolve timer transition targets
+                let timer_transitions_info: Vec<(&'ast Path, Span)> = self.all_states[i]
+                    .timer_transitions
+                    .iter()
+                    .map(|t| (t.target_state_path_ast, t.after_keyword_span))
+                    .collect();
+
+                let mut resolved_timer_indices = Vec::new();
+                for (target_path_ast, after_span) in timer_transitions_info {
+                    match self.resolve_path_to_state_index(i, target_path_ast) {
+                        Ok(idx) => resolved_timer_indices.push(Some(idx)),
+                        Err(e) => {
+                            let final_span = target_path_ast.span().resolved_at(after_span);
+                            return Err(SynError::new(final_span, e.to_string()));
+                        }
+                    }
+                }
+
+                let state_timer_transitions = &mut self.all_states[i].timer_transitions;
+                for (j, timer_transition) in state_timer_transitions.iter_mut().enumerate() {
+                    timer_transition.target_state_idx = resolved_timer_indices[j];
                 }
             }
             Ok(())
@@ -774,6 +954,7 @@ pub(crate) mod intermediate_tree {
                 entry_handler: None,     // Placeholder
                 exit_handler: None,      // Placeholder
                 transitions: Vec::new(), // Placeholder
+                timer_transitions: Vec::new(), // NEW: separate field for timer transitions
                 is_parallel: is_parallel_flag, // Set based on parsed attributes
                 state_keyword_span: state_decl_ast.state_keyword_token.span(),
                 name_span: state_decl_ast.name.span(),
@@ -790,6 +971,7 @@ pub(crate) mod intermediate_tree {
             let mut entry_handler_opt: Option<&'ast Expr> = None; // Changed from Path
             let mut exit_handler_opt: Option<&'ast Expr> = None; // Changed from Path
             let mut transitions_for_this_state: Vec<TmpTransition<'ast>> = Vec::new();
+            let mut timer_transitions_for_this_state: Vec<TmpTimerTransition<'ast>> = Vec::new();
 
             // Initialize a HashSet to track local names of direct children of *this* state.
             let mut children_sibling_names: HashSet<String> = HashSet::new();
@@ -835,6 +1017,26 @@ pub(crate) mod intermediate_tree {
                             });
                         }
                     }
+                    crate::StateBodyItemAst::AfterTransition(after_trans_ast) => {
+                        // Timer transitions are handled separately from regular event transitions
+                        timer_transitions_for_this_state.push(TmpTimerTransition {
+                            duration_expression: &after_trans_ast.duration_expression,
+                            target_state_path_ast: &after_trans_ast.target_state_path,
+                            target_state_idx: None, // Will be resolved later
+                            action_handler: after_trans_ast
+                                .action_clause
+                                .as_ref()
+                                .map(|ac| &ac.transition_action_expression),
+                            after_keyword_span: after_trans_ast.after_keyword_token.span,
+                            has_async_action: after_trans_ast.action_clause.as_ref().is_some_and(
+                                |ac| {
+                                    Self::expression_contains_async(
+                                        &ac.transition_action_expression,
+                                    )
+                                },
+                            ),
+                        });
+                    }
                     crate::StateBodyItemAst::NestedState(nested_state_decl_ast) => {
                         let child_idx = self.process_state_declaration(
                             nested_state_decl_ast,
@@ -860,13 +1062,22 @@ pub(crate) mod intermediate_tree {
                     .iter()
                     .any(|t| t.has_async_action);
 
+                // Check timer transitions for async actions
+                let has_async_timer_transitions = timer_transitions_for_this_state
+                    .iter()
+                    .any(|t| t.has_async_action);
+
                 // Set overall async detection
-                let has_async_handlers = has_async_entry || has_async_exit || has_async_transitions;
+                let has_async_handlers = has_async_entry
+                    || has_async_exit
+                    || has_async_transitions
+                    || has_async_timer_transitions;
 
                 state_to_update.children_indices = children_indices_for_this_state;
                 state_to_update.entry_handler = entry_handler_opt;
                 state_to_update.exit_handler = exit_handler_opt;
                 state_to_update.transitions = transitions_for_this_state;
+                state_to_update.timer_transitions = timer_transitions_for_this_state;
                 state_to_update.has_async_handlers = has_async_handlers;
             } else {
                 return Err(syn::Error::new(
@@ -885,6 +1096,96 @@ pub(crate) mod intermediate_tree {
                 // For other expression types, we don't do deep analysis per research guidance
                 _ => false,
             }
+        }
+
+        /// Validates that guard expressions do not contain async blocks or await expressions.
+        /// This enforces the research requirement that guards must be synchronous boolean predicates.
+        ///
+        /// Guards are meant to be quick, pure boolean checks and should not perform awaits or side effects.
+        /// Allowing async guards would pause state evaluation mid-transition, complicating execution.
+        pub(crate) fn reject_async_in_guard_expr(expr: &Expr) -> syn::Result<()> {
+            match expr {
+                Expr::Async(async_block) => {
+                    return Err(syn::Error::new(
+                        async_block.async_token.span(),
+                        "Guard conditions cannot be `async`. Guards must return a bool without awaiting. \
+                         Consider moving async logic to an entry action or external event, and have the guard \
+                         use a boolean flag/result of that work."
+                    ));
+                }
+                Expr::Await(await_expr) => {
+                    return Err(syn::Error::new(
+                        await_expr.dot_token.span(),
+                        "Guard conditions cannot use `.await`. Guards must be synchronous. \
+                         Consider performing async work in an entry action and storing the result \
+                         for the guard to check.",
+                    ));
+                }
+                // Recursively check inside blocks or closures
+                Expr::Block(block) => {
+                    for stmt in &block.block.stmts {
+                        if let syn::Stmt::Expr(e, _) = stmt {
+                            Self::reject_async_in_guard_expr(e)?;
+                        } else if let syn::Stmt::Local(local) = stmt {
+                            if let Some(local_init) = &local.init {
+                                Self::reject_async_in_guard_expr(&local_init.expr)?;
+                            }
+                        }
+                    }
+                }
+                Expr::Closure(closure) => {
+                    Self::reject_async_in_guard_expr(&closure.body)?;
+                }
+                // Check nested expressions in common expression types
+                Expr::Call(call) => {
+                    Self::reject_async_in_guard_expr(&call.func)?;
+                    for arg in &call.args {
+                        Self::reject_async_in_guard_expr(arg)?;
+                    }
+                }
+                Expr::MethodCall(method_call) => {
+                    Self::reject_async_in_guard_expr(&method_call.receiver)?;
+                    for arg in &method_call.args {
+                        Self::reject_async_in_guard_expr(arg)?;
+                    }
+                }
+                Expr::Binary(binary) => {
+                    Self::reject_async_in_guard_expr(&binary.left)?;
+                    Self::reject_async_in_guard_expr(&binary.right)?;
+                }
+                Expr::Unary(unary) => {
+                    Self::reject_async_in_guard_expr(&unary.expr)?;
+                }
+                Expr::If(if_expr) => {
+                    Self::reject_async_in_guard_expr(&if_expr.cond)?;
+                    // then_branch is a Block, so check its statements
+                    for stmt in &if_expr.then_branch.stmts {
+                        if let syn::Stmt::Expr(e, _) = stmt {
+                            Self::reject_async_in_guard_expr(e)?;
+                        } else if let syn::Stmt::Local(local) = stmt {
+                            if let Some(local_init) = &local.init {
+                                Self::reject_async_in_guard_expr(&local_init.expr)?;
+                            }
+                        }
+                    }
+                    if let Some((_, else_branch)) = &if_expr.else_branch {
+                        Self::reject_async_in_guard_expr(else_branch)?;
+                    }
+                }
+                Expr::Match(match_expr) => {
+                    Self::reject_async_in_guard_expr(&match_expr.expr)?;
+                    for arm in &match_expr.arms {
+                        Self::reject_async_in_guard_expr(&arm.body)?;
+                        if let Some((_, guard_expr)) = &arm.guard {
+                            Self::reject_async_in_guard_expr(guard_expr)?;
+                        }
+                    }
+                }
+                // For other expression types, they're likely safe (literals, paths, etc.)
+                // or don't commonly contain async constructs
+                _ => {}
+            }
+            Ok(())
         }
 
         /// Determines if the entire statechart contains any async handlers.
@@ -949,68 +1250,133 @@ pub(crate) mod code_generator {
         let max_nodes_for_computation_val =
             proc_macro2::Literal::usize_unsuffixed(builder.all_states.len() * 4);
 
-        // REMOVE: let send_method_tokens = generate_send_method(...)
+        // Task 4.1: Conditional machine implementation based on async detection
+        let has_any_async_handlers = builder.contains_async_handlers();
 
-        let machine_struct_ts = quote! {
-            #[derive(Debug)]
-            pub struct #machine_name {
-                runtime: lit_bit_core::Runtime<
-                    #state_id_enum_name,
-                    #event_type_path,
-                    #context_type_path,
-                    #m_val,
-                    {lit_bit_core::MAX_ACTIVE_REGIONS}, // N_ACTIVE const generic for Runtime
-                    #max_nodes_for_computation_val
-                >,
+        if has_any_async_handlers {
+            quote! {
+                #[derive(Debug)]
+                #[cfg(any(feature = "async", feature = "async-tokio", feature = "embassy"))]
+                pub struct #machine_name {
+                    runtime: lit_bit_core::AsyncRuntime<
+                        #state_id_enum_name,
+                        #event_type_path,
+                        #context_type_path,
+                        #m_val,
+                        {lit_bit_core::MAX_ACTIVE_REGIONS}, // N_ACTIVE const generic for Runtime
+                        #max_nodes_for_computation_val
+                    >,
+                }
+
+                #[cfg(any(feature = "async", feature = "async-tokio", feature = "embassy"))]
+                impl #machine_name {
+                    pub async fn new(context: #context_type_path, initial_event: &#event_type_path) -> Result<Self, lit_bit_core::ProcessingError> {
+                        let runtime = lit_bit_core::AsyncRuntime::new(
+                            &#machine_definition_const_ident,
+                            context,
+                            initial_event // Use the provided initial_event
+                        ).await?;
+                        Ok(Self { runtime })
+                    }
+
+                    // Add inherent async send method delegating to runtime
+                    pub async fn send(&mut self, event: &#event_type_path) -> lit_bit_core::SendResult {
+                        use lit_bit_core::AsyncStateMachine;
+                        self.runtime.send(event).await
+                    }
+
+                    pub fn context(&self) -> &#context_type_path {
+                        self.runtime.context()
+                    }
+                    pub fn context_mut(&mut self) -> &mut #context_type_path {
+                        self.runtime.context_mut()
+                    }
+                }
+
+                #[cfg(any(feature = "async", feature = "async-tokio", feature = "embassy"))]
+                impl lit_bit_core::AsyncStateMachine<{lit_bit_core::MAX_ACTIVE_REGIONS}> for #machine_name {
+                    type State = #state_id_enum_name;
+                    type Event = #event_type_path;
+                    type Context = #context_type_path;
+
+                    async fn send(&mut self, event: &Self::Event) -> lit_bit_core::SendResult {
+                        // Delegate to the runtime's AsyncStateMachine trait implementation
+                        use lit_bit_core::AsyncStateMachine;
+                        self.runtime.send(event).await
+                    }
+
+                    fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::MAX_ACTIVE_REGIONS}> {
+                        self.runtime.state()
+                    }
+                    fn context(&self) -> &Self::Context {
+                        self.runtime.context()
+                    }
+                    fn context_mut(&mut self) -> &mut Self::Context {
+                        self.runtime.context_mut()
+                    }
+                }
             }
-
-            impl #machine_name {
-                pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Result<Self, lit_bit_core::ProcessingError> {
-                    let runtime = lit_bit_core::Runtime::new(
-                        &#machine_definition_const_ident,
-                        context,
-                        initial_event // Use the provided initial_event
-                    )?;
-                    Ok(Self { runtime })
+        } else {
+            quote! {
+                #[derive(Debug)]
+                pub struct #machine_name {
+                    runtime: lit_bit_core::Runtime<
+                        #state_id_enum_name,
+                        #event_type_path,
+                        #context_type_path,
+                        #m_val,
+                        {lit_bit_core::MAX_ACTIVE_REGIONS}, // N_ACTIVE const generic for Runtime
+                        #max_nodes_for_computation_val
+                    >,
                 }
 
-                // Add inherent send method delegating to runtime
-                pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::SendResult {
-                    use lit_bit_core::StateMachine;
-                    self.runtime.send(event)
+                impl #machine_name {
+                    pub fn new(context: #context_type_path, initial_event: &#event_type_path) -> Result<Self, lit_bit_core::ProcessingError> {
+                        let runtime = lit_bit_core::Runtime::new(
+                            &#machine_definition_const_ident,
+                            context,
+                            initial_event // Use the provided initial_event
+                        )?;
+                        Ok(Self { runtime })
+                    }
+
+                    // Add inherent send method delegating to runtime
+                    pub fn send(&mut self, event: &#event_type_path) -> lit_bit_core::SendResult {
+                        use lit_bit_core::StateMachine;
+                        self.runtime.send(event)
+                    }
+
+                    pub fn context(&self) -> &#context_type_path {
+                        self.runtime.context()
+                    }
+                    pub fn context_mut(&mut self) -> &mut #context_type_path {
+                        self.runtime.context_mut()
+                    }
                 }
 
-                pub fn context(&self) -> &#context_type_path {
-                    self.runtime.context()
-                }
-                pub fn context_mut(&mut self) -> &mut #context_type_path {
-                    self.runtime.context_mut()
+                impl lit_bit_core::StateMachine<{lit_bit_core::MAX_ACTIVE_REGIONS}> for #machine_name {
+                    type State = #state_id_enum_name;
+                    type Event = #event_type_path;
+                    type Context = #context_type_path;
+
+                    fn send(&mut self, event: &Self::Event) -> lit_bit_core::SendResult {
+                        // Delegate to the runtime's StateMachine trait implementation
+                        use lit_bit_core::StateMachine;
+                        self.runtime.send(event)
+                    }
+
+                    fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::MAX_ACTIVE_REGIONS}> {
+                        self.runtime.state()
+                    }
+                    fn context(&self) -> &Self::Context {
+                        self.runtime.context()
+                    }
+                    fn context_mut(&mut self) -> &mut Self::Context {
+                        self.runtime.context_mut()
+                    }
                 }
             }
-
-            impl lit_bit_core::StateMachine<{lit_bit_core::MAX_ACTIVE_REGIONS}> for #machine_name {
-                type State = #state_id_enum_name;
-                type Event = #event_type_path;
-                type Context = #context_type_path;
-
-                fn send(&mut self, event: &Self::Event) -> lit_bit_core::SendResult {
-                    // Delegate to the runtime's StateMachine trait implementation
-                    use lit_bit_core::StateMachine;
-                    self.runtime.send(event)
-                }
-
-                fn state(&self) -> heapless::Vec<Self::State, {lit_bit_core::MAX_ACTIVE_REGIONS}> {
-                    self.runtime.state()
-                }
-                fn context(&self) -> &Self::Context {
-                    self.runtime.context()
-                }
-                fn context_mut(&mut self) -> &mut Self::Context {
-                    self.runtime.context_mut()
-                }
-            }
-        };
-        machine_struct_ts
+        }
     }
 
     #[derive(Debug)]
@@ -1059,7 +1425,7 @@ pub(crate) mod code_generator {
                 return Err(SynError::new(
                     tmp_state.name_span, // Ensure no trailing whitespace here
                     format!(
-                        "State name collision: Full path '{}' (and previously '{}') both generate the PascalCase enum variant identifier '{}'. Please ensure state names produce unique variants.", 
+                        "State name collision: Full path '{}' (and previously '{}') both generate the PascalCase enum variant identifier '{}'. Please ensure state names produce unique variants.",
                         tmp_state.full_path_name, colliding_full_path_str, variant_ident_str
                     )
                 ));
@@ -1120,44 +1486,28 @@ pub(crate) mod code_generator {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         let mut state_node_initializers = Vec::new();
 
-        // Detect async usage and provide helpful error messages for now
-        // TODO: Full async integration with Actor trait system in Sprint 3 continuation
-        for tmp_state in &builder.all_states {
-            // Check for async handlers and emit helpful errors
-            if let Some(entry_expr) = tmp_state.entry_handler {
-                if TmpStateTreeBuilder::expression_contains_async(entry_expr) {
-                    return Err(SynError::new(
-                        entry_expr.span(),
-                        "Async entry handlers are not yet supported. Async handlers require integration with the Actor trait system. Please use sync entry handlers for now, or consider using the actor layer for async operations."
-                    ));
-                }
-            }
+        // Detect overall async usage for conditional code generation (Task 4.1)
+        let has_any_async_handlers = builder.contains_async_handlers();
 
-            if let Some(exit_expr) = tmp_state.exit_handler {
-                if TmpStateTreeBuilder::expression_contains_async(exit_expr) {
-                    return Err(SynError::new(
-                        exit_expr.span(),
-                        "Async exit handlers are not yet supported. Async handlers require integration with the Actor trait system. Please use sync exit handlers for now, or consider using the actor layer for async operations."
-                    ));
-                }
-            }
-
-            // Check transitions for async actions
-            for transition in &tmp_state.transitions {
-                if transition.has_async_action {
-                    if let Some(action_expr) = transition.action_handler {
-                        return Err(SynError::new(
-                            action_expr.span(),
-                            "Async transition actions are not yet supported. Async actions require integration with the Actor trait system. Please use sync action handlers for now, or consider using the actor layer for async operations."
-                        ));
-                    }
-                }
+        // Early validation: Reject async handlers until full async support is implemented
+        if has_any_async_handlers {
+            // Find the first state with async handlers to provide a specific error location
+            if let Some(async_state) = builder
+                .all_states
+                .iter()
+                .find(|state| state.has_async_handlers)
+            {
+                return Err(SynError::new(
+                    async_state.name_span,
+                    "Async entry handlers are not yet supported in the current version. \
+                     Full async support requires integration with the Actor trait system. \
+                     Please use sync entry handlers for now, or wait for the async actor integration in a future release."
+                ));
             }
         }
 
-        // Continue with sync-only code generation (zero-cost path maintained)
+        // Generate state nodes with conditional async support
         for tmp_state in &builder.all_states {
-            // ... existing id, parent_id, initial_child_id expressions ...
             let current_state_id_variant = generated_ids
                 .full_path_to_variant_ident
                 .get(&tmp_state.full_path_name)
@@ -1192,33 +1542,86 @@ pub(crate) mod code_generator {
                 })
                 .unwrap_or_else(|| quote! { None });
 
-            // Pure sync code generation (maintaining zero-cost abstractions)
-            let entry_action_expr = tmp_state.entry_handler.map_or_else(
-                || quote! { None },
-                |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
-            );
-            let exit_action_expr = tmp_state.exit_handler.map_or_else(
-                || quote! { None },
-                |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
-            );
+            // Task 4.1: Conditional code generation based on async detection
+            if has_any_async_handlers {
+                // Generate async-compatible action handlers
+                let entry_action_expr = tmp_state.entry_handler.map_or_else(
+                    || quote! { None },
+                    |p_expr| {
+                        if TmpStateTreeBuilder::expression_contains_async(p_expr) {
+                            // Generate async entry handler
+                            quote! { Some(#p_expr as AsyncActionFn<#context_type_path, #event_type_path>) }
+                        } else {
+                            // Wrap sync handler for async compatibility
+                            quote! { Some(sync_to_async_adapter(#p_expr) as AsyncActionFn<#context_type_path, #event_type_path>) }
+                        }
+                    },
+                );
+                let exit_action_expr = tmp_state.exit_handler.map_or_else(
+                    || quote! { None },
+                    |p_expr| {
+                        if TmpStateTreeBuilder::expression_contains_async(p_expr) {
+                            // Generate async exit handler
+                            quote! { Some(#p_expr as AsyncActionFn<#context_type_path, #event_type_path>) }
+                        } else {
+                            // Wrap sync handler for async compatibility
+                            quote! { Some(sync_to_async_adapter(#p_expr) as AsyncActionFn<#context_type_path, #event_type_path>) }
+                        }
+                    },
+                );
 
-            let is_parallel_literal = tmp_state.is_parallel; // This is already a bool
+                let is_parallel_literal = tmp_state.is_parallel; // Store boolean as literal
 
-            state_node_initializers.push(quote! {
-                lit_bit_core::StateNode {
-                    id: #state_id_enum_name::#current_state_id_variant,
-                    parent: #parent_id_expr,
-                    initial_child: #initial_child_id_expr,
-                    entry_action: #entry_action_expr,
-                    exit_action: #exit_action_expr,
-                    is_parallel: #is_parallel_literal, // Added field
-                }
-            });
+                state_node_initializers.push(quote! {
+                    lit_bit_core::AsyncStateNode {
+                        id: #state_id_enum_name::#current_state_id_variant,
+                        parent: #parent_id_expr,
+                        initial_child: #initial_child_id_expr,
+                        entry_action: #entry_action_expr,
+                        exit_action: #exit_action_expr,
+                        is_parallel: #is_parallel_literal,
+                    }
+                });
+            } else {
+                // Generate pure sync code (maintaining zero-cost abstractions)
+                let entry_action_expr = tmp_state.entry_handler.map_or_else(
+                    || quote! { None },
+                    |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
+                );
+                let exit_action_expr = tmp_state.exit_handler.map_or_else(
+                    || quote! { None },
+                    |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
+                );
+
+                let is_parallel_literal = tmp_state.is_parallel; // This is already a bool
+
+                state_node_initializers.push(quote! {
+                    lit_bit_core::StateNode {
+                        id: #state_id_enum_name::#current_state_id_variant,
+                        parent: #parent_id_expr,
+                        initial_child: #initial_child_id_expr,
+                        entry_action: #entry_action_expr,
+                        exit_action: #exit_action_expr,
+                        is_parallel: #is_parallel_literal,
+                    }
+                });
+            }
         }
-        let states_array_ts = quote! {
-            const STATES: &[lit_bit_core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
-                #(#state_node_initializers),*
-            ];
+
+        // Generate conditional arrays based on async detection
+        let states_array_ts = if has_any_async_handlers {
+            quote! {
+                #[cfg(any(feature = "async", feature = "async-tokio", feature = "embassy"))]
+                const STATES: &[lit_bit_core::AsyncStateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+                    #(#state_node_initializers),*
+                ];
+            }
+        } else {
+            quote! {
+                const STATES: &[lit_bit_core::StateNode<#state_id_enum_name, #context_type_path, #event_type_path>] = &[
+                    #(#state_node_initializers),*
+                ];
+            }
         };
         Ok(states_array_ts)
     }
@@ -1234,25 +1637,15 @@ pub(crate) mod code_generator {
         let mut transition_initializers = Vec::new();
         let mut matcher_fns = Vec::new();
 
-        // First pass: Check for async transition actions and emit helpful errors
-        // TODO: Full async integration with Actor trait system
-        for tmp_state in &builder.all_states {
-            for tmp_trans in &tmp_state.transitions {
-                if tmp_trans.has_async_action {
-                    if let Some(action_expr) = tmp_trans.action_handler {
-                        return Err(SynError::new(
-                            action_expr.span(),
-                            "Async transition actions are not yet supported. Async actions require integration with the Actor trait system. Please use sync action handlers for now, or consider using the actor layer for async operations."
-                        ));
-                    }
-                }
-            }
-        }
+        // Task 4.1: Detect async usage for conditional generation instead of errors
+        let has_any_async_handlers = builder.contains_async_handlers();
 
-        // Continue with sync-only code generation (zero-cost path maintained)
+        // Generate transitions with conditional async support
         for tmp_state in &builder.all_states {
             let from_state_id_variant = generated_ids.full_path_to_variant_ident.get(&tmp_state.full_path_name)
                 .ok_or_else(|| SynError::new(tmp_state.name_span, "Internal error: 'from_state' full_path_name not found in generated IDs map"))?;
+
+            // Generate regular event transitions
             for tmp_trans in &tmp_state.transitions {
                 let target_state_idx = tmp_trans.target_state_idx.ok_or_else(|| {
                     SynError::new(
@@ -1272,10 +1665,25 @@ pub(crate) mod code_generator {
 
                 let event_pattern = tmp_trans.event_pattern; // This is &'ast syn::Pat
 
-                let action_expr = tmp_trans.action_handler.map_or_else(
-                    || quote! { None },
-                    |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
-                );
+                // Task 4.1: Conditional action handler generation based on async detection
+                let action_expr = if has_any_async_handlers {
+                    tmp_trans.action_handler.map_or_else(
+                        || quote! { None },
+                        |p_expr| {
+                            if tmp_trans.has_async_action {
+                                quote! { Some(#p_expr as AsyncActionFn<#context_type_path, #event_type_path>) }
+                            } else {
+                                quote! { Some(sync_to_async_adapter(#p_expr) as AsyncActionFn<#context_type_path, #event_type_path>) }
+                            }
+                        },
+                    )
+                } else {
+                    tmp_trans.action_handler.map_or_else(
+                        || quote! { None },
+                        |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
+                    )
+                };
+
                 let guard_expr = tmp_trans.guard_handler.map_or_else(|| quote!{ None },
                     |p_expr| quote!{ Some(#p_expr as GuardFn<#context_type_path, #event_type_path>) });
                 let event_pattern_tokens = extract_pat_tokens(event_pattern);
@@ -1308,23 +1716,144 @@ pub(crate) mod code_generator {
                 };
                 matcher_fns.push(matcher_fn);
 
-                // Generate the Transition initializer
-                transition_initializers.push(quote! {
-                    lit_bit_core::Transition {
-                        from_state: #state_id_enum_name::#from_state_id_variant,
-                        to_state: #state_id_enum_name::#to_state_id_variant,
-                        action: #action_expr,
-                        guard: #guard_expr,
-                        match_fn: Some(#matcher_fn_ident),
+                // Generate the Transition initializer with conditional type
+                if has_any_async_handlers {
+                    transition_initializers.push(quote! {
+                        lit_bit_core::AsyncTransition {
+                            from_state: #state_id_enum_name::#from_state_id_variant,
+                            to_state: #state_id_enum_name::#to_state_id_variant,
+                            action: #action_expr,
+                            guard: #guard_expr,
+                            match_fn: Some(#matcher_fn_ident),
+                        }
+                    });
+                } else {
+                    transition_initializers.push(quote! {
+                        lit_bit_core::Transition {
+                            from_state: #state_id_enum_name::#from_state_id_variant,
+                            to_state: #state_id_enum_name::#to_state_id_variant,
+                            action: #action_expr,
+                            guard: #guard_expr,
+                            match_fn: Some(#matcher_fn_ident),
+                        }
+                    });
+                }
+            }
+
+            // Generate timer transitions as internal events (following research report)
+            for (timer_idx, timer_trans) in tmp_state.timer_transitions.iter().enumerate() {
+                let target_state_idx = timer_trans.target_state_idx.ok_or_else(|| {
+                    SynError::new(
+                        timer_trans.after_keyword_span,
+                        "Internal error: Timer transition target index not resolved.",
+                    )
+                })?;
+                let target_tmp_state =
+                    builder.all_states.get(target_state_idx).ok_or_else(|| {
+                        SynError::new(
+                            timer_trans.after_keyword_span,
+                            "Internal error: Invalid timer transition target_state_idx.",
+                        )
+                    })?;
+                let to_state_id_variant = generated_ids.full_path_to_variant_ident.get(&target_tmp_state.full_path_name)
+                    .ok_or_else(|| SynError::new(timer_trans.after_keyword_span, "Internal error: Timer transition 'to_state' full_path_name not found in map."))?;
+
+                // Generate internal timer event identifier for this specific timer transition
+                let _timer_event_ident =
+                    format_ident!("TimerFired_{}_{}", from_state_id_variant, timer_idx);
+
+                // Task 4.1: Conditional timer action generation
+                let timer_action_expr = if has_any_async_handlers {
+                    timer_trans.action_handler.map_or_else(
+                        || quote! { None },
+                        |p_expr| {
+                            if timer_trans.has_async_action {
+                                quote! { Some(#p_expr as AsyncActionFn<#context_type_path, #event_type_path>) }
+                            } else {
+                                quote! { Some(sync_to_async_adapter(#p_expr) as AsyncActionFn<#context_type_path, #event_type_path>) }
+                            }
+                        },
+                    )
+                } else {
+                    timer_trans.action_handler.map_or_else(
+                        || quote! { None },
+                        |p_expr| quote! { Some(#p_expr as ActionFn<#context_type_path, #event_type_path>) },
+                    )
+                };
+
+                // Generate a matcher function for the internal timer event
+                let timer_matcher_fn_ident = format_ident!(
+                    "matches_timer_{}_to_{}_T{}",
+                    from_state_id_variant,
+                    to_state_id_variant,
+                    transition_initializers.len()
+                );
+
+                // Generate matcher that checks for internal timer events
+                // This follows the research report's approach: users add TimerFired { state_id, timer_id } to their event enum
+                let timer_matcher_fn = quote! {
+                    #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+                    fn #timer_matcher_fn_ident(e: &#event_type_path) -> bool {
+                        // Match against the standard TimerFired event pattern
+                        // Users should add: TimerFired { state_id: StateId, timer_id: usize } to their event enum
+                        match e {
+                            #event_type_path::TimerFired { state_id, timer_id } => {
+                                *state_id == #state_id_enum_name::#from_state_id_variant && *timer_id == #timer_idx
+                            }
+                            _ => false,
+                        }
                     }
-                });
+
+                    #[cfg(not(any(feature = "async-tokio", feature = "embassy")))]
+                    fn #timer_matcher_fn_ident(_e: &#event_type_path) -> bool {
+                        false // Timer transitions disabled when async is not available
+                    }
+                };
+                matcher_fns.push(timer_matcher_fn);
+
+                // Generate the timer transition initializer with conditional type
+                if has_any_async_handlers {
+                    transition_initializers.push(quote! {
+                        #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+                        lit_bit_core::AsyncTransition {
+                            from_state: #state_id_enum_name::#from_state_id_variant,
+                            to_state: #state_id_enum_name::#to_state_id_variant,
+                            action: #timer_action_expr,
+                            guard: None, // Timer transitions don't have guards per research
+                            match_fn: Some(#timer_matcher_fn_ident),
+                        }
+                    });
+                } else {
+                    transition_initializers.push(quote! {
+                        #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+                        lit_bit_core::Transition {
+                            from_state: #state_id_enum_name::#from_state_id_variant,
+                            to_state: #state_id_enum_name::#to_state_id_variant,
+                            action: #timer_action_expr,
+                            guard: None, // Timer transitions don't have guards per research
+                            match_fn: Some(#timer_matcher_fn_ident),
+                        }
+                    });
+                }
             }
         }
-        let transitions_array_ts = quote! {
-            #(#matcher_fns)*
-            const TRANSITIONS: &[lit_bit_core::Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
-                #(#transition_initializers),*
-            ];
+
+        // Generate conditional transitions array based on async detection
+        let transitions_array_ts = if has_any_async_handlers {
+            quote! {
+                #(#matcher_fns)*
+                #[cfg(any(feature = "async", feature = "async-tokio", feature = "embassy"))]
+                const TRANSITIONS: &[lit_bit_core::AsyncTransition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
+                    #(#transition_initializers),*
+                ];
+            }
+        } else {
+            quote! {
+                #(#matcher_fns)*
+                const TRANSITIONS: &[lit_bit_core::Transition<#state_id_enum_name, #event_type_path, #context_type_path>] = &[
+                    #(#transition_initializers),*
+                ];
+            }
         };
         Ok(transitions_array_ts)
     }
@@ -1405,6 +1934,7 @@ pub(crate) mod code_generator {
         event_type_path: &syn::Path,   // Changed
         context_type_path: &syn::Path, // Changed
         initial_leaf_state_id_ts: &TokenStream,
+        builder: &TmpStateTreeBuilder, // Add builder to detect async usage
     ) -> TokenStream {
         let state_id_enum_name = &generated_ids.state_id_enum_name;
         let machine_def_const_name_str = format!(
@@ -1412,18 +1942,256 @@ pub(crate) mod code_generator {
             machine_name.to_string().to_uppercase()
         );
         let machine_def_const_ident = format_ident!("{}", machine_def_const_name_str);
-        let machine_def_ts = quote! {
-            pub const #machine_def_const_ident: lit_bit_core::MachineDefinition<
-                #state_id_enum_name,
-                #event_type_path,
-                #context_type_path
-            > = lit_bit_core::MachineDefinition::new(
-                STATES,
-                TRANSITIONS,
-                #initial_leaf_state_id_ts
-            );
-        };
-        machine_def_ts
+
+        // Task 4.1: Conditional machine definition based on async detection
+        let has_any_async_handlers = builder.contains_async_handlers();
+
+        if has_any_async_handlers {
+            quote! {
+                #[cfg(any(feature = "async", feature = "async-tokio", feature = "embassy"))]
+                pub const #machine_def_const_ident: lit_bit_core::AsyncMachineDefinition<
+                    #state_id_enum_name,
+                    #event_type_path,
+                    #context_type_path
+                > = lit_bit_core::AsyncMachineDefinition::new(
+                    STATES,
+                    TRANSITIONS,
+                    #initial_leaf_state_id_ts
+                );
+            }
+        } else {
+            quote! {
+                pub const #machine_def_const_ident: lit_bit_core::MachineDefinition<
+                    #state_id_enum_name,
+                    #event_type_path,
+                    #context_type_path
+                > = lit_bit_core::MachineDefinition::new(
+                    STATES,
+                    TRANSITIONS,
+                    #initial_leaf_state_id_ts
+                );
+            }
+        }
+    }
+
+    /// Generates timer handling code for states that have timer transitions.
+    /// This implements the research report's approach of spawning async tasks that call TimerService::sleep().
+    pub(crate) fn generate_timer_handling_code<'ast>(
+        builder: &'ast TmpStateTreeBuilder<'ast>,
+        generated_ids: &GeneratedStateIds,
+        _machine_name: &Ident,
+        event_type_path: &syn::Path, // Remove underscore prefix
+        _context_type_path: &syn::Path,
+    ) -> TokenStream {
+        let state_id_enum_name = &generated_ids.state_id_enum_name;
+        let mut timer_spawn_functions = Vec::new();
+        let mut state_timer_handlers = Vec::new();
+
+        // Generate timer spawning functions for each state that has timer transitions
+        for tmp_state in &builder.all_states {
+            if tmp_state.timer_transitions.is_empty() {
+                continue; // Skip states without timer transitions
+            }
+
+            let state_id_variant = generated_ids
+                .full_path_to_variant_ident
+                .get(&tmp_state.full_path_name)
+                .unwrap(); // Safe because we validated this earlier
+
+            let spawn_timer_fn_ident = format_ident!("spawn_timers_for_{}", state_id_variant);
+            let mut timer_spawning_code = Vec::new();
+            let mut timer_task_idents = Vec::new(); // Collect timer task identifiers
+
+            // Generate spawning code for each timer transition in this state
+            for (timer_idx, timer_trans) in tmp_state.timer_transitions.iter().enumerate() {
+                let duration_expr = timer_trans.duration_expression;
+                let timer_task_ident =
+                    format_ident!("timer_task_{}_{}", state_id_variant, timer_idx);
+
+                timer_task_idents.push(timer_task_ident.clone()); // Collect for handle storage
+
+                // Generate the timer event that will be sent when timer fires
+                let _timer_event_ident =
+                    format_ident!("TimerFired_{}_{}", state_id_variant, timer_idx);
+
+                // Generate async timer task following research report specification
+                let timer_task_code = quote! {
+                    #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+                    let #timer_task_ident = {
+                        let duration = #duration_expr;
+                        let event_sender = event_sender.clone();
+                        let state_id = #state_id_enum_name::#state_id_variant;
+                        let timer_id = #timer_idx;
+
+                        // Spawn the actual timer task
+                        #[cfg(feature = "async-tokio")]
+                        {
+                            tokio::spawn(async move {
+                                // Use TimerService::sleep as specified in research report
+                                lit_bit_core::Timer::sleep(duration).await;
+
+                                // Send timer event to state machine
+                                let timer_event = #event_type_path::TimerFired {
+                                    state_id,
+                                    timer_id
+                                };
+                                if let Err(_) = event_sender.try_send(timer_event) {
+                                    #[cfg(feature = "debug-log")]
+                                    log::warn!("Failed to send timer event - mailbox may be full");
+                                }
+                            })
+                        }
+
+                        #[cfg(all(feature = "embassy", not(feature = "async-tokio")))]
+                        {
+                            // Embassy task spawning - simplified for now
+                            // In a real implementation, this would use embassy_executor::Spawner
+                            // For now, create a future that can be polled
+                            async move {
+                                lit_bit_core::Timer::sleep(duration).await;
+                                let timer_event = #event_type_path::TimerFired {
+                                    state_id,
+                                    timer_id
+                                };
+                                let _ = event_sender.try_send(timer_event);
+                            }
+                        }
+                    };
+                };
+                timer_spawning_code.push(timer_task_code);
+            }
+
+            // Generate the complete timer spawning function for this state
+            let spawn_function = quote! {
+                #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+                fn #spawn_timer_fn_ident(event_sender: impl Clone + Send + 'static) -> Vec<TimerHandle> {
+                    use std::future::Future;
+                    let mut timer_handles = Vec::new();
+
+                    #(#timer_spawning_code)*
+
+                    // Collect all timer task handles for cancellation
+                    #[cfg(feature = "async-tokio")]
+                    {
+                        // For Tokio, collect the spawned task handles
+                        #(timer_handles.push(TimerHandle::Tokio(#timer_task_idents));)*
+                    }
+
+                    #[cfg(all(feature = "embassy", not(feature = "async-tokio")))]
+                    {
+                        // For Embassy, store futures for later spawning
+                        #(timer_handles.push(TimerHandle::Embassy(Box::pin(#timer_task_idents)));)*
+                    }
+
+                    timer_handles
+                }
+
+                #[cfg(not(any(feature = "async-tokio", feature = "embassy")))]
+                fn #spawn_timer_fn_ident(_event_sender: impl Clone + Send + 'static) -> Vec<TimerHandle> {
+                    // Timer transitions are not available without async feature
+                    // This ensures zero-cost for sync-only builds
+                    Vec::new()
+                }
+            };
+            timer_spawn_functions.push(spawn_function);
+
+            // Generate state entry handler that starts timers
+            let timer_entry_handler = quote! {
+                #state_id_enum_name::#state_id_variant => {
+                    #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+                    {
+                        #spawn_timer_fn_ident(event_sender.clone())
+                    }
+                    #[cfg(not(any(feature = "async-tokio", feature = "embassy")))]
+                    {
+                        Vec::new()
+                    }
+                }
+            };
+            state_timer_handlers.push(timer_entry_handler);
+        }
+
+        // Generate the complete timer handling module
+        quote! {
+            #[cfg(any(feature = "async-tokio", feature = "embassy"))]
+            mod timer_handling {
+                use super::*;
+                use core::time::Duration;
+                use std::pin::Pin;
+                use std::future::Future;
+
+                /// Timer handle for cancellation support
+                #[derive(Debug)]
+                pub enum TimerHandle {
+                    #[cfg(feature = "async-tokio")]
+                    Tokio(tokio::task::JoinHandle<()>),
+                    #[cfg(feature = "embassy")]
+                    Embassy(Pin<Box<dyn Future<Output = ()> + Send>>),
+                }
+
+                impl TimerHandle {
+                    /// Cancel the timer task
+                    pub fn cancel(self) {
+                        match self {
+                            #[cfg(feature = "async-tokio")]
+                            TimerHandle::Tokio(handle) => {
+                                handle.abort();
+                            }
+                            #[cfg(feature = "embassy")]
+                            TimerHandle::Embassy(_future) => {
+                                // Embassy cancellation by dropping the future
+                                // The future will be dropped when this handle is dropped
+                            }
+                        }
+                    }
+                }
+
+                #(#timer_spawn_functions)*
+
+                /// Starts timers for a state when it's entered
+                pub fn start_timers_for_state(
+                    state: #state_id_enum_name,
+                    event_sender: impl Clone + Send + 'static
+                ) -> Vec<TimerHandle> {
+                    match state {
+                        #(#state_timer_handlers)*
+                        _ => {
+                            // State has no timer transitions
+                            Vec::new()
+                        }
+                    }
+                }
+
+                /// Cancels timers for a state when it's exited
+                pub fn cancel_timers_for_state(timer_handles: Vec<TimerHandle>) {
+                    for handle in timer_handles {
+                        handle.cancel();
+                    }
+                }
+            }
+
+            #[cfg(not(any(feature = "async-tokio", feature = "embassy")))]
+            mod timer_handling {
+                use super::*;
+
+                /// Dummy timer handle for non-async builds
+                #[derive(Debug)]
+                pub struct TimerHandle;
+
+                /// No-op timer handling when async is disabled (zero-cost)
+                pub fn start_timers_for_state(
+                    _state: #state_id_enum_name,
+                    _event_sender: impl Clone + Send + 'static
+                ) -> Vec<TimerHandle> {
+                    // Timer transitions not available without async
+                    Vec::new()
+                }
+
+                pub fn cancel_timers_for_state(_timer_handles: Vec<TimerHandle>) {
+                    // Timer transitions not available without async
+                }
+            }
+        }
     }
 
     // Add this helper function at the top-level (or in code_generator):
@@ -1714,38 +2482,38 @@ pub fn statechart(input: TokenStream) -> TokenStream {
     if let Err(err) = builder.build_from_ast(&parsed_ast) {
         return err.to_compile_error().into();
     }
+
     let machine_name_ident = &parsed_ast.name;
-    // These are now Paths from the AST
     let context_type_path = &parsed_ast.context_type;
     let event_type_path = &parsed_ast.event_type;
 
-    // Handle Result from generate_state_id_logic
     let generated_ids_info =
-        match crate::code_generator::generate_state_id_logic(&builder, machine_name_ident) {
-            Ok(info) => info,
+        match code_generator::generate_state_id_logic(&builder, machine_name_ident) {
+            Ok(ids) => ids,
             Err(err) => return err.to_compile_error().into(),
         };
 
-    // Pass Paths to generator functions
-    let states_array_ts = match crate::code_generator::generate_states_array(
+    let states_array_ts = match code_generator::generate_states_array(
         &builder,
         &generated_ids_info,
         context_type_path,
         event_type_path,
     ) {
-        Ok(ts) => ts,
+        Ok(array) => array,
         Err(err) => return err.to_compile_error().into(),
     };
-    let transitions_array_ts = match crate::code_generator::generate_transitions_array(
+
+    let transitions_array_ts = match code_generator::generate_transitions_array(
         &builder,
         &generated_ids_info,
         event_type_path,
         context_type_path,
     ) {
-        Ok(ts) => ts,
+        Ok(array) => array,
         Err(err) => return err.to_compile_error().into(),
     };
-    let initial_leaf_state_id_ts = match crate::code_generator::determine_initial_leaf_state_id(
+
+    let initial_leaf_state_id_ts = match code_generator::determine_initial_leaf_state_id(
         &builder,
         &generated_ids_info,
         &parsed_ast,
@@ -1761,12 +2529,13 @@ pub fn statechart(input: TokenStream) -> TokenStream {
     let machine_definition_const_ident =
         quote::format_ident!("{}", machine_definition_const_ident_str);
 
-    let machine_def_const_ts = crate::code_generator::generate_machine_definition_const(
+    let machine_def_const_ts = code_generator::generate_machine_definition_const(
         machine_name_ident,
         &generated_ids_info,
         event_type_path,
         context_type_path,
         &initial_leaf_state_id_ts,
+        &builder,
     );
 
     // Generate the StateMachine struct and its impl block
@@ -1778,6 +2547,15 @@ pub fn statechart(input: TokenStream) -> TokenStream {
         &machine_definition_const_ident,        // Pass the const name for MachineDefinition
         &builder,                               // Pass builder
         &generated_ids_info, // Pass generated_ids_info (assuming this is the correct var name)
+    );
+
+    // Generate timer handling code for async timer transitions (Task 4.2)
+    let timer_handling_ts = code_generator::generate_timer_handling_code(
+        &builder,
+        &generated_ids_info,
+        machine_name_ident,
+        event_type_path,
+        context_type_path,
     );
 
     let state_id_enum_ts = generated_ids_info.enum_definition_tokens;
@@ -1803,6 +2581,7 @@ pub fn statechart(input: TokenStream) -> TokenStream {
             #transitions_array_ts
             #machine_def_const_ts
             #machine_impl_ts
+            #timer_handling_ts
         }
         pub use generated_state_machine::*;
     };
@@ -1866,8 +2645,7 @@ pub fn statechart_event(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::code_generator::generate_state_id_logic;
-    use crate::intermediate_tree::TmpStateTreeBuilder;
+    use crate::{code_generator::generate_state_id_logic, intermediate_tree::TmpStateTreeBuilder};
     use syn::parse_str; // Import the new function
 
     #[allow(dead_code)]
@@ -2416,7 +3194,7 @@ mod tests {
             name: TestMachine,
             context: Ctx,
             event: Ev,
-            initial: S1, 
+            initial: S1,
             state S1 {
                 initial: S1_A;
                 state S1_A {}
@@ -2482,7 +3260,7 @@ mod tests {
             event: Ev,
             initial: S1,
             state S1 {
-                initial: S1_A; 
+                initial: S1_A;
             }
         ";
         let ast = parse_dsl(dsl).expect("DSL parsing failed ");
@@ -2507,7 +3285,7 @@ mod tests {
             event: Ev,
             initial: S1,
             state S1 {
-                initial: S2_A; 
+                initial: S2_A;
                 state S1_A {}
             }
             state S2 {
@@ -2551,8 +3329,6 @@ mod tests {
                     "Error message did not indicate a Path parsing issue followed by missing semicolon. Got: {e}");
         }
     }
-
-    // --- Tests for Code Generation (Stage 3) ---
 
     // Tests for StateId Enum Generation (re-adding with updated DSL)
     #[test]
@@ -4399,7 +5175,7 @@ mod tests {
             let async_state = async_builder
                 .all_states
                 .iter()
-                .find(|state| state.local_name.to_string() == "AsyncState")
+                .find(|state| state.local_name == "AsyncState")
                 .expect("Should find AsyncState");
             assert!(
                 async_state.has_async_handlers,
@@ -4441,4 +5217,15 @@ mod tests {
             }
         }
     }
+
+    // --- Tests for Code Generation (Stage 3) ---
 }
+
+// Need to make ast_structs module visible to intermediate_tree, or pass items differently.
+// For now, let's assume ast_structs is a module containing the previously defined AST structs.
+// Or, just use `crate::StructName` if they are at the crate root of lit-bit-macro/src/lib.rs
+// For this edit, I will assume they are at the crate root for simplicity of the diff.
+// So, `crate::StateChartInputAst`, `crate::StateDeclarationAst` etc. will be used in intermediate_tree.
+
+// Let's adjust paths for AST structs assuming they are in the root of lit-bit-macro/src/lib.rs:
+// The edit will make these changes within the `intermediate_tree` module and `statechart` function.
