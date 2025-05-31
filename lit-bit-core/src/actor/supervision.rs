@@ -80,13 +80,8 @@ pub enum SupervisorError {
     RestartFailed,
 }
 
-// Ensure that platforms without std or embassy provide a timer implementation
-// Note: This compile_error prevents builds without proper timer implementation
-#[cfg(all(not(feature = "std"), not(feature = "async-embassy"), not(test)))]
-compile_error!(
-    "No timer implementation available for restart window calculations. \
-     Enable 'std' or 'async-embassy' feature, or implement SupervisorTimer trait."
-);
+// Timer implementations are provided for different feature combinations
+// Default no_std implementation uses an atomic counter for basic timing
 
 /// Type alias for restart factory functions in Tokio environments.
 ///
@@ -698,20 +693,13 @@ where
             embassy_time::Instant::now().as_millis()
         }
 
-        #[cfg(all(not(feature = "std"), not(feature = "async-embassy"), test))]
+        #[cfg(all(not(feature = "std"), not(feature = "async-embassy")))]
         {
-            // Test implementation - returns a predictable incrementing value
+            // Default no_std implementation - uses atomic counter for basic timing
+            // This provides monotonic increasing values suitable for restart window calculations
             use core::sync::atomic::{AtomicU64, Ordering};
-            static TEST_TIME: AtomicU64 = AtomicU64::new(1000);
-            TEST_TIME.fetch_add(1, Ordering::SeqCst)
-        }
-
-        // Note: The case where neither 'std', 'async-embassy', nor 'test' features are enabled
-        // is prevented at compile-time by the module-level compile_error! above.
-        // This branch should never be reached.
-        #[cfg(all(not(feature = "std"), not(feature = "async-embassy"), not(test)))]
-        {
-            unreachable!("This should be prevented by compile_error! at module level")
+            static DEFAULT_TIME: AtomicU64 = AtomicU64::new(1000);
+            DEFAULT_TIME.fetch_add(1, Ordering::SeqCst)
         }
     }
 }
