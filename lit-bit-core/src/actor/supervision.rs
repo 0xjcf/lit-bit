@@ -276,12 +276,9 @@ where
 
         #[cfg(not(feature = "async-tokio"))]
         {
-            self.children
-                .insert(child_id, child_info)
-                .map(|_| {
-                    self.next_start_sequence += 1;
-                })
-                .map_err(|_| SupervisorError::CapacityExceeded)
+            let _ = self.children.insert(child_id, child_info);
+            self.next_start_sequence += 1;
+            Ok(())
         }
     }
 
@@ -407,7 +404,8 @@ where
         let _total_children = children_to_restart.len();
 
         for child_id in children_to_restart {
-            if let Some(child_info) = self.children.get(&child_id) {
+            // Temporarily remove the child to avoid borrow conflicts
+            if let Some(mut child_info) = self.children.remove(&child_id) {
                 // Call the restart factory for this child
                 let factory_result = (child_info.restart_factory)();
 
@@ -415,13 +413,14 @@ where
                 #[cfg(feature = "async-tokio")]
                 {
                     // For Tokio, the factory returns a JoinHandle
-                    if let Some(child_info) = self.children.get_mut(&child_id) {
-                        child_info.join_handle = Some(factory_result);
-                        successfully_restarted += 1;
+                    child_info.join_handle = Some(factory_result);
+                    successfully_restarted += 1;
 
-                        #[cfg(feature = "debug-log")]
-                        log::info!("Successfully restarted child {child_id:?}");
-                    }
+                    #[cfg(feature = "debug-log")]
+                    log::info!("Successfully restarted child {child_id:?}");
+
+                    // Put the child back in supervision
+                    self.children.insert(child_id, child_info);
                 }
 
                 #[cfg(not(feature = "async-tokio"))]
@@ -429,20 +428,21 @@ where
                     // For non-Tokio, the factory returns a Result
                     match factory_result {
                         Ok(()) => {
-                            if let Some(child_info) = self.children.get_mut(&child_id) {
-                                child_info.is_running = true;
-                                successfully_restarted += 1;
+                            child_info.is_running = true;
+                            successfully_restarted += 1;
 
-                                #[cfg(feature = "debug-log")]
-                                log::info!("Successfully restarted child {child_id:?}");
-                            }
+                            #[cfg(feature = "debug-log")]
+                            log::info!("Successfully restarted child {child_id:?}");
+
+                            // Put the child back in supervision
+                            let _ = self.children.insert(child_id, child_info);
                         }
                         Err(_err) => {
                             #[cfg(feature = "debug-log")]
                             log::error!("Failed to restart child {child_id:?}: {_err:?}");
 
-                            // Remove failed child from supervision
-                            self.remove_child(&child_id);
+                            // Don't put the child back - it failed to restart
+                            // (child_info is dropped here)
                         }
                     }
                 }
