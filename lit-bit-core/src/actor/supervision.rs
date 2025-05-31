@@ -697,9 +697,9 @@ where
         {
             // Default no_std implementation - uses atomic counter for basic timing
             // This provides monotonic increasing values suitable for restart window calculations
-            use core::sync::atomic::{AtomicU64, Ordering};
-            static DEFAULT_TIME: AtomicU64 = AtomicU64::new(1000);
-            DEFAULT_TIME.fetch_add(1, Ordering::SeqCst)
+            use core::sync::atomic::{AtomicU32, Ordering};
+            static DEFAULT_TIME: AtomicU32 = AtomicU32::new(1000);
+            DEFAULT_TIME.fetch_add(1, Ordering::SeqCst) as u64
         }
     }
 }
