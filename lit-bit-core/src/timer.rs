@@ -249,8 +249,7 @@ mod tests {
         // Should complete much faster than the requested duration (within 100ms)
         assert!(
             elapsed < Duration::from_millis(100),
-            "TestTimer should complete immediately, not after the requested duration. Elapsed: {:?}",
-            elapsed
+            "TestTimer should complete immediately, not after the requested duration. Elapsed: {elapsed:?}"
         );
     }
 
