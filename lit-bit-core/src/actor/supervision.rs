@@ -606,9 +606,6 @@ where
 
             join_handle: Some(handle),
 
-            #[cfg(not(feature = "async-tokio"))]
-            is_running: true,
-
             restart_factory,
         };
 
