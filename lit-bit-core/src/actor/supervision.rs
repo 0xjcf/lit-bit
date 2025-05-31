@@ -81,9 +81,12 @@ pub enum SupervisorError {
 }
 
 // Ensure that platforms without std or embassy provide a timer implementation
-// Note: Builds without 'std' or 'embassy' features will compile but panic at runtime
-// if timer functionality is used without providing a proper SupervisorTimer implementation.
-// This is safer than the previous fallback return value of 0 which broke restart windows.
+// Note: This compile_error prevents builds without proper timer implementation
+#[cfg(all(not(feature = "std"), not(feature = "async-embassy"), not(test)))]
+compile_error!(
+    "No timer implementation available for restart window calculations. \
+     Enable 'std' or 'async-embassy' feature, or implement SupervisorTimer trait."
+);
 
 /// Type alias for restart factory functions in Tokio environments.
 ///
@@ -690,12 +693,12 @@ where
                 .as_millis() as u64
         }
 
-        #[cfg(all(feature = "embassy", not(feature = "std")))]
+        #[cfg(all(feature = "async-embassy", not(feature = "std")))]
         {
             embassy_time::Instant::now().as_millis()
         }
 
-        #[cfg(all(not(feature = "std"), not(feature = "embassy"), test))]
+        #[cfg(all(not(feature = "std"), not(feature = "async-embassy"), test))]
         {
             // Test implementation - returns a predictable incrementing value
             use core::sync::atomic::{AtomicU64, Ordering};
@@ -703,15 +706,12 @@ where
             TEST_TIME.fetch_add(1, Ordering::SeqCst)
         }
 
-        // Fallback for platforms without std/embassy - users must provide implementation
-        #[cfg(all(not(feature = "std"), not(feature = "embassy"), not(test)))]
+        // Note: The case where neither 'std', 'async-embassy', nor 'test' features are enabled
+        // is prevented at compile-time by the module-level compile_error! above.
+        // This branch should never be reached.
+        #[cfg(all(not(feature = "std"), not(feature = "async-embassy"), not(test)))]
         {
-            // This will panic at runtime if called without a proper timer implementation
-            // The compile_error above should prevent this from being built anyway
-            panic!(
-                "No timer implementation available for restart window calculations. \
-                 Enable 'std' or 'embassy' feature, or implement SupervisorTimer trait."
-            )
+            unreachable!("This should be prevented by compile_error! at module level")
         }
     }
 }
