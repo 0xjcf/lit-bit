@@ -14,12 +14,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+//! # lit-bit-core
+//!
+//! Core runtime system for the `lit-bit` statechart framework.
+//!
+//! This crate provides the foundational components for building statechart-based
+//! systems in Rust, with support for both embedded (`no_std`) and standard library
+//! environments.
+
 #![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
+#![cfg_attr(feature = "nightly", feature(error_in_core))]
 
-//! # Rust-Statechart
-//! A Rust library for building type-safe, Harel statecharts, inspired by `XState`.
-//! Aims to be ergonomic, `no_std` compatible, and suitable for embedded to backend applications.
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 // Prevent invalid feature combinations
 #[cfg(all(feature = "async-tokio", feature = "async-embassy"))]
@@ -84,6 +92,10 @@ pub mod actor;
 #[cfg(feature = "async-embassy")]
 pub use actor::spawn::CounterActor;
 
+// Re-export timer types for async support
+#[cfg(feature = "async")]
+pub use timer::{Timer, TimerService};
+
 pub trait StateMachine<const N_ACTIVE: usize = MAX_ACTIVE_REGIONS> {
     type State: Copy
         + Clone
@@ -136,3 +148,6 @@ mod re_export_tests {
         // Actual functionality is tested in the actor module tests
     }
 }
+
+#[cfg(feature = "async")]
+pub mod timer;

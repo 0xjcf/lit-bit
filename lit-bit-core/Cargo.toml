@@ -102,6 +102,9 @@ panic-halt = ["dep:panic-halt"]
 
 debug-log = ["dep:log"]
 
+# Nightly Rust features (unstable features)
+nightly = []
+
 # Examples that require std feature
 [[example]]
 name = "actor_backpressure"
@@ -126,3 +129,26 @@ required-features = ["panic-halt"]
 [[example]]
 name = "external_events"
 required-features = ["std"]
+
+[[example]]
+name = "actor_calculator"
+required-features = ["async-tokio"]
+
+[[example]]
+name = "async_actor_simple"
+required-features = ["async-tokio"]
+
+[[example]]
+name = "supervision_and_batching"
+required-features = ["async-tokio"]
+
+[[example]]
+name = "media_player"
+
+[[example]]
+name = "traffic_light"
+required-features = ["panic-halt"]
+
+[[example]]
+name = "traffic_light_cortex_m"
+required-features = ["panic-halt"]

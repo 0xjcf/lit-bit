@@ -16,9 +16,6 @@ mod tracing {
     }
 }
 
-#[cfg(feature = "std")]
-use std::io::{self, Write};
-
 #[allow(unused_imports)]
 use heapless::Vec;
 
@@ -1078,14 +1075,14 @@ where
 
             #[cfg(feature = "std")]
             {
-                println!(
-                    "[TRACE] Active before: {prev:?}",
-                    prev = self.active_leaf_states
-                );
-                io::stdout().flush().unwrap();
-                println!(
-                    "[TRACE] Processing transition: {source_state_id:?} → {target_state_id:?}"
-                );
+                // println!(
+                //     "[TRACE] Active before: {prev:?}",
+                //     prev = self.active_leaf_states
+                // );
+                // io::stdout().flush().unwrap();
+                // println!(
+                //     "[TRACE] Processing transition: {source_state_id:?} → {target_state_id:?}"
+                // );
             }
 
             // Determine transition type and delegate to appropriate helper
@@ -1285,8 +1282,8 @@ where
         );
         #[cfg(feature = "std")]
         {
-            println!("send_internal() called with event: {event:?}");
-            io::stdout().flush().unwrap();
+            // println!("send_internal() called with event: {event:?}");
+            // io::stdout().flush().unwrap();
         }
 
         // Create a single entry_actions_run Vec to be reused throughout send_internal
@@ -1340,9 +1337,10 @@ where
         }
 
         #[cfg(feature = "std")]
-        dbg!(&states_exited_this_step);
+        // dbg!(&states_exited_this_step);
 
         // Phase 2: Commit entry plan
+        trace!("[DEBUG] About to call commit_entry_plan");
         let only_leaves = match self.commit_entry_plan(
             &entry_execution_list,
             &mut entry_actions_run_vec,
@@ -1352,9 +1350,17 @@ where
             Ok(leaves) => leaves,
             Err(e) => return SendResult::Error(e),
         };
+        trace!(
+            "[DEBUG] commit_entry_plan completed, only_leaves = {:?}",
+            only_leaves
+        );
 
         // Phase 3: Merge and reconcile active leaf states
         let entry_execution_list_fallback = entry_execution_list.clone();
+        trace!(
+            "[DEBUG] About to call merge_active_sets with only_leaves = {:?}",
+            only_leaves
+        );
         let next_active_leaves = match self.merge_active_sets(
             &current_active_leaves_snapshot,
             &states_exited_this_step,

@@ -35,10 +35,17 @@ cargo clippy -p lit-bit-core --example actor_statechart_integration --features s
 echo "  ✅ Testing async examples..."  
 cargo clippy -p lit-bit-core --example embassy_actor_simple --features async-embassy,debug-log -- -D warnings
 cargo clippy -p lit-bit-core --example async_actor_simple --features async-tokio -- -D warnings
+cargo clippy -p lit-bit-core --example supervision_and_batching --features async-tokio -- -D warnings
+cargo clippy -p lit-bit-core --example actor_calculator --features async-tokio -- -D warnings
+
+echo "  ✅ Testing no_std examples..."
+cargo clippy -p lit-bit-core --example media_player --no-default-features -- -D warnings
 
 echo "  ✅ Testing no_std examples with panic-halt..."
 cargo clippy -p lit-bit-core --example heap_crash --features panic-halt -- -D warnings
 cargo clippy -p lit-bit-core --example actor_simple_usage --features panic-halt -- -D warnings
+cargo clippy -p lit-bit-core --example traffic_light --features panic-halt -- -D warnings
+cargo clippy -p lit-bit-core --example traffic_light_cortex_m --features panic-halt -- -D warnings
 
 # Test other workspace members
 echo "📦 Testing other workspace members..."

@@ -23,10 +23,13 @@ futures = "0.3"
 # Utilities
 anyhow = "1.0"
 once_cell = "1.19.0"
+heapless = "0.8"
 
 [features]
 default = []
 iai = []
+async-tokio = []
+embassy = []
 
 [[bench]]
 name = "statechart_throughput"
