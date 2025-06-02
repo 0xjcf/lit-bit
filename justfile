@@ -85,6 +85,45 @@ lint-nightly:
   cargo +nightly clippy -p lit-bit-core --lib --features std -- -D warnings
   echo "✅ Nightly clippy check complete."
 
+# Beta-specific lint to catch issues early (matches CI beta job)
+lint-beta:
+  #!/usr/bin/env bash
+  set -e
+  echo "🧪 Running beta clippy checks (matches CI matrix)..."
+  if ! rustup toolchain list | grep -q "beta"; then
+    echo "❌ Beta toolchain not installed. Install with: rustup toolchain install beta"
+    exit 1
+  fi
+  
+  echo "🔍 Testing workspace with beta clippy..."
+  cargo +beta clippy --all-targets --workspace -- -D warnings
+  echo "✅ Beta clippy check complete."
+
+# CI-matching lint with all toolchains (stable, beta, nightly)
+lint-ci:
+  #!/usr/bin/env bash
+  set -e
+  echo "🚀 Running CI-matching lint checks with all toolchains..."
+  
+  echo "📦 Testing with stable toolchain..."
+  ./scripts/lint.sh
+  
+  if rustup toolchain list | grep -q "beta"; then
+    echo "📦 Testing with beta toolchain..."
+    cargo +beta clippy --all-targets --workspace -- -D warnings
+  else
+    echo "⚠️  Beta toolchain not available, install with: rustup toolchain install beta"
+  fi
+  
+  if rustup toolchain list | grep -q "nightly"; then
+    echo "📦 Testing with nightly toolchain..."
+    cargo +nightly clippy --all-targets --workspace -- -D warnings
+  else
+    echo "⚠️  Nightly toolchain not available, install with: rustup toolchain install nightly"
+  fi
+  
+  echo "✅ All CI-matching lint checks complete!"
+
 # Format check and fix
 fmt:
   @echo "🎨 Formatting code..."

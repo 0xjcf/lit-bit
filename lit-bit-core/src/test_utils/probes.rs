@@ -102,6 +102,7 @@ impl<A> ActorProbe<A> {
             let timeout_duration = Duration::from_secs(5);
             let result = tokio::time::timeout(timeout_duration, async {
                 while let Some(event) = self.event_receiver.recv().await {
+                    #[allow(clippy::collapsible_if)]
                     if let ProbeEvent::StateTransition { from, to } = event {
                         if from.as_str() == _from_state && to.as_str() == _to_state {
                             return Ok(());
@@ -330,6 +331,7 @@ impl<A> ActorProbe<A> {
     ) -> Result<(), TestError> {
         loop {
             let event = self.next_event().await?;
+            #[allow(clippy::collapsible_if)]
             if let ProbeEvent::MessageWithContent {
                 message_type: received_type,
                 content,
@@ -460,7 +462,7 @@ impl core::fmt::Display for TestError {
             TestError::Timeout => write!(f, "Operation timed out waiting for expected event"),
             TestError::UnexpectedEnd => write!(f, "Event stream ended unexpectedly"),
             TestError::UnexpectedEvent(event) => {
-                write!(f, "Received unexpected event: {:?}", event)
+                write!(f, "Received unexpected event: {event:?}")
             }
         }
     }
@@ -519,7 +521,7 @@ mod tests {
         // Use core::fmt::Display instead of format! macro for no_std compatibility
         use core::fmt::Write;
         let mut buffer = heapless::String::<64>::new();
-        write!(&mut buffer, "{}", timeout_error).unwrap();
+        write!(&mut buffer, "{timeout_error}").unwrap();
         assert!(buffer.contains("timed out"));
     }
 
