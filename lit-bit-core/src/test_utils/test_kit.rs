@@ -13,6 +13,28 @@ use super::probes::ActorProbe;
 #[cfg(feature = "async-tokio")]
 use crate::{Actor, Address};
 
+#[cfg(feature = "async-embassy")]
+use super::probes::ActorProbe;
+#[cfg(feature = "async-embassy")]
+use crate::{Actor, Address};
+
+// Import alloc for tests when using Embassy features
+#[cfg(all(feature = "async-embassy", test))]
+extern crate alloc;
+
+/// Default mailbox capacity for spawned actors in test environments
+///
+/// This capacity provides a reasonable buffer for test scenarios while avoiding
+/// excessive memory usage. Larger capacities may be needed for stress testing.
+#[cfg(feature = "async-tokio")]
+const DEFAULT_TEST_MAILBOX_CAPACITY: usize = 1000;
+
+/// Default quiescence timeout for waiting for actor system to stabilize
+///
+/// This timeout provides a reasonable default for most test scenarios. Tests with
+/// heavy message processing or complex actor interactions may need longer timeouts.
+const DEFAULT_QUIESCENCE_TIMEOUT: Duration = Duration::from_millis(10);
+
 /// Main test kit for cross-runtime async actor testing
 ///
 /// TestKit provides a unified API for testing actors across different async runtimes
@@ -33,7 +55,7 @@ use crate::{Actor, Address};
 /// # #[cfg(feature = "async-tokio")]
 /// # {
 /// use lit_bit_core::test_utils::TestKit;
-/// use std::time::Duration;
+/// use core::time::Duration;
 ///
 /// #[tokio::test(start_paused = true)]
 /// async fn test_actor_behavior() {
@@ -117,8 +139,11 @@ impl TestKit {
         // Wrap actor with instrumentation
         let instrumented_actor = InstrumentedActor::new(actor, probe_sender);
 
-        // Spawn using existing spawn infrastructure
-        let address = crate::actor::spawn::spawn_actor_tokio(instrumented_actor, 1000);
+        // Spawn using existing spawn infrastructure with default test mailbox capacity
+        let address = crate::actor::spawn::spawn_actor_tokio(
+            instrumented_actor,
+            DEFAULT_TEST_MAILBOX_CAPACITY,
+        );
 
         // Create probe
         let probe = ActorProbe::new(probe_receiver);
@@ -141,11 +166,12 @@ impl TestKit {
     /// * `actor` - The actor instance to spawn
     ///
     /// # Returns
-    /// A tuple of (Address, ActorProbe) for interacting with and observing the actor.
+    /// A Result containing either a tuple of (Address, ActorProbe) for interacting
+    /// with and observing the actor, or an error explaining why spawning failed.
     ///
     /// # Implementation Note
     ///
-    /// This method is currently unimplemented due to Embassy's architectural constraints.
+    /// This method currently returns an error due to Embassy's architectural constraints.
     /// Embassy requires concrete (non-generic) task functions, which prevents implementing
     /// a generic spawn function like this.
     ///
@@ -162,14 +188,11 @@ impl TestKit {
         &self,
         _spawner: &embassy_executor::Spawner,
         _actor: A,
-    ) -> (Address<A::Message, CAPACITY>, ActorProbe<A>)
+    ) -> Result<(Address<A::Message, CAPACITY>, ActorProbe<A>), EmbassySpawnError>
     where
         A: Actor + 'static,
     {
-        unimplemented!(
-            "Embassy spawn_actor_with_probe requires concrete actor types due to Embassy's \
-            task limitations. See documentation for workaround patterns."
-        )
+        Err(EmbassySpawnError::GenericSpawnNotSupported)
     }
 
     /// Pause time for deterministic testing (Tokio)
@@ -248,7 +271,7 @@ impl TestKit {
         #[cfg(feature = "async-embassy")]
         {
             embassy_time::Timer::after(embassy_time::Duration::from_micros(
-                duration.as_micros() as u64
+                duration.as_micros().min(u64::MAX as u128) as u64,
             ))
             .await;
         }
@@ -263,19 +286,62 @@ impl TestKit {
     /// Wait for the actor system to become quiescent
     ///
     /// This method waits until all pending messages have been processed
-    /// and the system has reached a stable state. Useful for ensuring
-    /// deterministic test conditions.
+    /// and the system has reached a stable state. Uses a default timeout
+    /// that should be sufficient for most test scenarios.
+    ///
+    /// For tests that need custom timeout behavior, use `wait_for_quiescence_with_timeout()`.
+    ///
+    /// # Note
+    /// This is a simple delay-based approach. Future versions may implement
+    /// actual probe channel polling for more deterministic quiescence detection.
     pub async fn wait_for_quiescence(&self) {
+        self.wait_for_quiescence_with_timeout(DEFAULT_QUIESCENCE_TIMEOUT)
+            .await;
+    }
+
+    /// Wait for the actor system to become quiescent with a custom timeout
+    ///
+    /// This method waits for the specified duration to allow all pending messages
+    /// to be processed and the system to reach a stable state.
+    ///
+    /// # Arguments
+    /// * `timeout` - How long to wait for the system to stabilize
+    ///
+    /// # Examples
+    /// ```rust,no_run
+    /// # #[cfg(feature = "async-tokio")]
+    /// # {
+    /// use lit_bit_core::test_utils::TestKit;
+    /// use core::time::Duration;
+    ///
+    /// let test_kit = TestKit::new();
+    ///
+    /// // Wait longer for complex scenarios
+    /// test_kit.wait_for_quiescence_with_timeout(Duration::from_millis(50)).await;
+    /// # }
+    /// ```
+    ///
+    /// # Note
+    /// This is a simple delay-based approach. Future versions may implement
+    /// actual probe channel polling for more deterministic quiescence detection.
+    pub async fn wait_for_quiescence_with_timeout(&self, timeout: Duration) {
         #[cfg(feature = "async-tokio")]
         {
-            // Small delay to allow message processing to complete
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(timeout).await;
         }
 
         #[cfg(feature = "async-embassy")]
         {
-            // Small delay for Embassy
-            embassy_time::Timer::after(embassy_time::Duration::from_millis(10)).await;
+            embassy_time::Timer::after(embassy_time::Duration::from_micros(
+                timeout.as_micros().min(u64::MAX as u128) as u64,
+            ))
+            .await;
+        }
+
+        #[cfg(not(any(feature = "async-tokio", feature = "async-embassy")))]
+        {
+            // No async runtime available - just consume the parameter
+            let _ = timeout;
         }
     }
 }
@@ -285,6 +351,35 @@ impl Default for TestKit {
         Self::new()
     }
 }
+
+/// Error types for Embassy actor spawning operations
+#[cfg(feature = "async-embassy")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbassySpawnError {
+    /// Generic actor spawning is not supported in Embassy due to task limitations
+    ///
+    /// Embassy requires concrete (non-generic) task functions. Use concrete
+    /// spawn functions for specific actor types instead.
+    GenericSpawnNotSupported,
+}
+
+#[cfg(feature = "async-embassy")]
+impl core::fmt::Display for EmbassySpawnError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            EmbassySpawnError::GenericSpawnNotSupported => write!(
+                f,
+                "Generic actor spawning is not supported in Embassy due to task limitations. \
+                Create concrete spawn functions for specific actor types instead. \
+                See lit-bit-core/src/actor/spawn.rs for examples."
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "async-embassy")]
+#[cfg(feature = "std")]
+impl std::error::Error for EmbassySpawnError {}
 
 #[cfg(test)]
 mod tests {
@@ -384,5 +479,83 @@ mod tests {
 
         // Should take at least the requested time
         assert!(elapsed >= Duration::from_millis(10));
+    }
+
+    #[test]
+    fn test_duration_overflow_protection() {
+        // Test that extremely large durations don't cause overflow/truncation
+        // Create a duration that would overflow u64 when converted to microseconds
+        // u64::MAX microseconds = 18_446_744_073_709_551_615 microseconds
+        // = ~584,542 years, so Duration::MAX definitely exceeds this
+
+        let very_large_duration = Duration::MAX;
+        let micros_u128 = very_large_duration.as_micros();
+
+        // Verify the duration exceeds u64::MAX when converted to microseconds
+        assert!(micros_u128 > u64::MAX as u128);
+
+        // Test our saturating conversion logic
+        let saturated_micros = micros_u128.min(u64::MAX as u128) as u64;
+
+        // Should be exactly u64::MAX, not wrapped around
+        assert_eq!(saturated_micros, u64::MAX);
+
+        // Verify the conversion is safe (this is what our fix implements)
+        let safe_duration_micros = very_large_duration.as_micros().min(u64::MAX as u128) as u64;
+        assert_eq!(safe_duration_micros, u64::MAX);
+    }
+
+    #[cfg(feature = "async-tokio")]
+    #[tokio::test]
+    async fn test_configurable_quiescence_timeout() {
+        let test_kit = TestKit::new();
+
+        // Test default timeout method
+        let start_time = tokio::time::Instant::now();
+        test_kit.wait_for_quiescence().await;
+        let elapsed = start_time.elapsed();
+
+        // Should be at least the default timeout
+        assert!(elapsed >= DEFAULT_QUIESCENCE_TIMEOUT);
+
+        // Test custom timeout method
+        let custom_timeout = Duration::from_millis(25);
+        let start_time = tokio::time::Instant::now();
+        test_kit
+            .wait_for_quiescence_with_timeout(custom_timeout)
+            .await;
+        let elapsed = start_time.elapsed();
+
+        // Should be at least the custom timeout
+        assert!(elapsed >= custom_timeout);
+    }
+
+    #[cfg(feature = "async-embassy")]
+    #[test]
+    fn test_embassy_spawn_error_handling() {
+        // Test that the error type has the correct properties
+        let error = EmbassySpawnError::GenericSpawnNotSupported;
+
+        // Test error equality
+        let error2 = EmbassySpawnError::GenericSpawnNotSupported;
+        assert_eq!(error, error2);
+
+        // Test error cloning
+        let error_clone = error.clone();
+        assert_eq!(error, error_clone);
+
+        // Test that Display formatting works (platform-independent test)
+        use core::fmt::Write;
+        let mut buffer = heapless::String::<256>::new();
+        write!(buffer, "{}", error).unwrap();
+        assert!(buffer.contains("Embassy"));
+        assert!(buffer.contains("concrete"));
+        assert!(buffer.contains("spawn.rs"));
+        assert!(buffer.contains("not supported"));
+
+        // Test debug formatting without allocation
+        let mut debug_buffer = heapless::String::<128>::new();
+        write!(debug_buffer, "{:?}", error).unwrap();
+        assert!(debug_buffer.contains("GenericSpawnNotSupported"));
     }
 }

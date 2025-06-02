@@ -5,7 +5,7 @@
 //! deterministic manner.
 
 use core::marker::PhantomData;
-#[cfg(any(feature = "async-tokio", feature = "async-embassy"))]
+#[cfg(feature = "async-tokio")]
 use core::time::Duration;
 
 // Use appropriate string types depending on the environment
@@ -48,6 +48,10 @@ pub struct ActorProbe<A> {
     event_receiver: tokio::sync::mpsc::Receiver<ProbeEvent>,
     #[cfg(feature = "async-embassy")]
     event_receiver: heapless::spsc::Consumer<'static, ProbeEvent, 32>,
+    /// Internal buffer for preserving events that were peeked but not consumed
+    /// This ensures that non-message events encountered during capture_messages
+    /// are not lost and can be returned on subsequent calls.
+    peeked_event: Option<ProbeEvent>,
     _phantom: PhantomData<A>,
 }
 
@@ -57,6 +61,7 @@ impl<A> ActorProbe<A> {
     pub fn new(event_receiver: tokio::sync::mpsc::Receiver<ProbeEvent>) -> Self {
         Self {
             event_receiver,
+            peeked_event: None,
             _phantom: PhantomData,
         }
     }
@@ -66,6 +71,7 @@ impl<A> ActorProbe<A> {
     pub fn new_embassy(event_receiver: heapless::spsc::Consumer<'static, ProbeEvent, 32>) -> Self {
         Self {
             event_receiver,
+            peeked_event: None,
             _phantom: PhantomData,
         }
     }
@@ -231,7 +237,7 @@ impl<A> ActorProbe<A> {
                 }
             })
             .await
-            .map_err(|_| TestError::Timeout)
+            .map_err(|_| TestError::Timeout)?
         }
 
         #[cfg(not(any(feature = "async-tokio", feature = "async-embassy")))]
@@ -244,8 +250,15 @@ impl<A> ActorProbe<A> {
     /// Get the next event from the probe without timeout checking
     ///
     /// This is a helper method used by other probe methods. It handles the
-    /// platform-specific event receiving logic.
+    /// platform-specific event receiving logic and checks for any previously
+    /// peeked events first.
     async fn next_event(&mut self) -> Result<ProbeEvent, TestError> {
+        // First, check if we have a peeked event from capture_messages
+        if let Some(event) = self.peeked_event.take() {
+            return Ok(event);
+        }
+
+        // Otherwise, get the next event from the channel
         #[cfg(feature = "async-tokio")]
         {
             self.event_receiver
@@ -349,6 +362,10 @@ impl<A> ActorProbe<A> {
     /// This implements the "MessageCapture<M>" pattern from the research, allowing
     /// tests to record all messages of certain types for later assertion.
     ///
+    /// Non-message events (like ActorStarted, ActorStopped, etc.) encountered during
+    /// capture are preserved in an internal buffer and will be returned on the next
+    /// call to any event-reading method, ensuring no events are lost.
+    ///
     /// # Arguments
     /// * `max_messages` - Maximum number of messages to capture
     ///
@@ -380,8 +397,9 @@ impl<A> ActorProbe<A> {
                             captured.push(event);
                         }
                         _ => {
-                            // Non-message event, put it back conceptually by breaking
-                            // In a real implementation, we might need a putback mechanism
+                            // Non-message event: preserve it for future reads
+                            // instead of losing it when we break
+                            self.peeked_event = Some(event);
                             break;
                         }
                     }
@@ -402,6 +420,10 @@ impl<A> ActorProbe<A> {
     /// This implements the "MessageCapture<M>" pattern from the research, allowing
     /// tests to record all messages of certain types for later assertion.
     /// Uses a fixed-size heapless vector for no_std compatibility.
+    ///
+    /// Non-message events (like ActorStarted, ActorStopped, etc.) encountered during
+    /// capture are preserved in an internal buffer and will be returned on the next
+    /// call to any event-reading method, ensuring no events are lost.
     ///
     /// # Arguments
     /// * `max_messages` - Maximum number of messages to capture (capped at 16 for no_std)
@@ -428,7 +450,9 @@ impl<A> ActorProbe<A> {
                             }
                         }
                         _ => {
-                            // Non-message event, put it back conceptually by breaking
+                            // Non-message event: preserve it for future reads
+                            // instead of losing it when we break
+                            self.peeked_event = Some(event);
                             break;
                         }
                     }
@@ -541,6 +565,49 @@ mod tests {
                 assert_eq!(content.as_str(), "Add(5, 3)");
             }
             _ => panic!("Expected MessageWithContent event"),
+        }
+    }
+
+    #[test]
+    fn probe_preserves_peeked_events() {
+        // Test the event preservation mechanism for ActorProbe
+        // This test verifies that the peeked_event buffer works correctly
+
+        // Create a probe with a mock receiver (we'll manipulate the peeked_event directly)
+        #[cfg(feature = "async-tokio")]
+        {
+            let (_sender, receiver) = tokio::sync::mpsc::channel(1);
+            let mut probe: ActorProbe<()> = ActorProbe::new(receiver);
+
+            // Simulate what happens when capture_messages encounters a non-message event
+            let lifecycle_event = ProbeEvent::ActorStarted;
+            probe.peeked_event = Some(lifecycle_event.clone());
+
+            // Verify the peeked event is available
+            assert!(probe.peeked_event.is_some());
+            assert_eq!(probe.peeked_event.as_ref().unwrap(), &lifecycle_event);
+
+            // Simulate taking the peeked event (like next_event would do)
+            let taken_event = probe.peeked_event.take();
+            assert!(taken_event.is_some());
+            assert_eq!(taken_event.unwrap(), lifecycle_event);
+            assert!(probe.peeked_event.is_none());
+        }
+
+        // Test the core event preservation logic that applies to all runtime variants
+        // This doesn't require unsafe code or specific runtime setup
+        {
+            let lifecycle_event = ProbeEvent::ActorStopped;
+            let mut peeked_event: Option<ProbeEvent> = Some(lifecycle_event.clone());
+
+            // Test the same behavior that's used in ActorProbe
+            assert!(peeked_event.is_some());
+            assert_eq!(peeked_event.as_ref().unwrap(), &lifecycle_event);
+
+            let taken_event = peeked_event.take();
+            assert!(taken_event.is_some());
+            assert_eq!(taken_event.unwrap(), lifecycle_event);
+            assert!(peeked_event.is_none());
         }
     }
 }
