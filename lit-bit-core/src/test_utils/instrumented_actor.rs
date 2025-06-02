@@ -147,7 +147,7 @@ impl<A> InstrumentedActor<A> {
         // Format message content using Debug representation
         // Use different approaches for std vs no_std environments
         #[cfg(any(feature = "std", feature = "alloc"))]
-        let content_string = create_probe_string(&alloc::format!("{:?}", message));
+        let content_string = create_probe_string(&alloc::format!("{message:?}"));
 
         #[cfg(not(any(feature = "std", feature = "alloc")))]
         let content_string = {
@@ -390,7 +390,7 @@ mod tests {
                 // Should NOT be the old hardcoded "Debug content" string
                 assert_ne!(content.as_str(), "Debug content");
             } else {
-                panic!("Expected MessageWithContent event, got: {:?}", event);
+                panic!("Expected MessageWithContent event, got: {event:?}");
             }
         } else {
             panic!("No probe event received");
