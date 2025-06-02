@@ -1630,6 +1630,10 @@ mod tests {
 
     #[test]
     fn test_restart_factory_error_handling() {
+        #[cfg(not(feature = "async-tokio"))]
+        let mut supervisor = SupervisorActor::<u32, 8>::new();
+
+        #[cfg(feature = "async-tokio")]
         let supervisor = SupervisorActor::<u32, 8>::new();
 
         // Test handling of restart factory failures in no_std environment
