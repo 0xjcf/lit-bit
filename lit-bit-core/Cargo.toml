@@ -105,6 +105,9 @@ debug-log = ["dep:log"]
 # Nightly Rust features (unstable features)
 nightly = []
 
+# Test utilities feature (for enabling test infrastructure in production builds if needed)
+test-probes = ["async"]
+
 # Examples that require std feature
 [[example]]
 name = "actor_backpressure"
