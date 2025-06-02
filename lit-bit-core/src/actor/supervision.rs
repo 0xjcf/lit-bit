@@ -6,8 +6,17 @@
 
 use super::{Actor, RestartStrategy, Supervisor, SupervisorMessage};
 
-// Only import ActorError when async-tokio feature is enabled
-#[cfg(feature = "async-tokio")]
+// Import ActorError when needed (async-tokio features or test contexts)
+#[cfg(any(feature = "async-tokio", test))]
+use super::ActorError;
+
+// Import BoxedActorError only in test contexts where it's used
+#[cfg(all(any(feature = "std", feature = "alloc"), test))]
+#[allow(unused_imports)] // Used conditionally in platform-specific test code
+use super::BoxedActorError;
+
+// Import ActorError for no_std environments (for RestartFactory type)
+#[cfg(all(not(any(feature = "std", feature = "alloc")), feature = "async-tokio"))]
 use super::ActorError;
 
 #[cfg(feature = "async-tokio")]
@@ -374,6 +383,105 @@ where
         Some(child_info.restart_strategy)
     }
 
+    /// Handle child panic using Phase 2 framework integration.
+    ///
+    /// This method integrates panic-safe event loops with the supervision framework,
+    /// applying restart intensity limits and escalation policies.
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the child that panicked
+    /// * `error` - The ActorError that caused the panic
+    ///
+    /// # Returns
+    /// * `Some(RestartStrategy)` - Strategy to apply if restart is allowed
+    /// * `None` - Restart limit exceeded or escalation required
+    pub fn handle_child_panic(
+        &mut self,
+        child_id: &ChildId,
+        _error: super::ActorError,
+    ) -> Option<RestartStrategy> {
+        // Use the existing failure handling logic with additional panic-specific processing
+        let strategy = self.handle_child_failure(child_id)?;
+
+        #[cfg(feature = "debug-log")]
+        log::warn!("Child {child_id:?} panicked, applying restart strategy: {strategy:?}");
+
+        Some(strategy)
+    }
+
+    /// Calculate backoff delay using configured strategy.
+    ///
+    /// Implements exponential backoff, linear backoff, or fixed delay patterns
+    /// to prevent rapid restart loops and give failing components time to recover.
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the child being restarted
+    ///
+    /// # Returns
+    /// Duration to wait before attempting restart
+    pub fn calculate_backoff_delay(&self, child_id: &ChildId) -> core::time::Duration {
+        if let Some(child_info) = self.children.get(child_id) {
+            let retry_count = child_info.restart_count;
+
+            // Simple exponential backoff: 100ms * 2^(retry_count-1), max 5 seconds
+            let base_delay_ms: u64 = 100;
+            let max_delay_ms: u64 = 5000;
+
+            let exponential_delay = base_delay_ms
+                .saturating_mul(2_u64.saturating_pow(retry_count.saturating_sub(1).max(0) as u32));
+            let delay_ms = exponential_delay.min(max_delay_ms);
+
+            core::time::Duration::from_millis(delay_ms)
+        } else {
+            core::time::Duration::from_millis(100) // Default minimal delay
+        }
+    }
+
+    /// Apply restart intensity rate limiting.
+    ///
+    /// Checks if a child can be restarted within the configured intensity limits.
+    /// This prevents infinite restart loops when a child consistently fails.
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the child to check
+    ///
+    /// # Returns
+    /// * `true` - Restart is allowed within intensity limits
+    /// * `false` - Restart would exceed limits, escalation may be needed
+    pub fn apply_restart_intensity(&mut self, child_id: &ChildId) -> bool {
+        if let Some(child_info) = self.children.get(child_id) {
+            child_info.restart_count <= self.max_restarts
+        } else {
+            false // Child not found
+        }
+    }
+
+    /// Escalate failure to parent supervisor (hierarchical support).
+    ///
+    /// When a child repeatedly fails and exceeds restart limits, this method
+    /// can be used to escalate the failure to a higher-level supervisor.
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the repeatedly failing child
+    /// * `_error` - The error that triggered escalation
+    ///
+    /// # Note
+    /// This is a placeholder for hierarchical supervision. In a full implementation,
+    /// this would send a message to a parent supervisor or trigger system-level
+    /// failure handling (e.g., device reset in embedded systems).
+    pub fn escalate_failure(&mut self, child_id: &ChildId, _error: super::ActorError) {
+        #[cfg(feature = "debug-log")]
+        log::error!("Escalating failure for child {child_id:?} - restart limits exceeded");
+
+        // Remove the failing child from supervision to prevent further restart attempts
+        self.children.remove(child_id);
+
+        // In a production system, this might:
+        // - Send escalation message to parent supervisor
+        // - Trigger system-level failsafe (reset, safe mode, etc.)
+        // - Log critical system event for debugging
+    }
+
     /// Executes the restart logic for children that need to be restarted.
     ///
     /// This method implements the actual restart mechanism by calling the restart
@@ -470,6 +578,7 @@ where
         strategy: RestartStrategy,
     ) -> Vec<ChildId> {
         match strategy {
+            // Classic restart patterns - determine which children to restart
             RestartStrategy::OneForOne => {
                 // Restart only the failed child
                 alloc::vec![failed_child_id.clone()]
@@ -496,6 +605,31 @@ where
                     alloc::vec![]
                 }
             }
+
+            // OTP-style policies - convert to equivalent classic patterns
+            // These policies determine WHETHER to restart, defaulting to OneForOne for WHICH children
+            RestartStrategy::Permanent => {
+                // Always restart - use OneForOne pattern (restart just the failed child)
+                alloc::vec![failed_child_id.clone()]
+            }
+
+            RestartStrategy::Transient => {
+                // Restart only on abnormal termination - use OneForOne pattern
+                // Note: The decision of whether this is abnormal termination should be made elsewhere
+                alloc::vec![failed_child_id.clone()]
+            }
+
+            // No-restart policies - return empty list
+            RestartStrategy::Temporary | RestartStrategy::Never => {
+                // Never restart
+                alloc::vec![]
+            }
+
+            RestartStrategy::Escalate => {
+                // Don't restart, escalate to parent - return empty list
+                // The escalation logic should be handled elsewhere
+                alloc::vec![]
+            }
         }
     }
 
@@ -511,6 +645,7 @@ where
         let mut result = heapless::Vec::new();
 
         match strategy {
+            // Classic restart patterns - determine which children to restart
             RestartStrategy::OneForOne => {
                 // Restart only the failed child
                 let _ = result.push(failed_child_id.clone());
@@ -540,6 +675,29 @@ where
                     }
                 }
                 // If failed child not found, result remains empty (restart nothing)
+            }
+
+            // OTP-style policies - convert to equivalent classic patterns
+            // These policies determine WHETHER to restart, defaulting to OneForOne for WHICH children
+            RestartStrategy::Permanent => {
+                // Always restart - use OneForOne pattern (restart just the failed child)
+                let _ = result.push(failed_child_id.clone());
+            }
+
+            RestartStrategy::Transient => {
+                // Restart only on abnormal termination - use OneForOne pattern
+                // Note: The decision of whether this is abnormal termination should be made elsewhere
+                let _ = result.push(failed_child_id.clone());
+            }
+
+            // No-restart policies - return empty list
+            RestartStrategy::Temporary | RestartStrategy::Never => {
+                // Never restart - result remains empty
+            }
+
+            RestartStrategy::Escalate => {
+                // Don't restart, escalate to parent - result remains empty
+                // The escalation logic should be handled elsewhere
             }
         }
 
@@ -651,10 +809,16 @@ where
                             Err(join_error) => {
                                 // JoinError indicates panic or cancellation
                                 if join_error.is_panic() {
-                                    Err(ActorError::Panic)
+                                    Err(ActorError::Panic {
+                                        message: Some("task panicked".into()),
+                                        actor_id: None,
+                                    })
                                 } else {
                                     // Task was cancelled
-                                    Err(ActorError::Panic) // Treat cancellation as panic for now
+                                    Err(ActorError::Panic {
+                                        message: Some("task was cancelled".into()),
+                                        actor_id: None,
+                                    })
                                 }
                             }
                         };
@@ -762,7 +926,7 @@ where
                 }
             }
 
-            SupervisorMessage::ChildPanicked { id } => {
+            SupervisorMessage::ChildPanicked { id, error: _ } => {
                 #[cfg(feature = "debug-log")]
                 log::warn!("Child {id:?} panicked - determining restart strategy");
 
@@ -829,6 +993,41 @@ where
                     #[cfg(feature = "debug-log")]
                     log::warn!(
                         "Child {id:?} exceeded restart limit or was not found for manual restart"
+                    );
+                }
+            }
+
+            SupervisorMessage::ChildEscalated {
+                supervisor_id,
+                failed_child_id: _,
+                error: _,
+            } => {
+                #[cfg(feature = "debug-log")]
+                log::warn!("Child supervisor {supervisor_id:?} escalated a failure");
+
+                // For now, treat escalation as a supervisor failure requiring restart
+                // In a more sophisticated implementation, this could trigger different escalation policies
+                if let Some(strategy) = self.handle_child_failure(&supervisor_id) {
+                    #[cfg(feature = "debug-log")]
+                    log::info!(
+                        "Executing restart strategy: {strategy:?} for escalated supervisor {supervisor_id:?}"
+                    );
+
+                    // Execute the actual restart logic for the supervisor that escalated
+                    let _restarted_count = self.execute_restarts(&supervisor_id, strategy);
+
+                    #[cfg(feature = "debug-log")]
+                    if _restarted_count > 0 {
+                        log::info!(
+                            "Successfully restarted {_restarted_count} supervisors after escalation"
+                        );
+                    } else {
+                        log::warn!("Failed to restart escalated supervisor");
+                    }
+                } else {
+                    #[cfg(feature = "debug-log")]
+                    log::warn!(
+                        "Escalated supervisor {supervisor_id:?} exceeded restart limit or was not found"
                     );
                 }
             }
@@ -912,7 +1111,33 @@ mod tests {
         let msg = SupervisorMessage::ChildStarted { id: 1 };
         let _future = supervisor.handle(msg);
 
-        let msg = SupervisorMessage::ChildPanicked { id: 1 };
+        let msg = SupervisorMessage::ChildPanicked {
+            id: 1,
+            error: {
+                #[cfg(any(feature = "std", feature = "alloc"))]
+                {
+                    Box::new(ActorError::Panic {
+                        message: Some("test panic".to_string()),
+                        actor_id: Some("test_actor".to_string()),
+                    })
+                }
+                #[cfg(not(any(feature = "std", feature = "alloc")))]
+                {
+                    use heapless::String as HeaplessString;
+
+                    let mut panic_msg = HeaplessString::<128>::new();
+                    let _ = panic_msg.push_str("test panic");
+
+                    let mut actor_id_str = HeaplessString::<128>::new();
+                    let _ = actor_id_str.push_str("test_actor");
+
+                    ActorError::Panic {
+                        message: Some(panic_msg),
+                        actor_id: Some(actor_id_str),
+                    }
+                }
+            },
+        };
         let _future = supervisor.handle(msg);
     }
 
@@ -1191,5 +1416,331 @@ mod tests {
 
         // This test validates that restart window resets work correctly
         // regardless of the specific timing implementation details
+    }
+
+    // Phase 3 Comprehensive Testing: New Supervision Integration Methods
+
+    #[test]
+    fn test_handle_child_panic_integration() {
+        let mut supervisor = SupervisorActor::<u32, 8>::with_config(
+            RestartStrategy::OneForOne,
+            3,      // Allow 3 restarts before escalation
+            60_000, // 60 second window
+        );
+
+        // Add a child
+        assert!(supervisor.add_child(1, None).is_ok());
+
+        // Create a test panic error
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        let panic_error = ActorError::Panic {
+            message: Some("Test panic in actor".to_string()),
+            actor_id: Some("test_actor_1".to_string()),
+        };
+
+        #[cfg(not(any(feature = "std", feature = "alloc")))]
+        let panic_error = {
+            let mut panic_msg = crate::actor::ActorString::new();
+            let _ = panic_msg.push_str("Test panic in actor");
+            let mut actor_id_str = crate::actor::ActorString::new();
+            let _ = actor_id_str.push_str("test_actor_1");
+            ActorError::Panic {
+                message: Some(panic_msg),
+                actor_id: Some(actor_id_str),
+            }
+        };
+
+        // Test that handle_child_panic integrates with handle_child_failure
+        let strategy = supervisor.handle_child_panic(&1, panic_error);
+        assert_eq!(strategy, Some(RestartStrategy::OneForOne));
+
+        // Verify restart count increased
+        let child_info = supervisor.children.get(&1).unwrap();
+        assert_eq!(child_info.restart_count, 1);
+
+        // Test multiple panics leading to removal
+        for _ in 0..3 {
+            let panic_error = ActorError::Custom("Repeated panic");
+            let _ = supervisor.handle_child_panic(&1, panic_error);
+        }
+
+        // Child should be removed after exceeding restart limit
+        assert!(!supervisor.children.contains_key(&1));
+    }
+
+    #[test]
+    fn test_calculate_backoff_delay_exponential() {
+        let mut supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Add a child and simulate multiple failures to test backoff progression
+        assert!(supervisor.add_child(1, None).is_ok());
+
+        // Initial delay (no failures yet)
+        let delay0 = supervisor.calculate_backoff_delay(&1);
+        assert_eq!(delay0, core::time::Duration::from_millis(100)); // Default minimal delay
+
+        // Simulate failures and check exponential backoff
+        supervisor.handle_child_failure(&1); // 1st failure
+        let delay1 = supervisor.calculate_backoff_delay(&1);
+        assert_eq!(delay1, core::time::Duration::from_millis(100)); // 100ms * 2^0 = 100ms
+
+        supervisor.handle_child_failure(&1); // 2nd failure  
+        let delay2 = supervisor.calculate_backoff_delay(&1);
+        assert_eq!(delay2, core::time::Duration::from_millis(200)); // 100ms * 2^1 = 200ms
+
+        supervisor.handle_child_failure(&1); // 3rd failure
+        let delay3 = supervisor.calculate_backoff_delay(&1);
+        assert_eq!(delay3, core::time::Duration::from_millis(400)); // 100ms * 2^2 = 400ms
+
+        // Test max delay cap (5 seconds)
+        // Simulate many failures to test the cap
+        let mut supervisor_capped = SupervisorActor::<u32, 8>::with_config(
+            RestartStrategy::OneForOne,
+            20,      // Allow many restarts to test delay cap
+            300_000, // Very long window
+        );
+        assert!(supervisor_capped.add_child(2, None).is_ok());
+
+        // Force high restart count to test max delay
+        for _ in 0..10 {
+            supervisor_capped.handle_child_failure(&2);
+        }
+
+        let max_delay = supervisor_capped.calculate_backoff_delay(&2);
+        assert_eq!(max_delay, core::time::Duration::from_millis(5000)); // Capped at 5 seconds
+    }
+
+    #[test]
+    fn test_escalate_failure_removes_child() {
+        let mut supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Add a child that will repeatedly fail
+        assert!(supervisor.add_child(1, None).is_ok());
+        assert!(supervisor.children.contains_key(&1));
+
+        // Create a test escalation error
+        let escalation_error = ActorError::Custom("Repeated failure requiring escalation");
+
+        // Escalate the failure
+        supervisor.escalate_failure(&1, escalation_error);
+
+        // Child should be removed from supervision to prevent further restart attempts
+        assert!(!supervisor.children.contains_key(&1));
+    }
+
+    #[test]
+    fn test_apply_restart_intensity_rate_limiting() {
+        let mut supervisor = SupervisorActor::<u32, 8>::with_config(
+            RestartStrategy::OneForOne,
+            2,      // Very low restart limit for testing
+            60_000, // 60 second window
+        );
+
+        // Add a child
+        assert!(supervisor.add_child(1, None).is_ok());
+
+        // Initially should allow restart
+        assert!(supervisor.apply_restart_intensity(&1));
+
+        // After one failure, should still allow restart
+        supervisor.handle_child_failure(&1);
+        assert!(supervisor.apply_restart_intensity(&1));
+
+        // After two failures, should still allow restart (at limit)
+        supervisor.handle_child_failure(&1);
+        assert!(supervisor.apply_restart_intensity(&1));
+
+        // After three failures, should exceed limit and not allow restart
+        supervisor.handle_child_failure(&1); // This removes the child
+        assert!(!supervisor.apply_restart_intensity(&1)); // Child no longer exists
+
+        // Test with non-existent child
+        assert!(!supervisor.apply_restart_intensity(&999));
+    }
+
+    #[test]
+    fn test_supervisor_message_child_escalated_handling() {
+        let mut supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Add supervisor as a child (simulating hierarchical supervision)
+        assert!(supervisor.add_child(100, None).is_ok()); // Supervisor ID 100
+
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        let escalation_error = Box::new(ActorError::Custom("Child supervision failed"));
+
+        #[cfg(not(any(feature = "std", feature = "alloc")))]
+        let escalation_error = ActorError::Custom("Child supervision failed");
+
+        // Test handling escalation message
+        let escalation_msg = SupervisorMessage::ChildEscalated {
+            supervisor_id: 100,
+            failed_child_id: 1,
+            error: escalation_error,
+        };
+
+        // This should trigger restart logic for the escalated supervisor
+        let _future = supervisor.handle(escalation_msg);
+
+        // Verify that the escalation was processed (supervisor treats it as a failure)
+        // The exact behavior depends on restart limits and timing
+        // This test validates that the escalation message is handled without panicking
+    }
+
+    #[test]
+    fn test_otp_style_restart_strategies() {
+        let _supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Test OTP-style policies convert to appropriate restart patterns
+
+        // Permanent policy - always restart (OneForOne pattern)
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = _supervisor.get_children_to_restart(&1, RestartStrategy::Permanent);
+            assert_eq!(to_restart, alloc::vec![1]);
+        }
+
+        // Transient policy - restart on abnormal termination (OneForOne pattern)
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = _supervisor.get_children_to_restart(&1, RestartStrategy::Transient);
+            assert_eq!(to_restart, alloc::vec![1]);
+        }
+
+        // Temporary policy - never restart
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = _supervisor.get_children_to_restart(&1, RestartStrategy::Temporary);
+            assert_eq!(to_restart.len(), 0);
+        }
+
+        // Never policy - explicit no-restart
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = _supervisor.get_children_to_restart(&1, RestartStrategy::Never);
+            assert_eq!(to_restart.len(), 0);
+        }
+
+        // Escalate policy - don't restart locally, escalate to parent
+        #[cfg(any(feature = "std", feature = "alloc"))]
+        {
+            let to_restart = _supervisor.get_children_to_restart(&1, RestartStrategy::Escalate);
+            assert_eq!(to_restart.len(), 0);
+        }
+    }
+
+    #[test]
+    fn test_restart_factory_error_handling() {
+        let supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Test handling of restart factory failures in no_std environment
+        #[cfg(not(feature = "async-tokio"))]
+        {
+            let failing_factory: RestartFactory = Box::new(|| Err(SupervisorError::RestartFailed));
+
+            assert!(
+                supervisor
+                    .add_child_with_factory(1, failing_factory, Some(RestartStrategy::OneForOne))
+                    .is_ok()
+            );
+
+            // Execute restart - should handle factory failure gracefully
+            let restarted_count = supervisor.execute_restarts(&1, RestartStrategy::OneForOne);
+            assert_eq!(restarted_count, 0); // No children restarted due to factory failure
+        }
+
+        // Test successful restart factory in no_std environment
+        #[cfg(not(feature = "async-tokio"))]
+        {
+            let successful_factory: RestartFactory = Box::new(|| Ok(()));
+
+            assert!(
+                supervisor
+                    .add_child_with_factory(2, successful_factory, Some(RestartStrategy::OneForOne))
+                    .is_ok()
+            );
+
+            // Execute restart - should succeed
+            let restarted_count = supervisor.execute_restarts(&2, RestartStrategy::OneForOne);
+            assert_eq!(restarted_count, 1); // One child restarted successfully
+        }
+
+        // Suppress unused variable warning when async-tokio feature is enabled
+        #[cfg(feature = "async-tokio")]
+        {
+            let _ = supervisor;
+        }
+    }
+
+    #[test]
+    fn test_hierarchical_supervision_patterns() {
+        let mut parent_supervisor = SupervisorActor::<&'static str, 4>::new();
+        let mut child_supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Set up hierarchical structure
+        assert!(
+            parent_supervisor
+                .add_child("child_supervisor", None)
+                .is_ok()
+        );
+        assert!(child_supervisor.add_child(1, None).is_ok());
+        assert!(child_supervisor.add_child(2, None).is_ok());
+
+        // Simulate child failure in the child supervisor
+        let strategy = child_supervisor.handle_child_failure(&1);
+        assert_eq!(strategy, Some(RestartStrategy::OneForOne));
+
+        // Simulate escalation from child supervisor to parent
+        let escalation_error = ActorError::Custom("Child supervisor overwhelmed");
+
+        // Parent supervisor handles escalation from child supervisor
+        let parent_strategy = parent_supervisor.handle_child_failure(&"child_supervisor");
+        assert_eq!(parent_strategy, Some(RestartStrategy::OneForOne));
+
+        // Test escalate failure on child supervisor
+        child_supervisor.escalate_failure(&1, escalation_error);
+        assert!(!child_supervisor.children.contains_key(&1)); // Child removed after escalation
+    }
+
+    #[test]
+    fn test_deterministic_backoff_behavior() {
+        let _supervisor = SupervisorActor::<u32, 8>::new();
+
+        // Test that backoff calculations are deterministic and predictable
+        let test_cases = [
+            (0, 100),   // No failures yet: minimal delay
+            (1, 100),   // 1st failure: 100ms * 2^0 = 100ms
+            (2, 200),   // 2nd failure: 100ms * 2^1 = 200ms
+            (3, 400),   // 3rd failure: 100ms * 2^2 = 400ms
+            (4, 800),   // 4th failure: 100ms * 2^3 = 800ms
+            (5, 1600),  // 5th failure: 100ms * 2^4 = 1600ms
+            (6, 3200),  // 6th failure: 100ms * 2^5 = 3200ms
+            (10, 5000), // 10th failure: Capped at 5000ms
+            (20, 5000), // 20th failure: Still capped at 5000ms
+        ];
+
+        for (restart_count, expected_delay_ms) in test_cases.iter() {
+            // Create a mock child with specific restart count
+            let mut test_supervisor = SupervisorActor::<u32, 8>::new();
+            assert!(test_supervisor.add_child(1, None).is_ok());
+
+            // Simulate the specified number of failures
+            for _ in 0..*restart_count {
+                if test_supervisor.handle_child_failure(&1).is_none() {
+                    break; // Child removed due to restart limits
+                }
+            }
+
+            // Only test if child still exists
+            if test_supervisor.children.contains_key(&1) {
+                let calculated_delay = test_supervisor.calculate_backoff_delay(&1);
+                let expected_delay = core::time::Duration::from_millis(*expected_delay_ms);
+                assert_eq!(
+                    calculated_delay,
+                    expected_delay,
+                    "Restart count {restart_count}: expected {expected_delay_ms}ms, got {}ms",
+                    calculated_delay.as_millis()
+                );
+            }
+        }
     }
 }
