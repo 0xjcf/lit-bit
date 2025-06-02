@@ -771,6 +771,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "criterion",
+ "critical-section",
  "embassy-executor",
  "embassy-futures",
  "embassy-sync",

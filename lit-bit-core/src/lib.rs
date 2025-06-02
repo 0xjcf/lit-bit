@@ -151,3 +151,7 @@ mod re_export_tests {
 
 #[cfg(feature = "async")]
 pub mod timer;
+
+// Test utilities module - only available with test or test-probes feature
+#[cfg(any(test, feature = "test-probes"))]
+pub mod test_utils;

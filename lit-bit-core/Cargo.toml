@@ -41,6 +41,7 @@ panic-halt = { version = "1.0.0", optional = true }
 embassy-futures = { version = "0.1", optional = true }
 embassy-sync = { version = "0.6", optional = true }
 embassy-time = { version = "0.3", optional = true }
+critical-section = { version = "1.1", optional = true }
 
 # Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
 # MOVED TO TARGET-SPECIFIC BELOW
@@ -92,7 +93,7 @@ diagram = ["dep:serde"] # For serializing statechart structure
 # Async features (Phase 5 implementation)
 async = [] # Umbrella feature for async support (no dependencies by itself)
 async-tokio = ["async", "std", "dep:async-trait", "dep:futures", "dep:tokio"] # Tokio runtime integration
-async-embassy = ["async", "dep:embassy-futures", "dep:embassy-executor", "dep:embassy-sync", "dep:embassy-time"] # Embassy runtime integration
+async-embassy = ["async", "dep:embassy-futures", "dep:embassy-executor", "dep:embassy-sync", "dep:embassy-time", "dep:critical-section"] # Embassy runtime integration
 
 # Legacy compatibility (will be deprecated in v0.2)
 embassy = ["async-embassy"] # Alias for backward compatibility
@@ -104,6 +105,19 @@ debug-log = ["dep:log"]
 
 # Nightly Rust features (unstable features)
 nightly = []
+
+# Test utilities feature (for enabling test infrastructure in production builds if needed)
+# NOTE: This feature enables the base test infrastructure but requires a runtime-specific
+# feature (async-tokio or async-embassy) to be fully functional. Consider using
+# test-probes-tokio or test-probes-embassy for convenience.
+test-probes = ["async"]
+
+# Convenience features that include both test infrastructure and runtime support
+test-probes-tokio = ["test-probes", "async-tokio"]
+# NOTE: Embassy test probes have a known limitation with borrowing constraints
+# affecting probe events from immutable methods like on_panic. This will be addressed
+# in a future update.
+test-probes-embassy = ["test-probes", "async-embassy"]
 
 # Examples that require std feature
 [[example]]
