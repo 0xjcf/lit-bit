@@ -1,7 +1,10 @@
 //! Actor spawning functions for Embassy and Tokio runtimes.
 
+use super::ActorError;
+use super::ActorString;
+
 #[cfg(feature = "async-embassy")]
-use super::{Actor, ActorString, BatchActor};
+use super::{Actor, BatchActor};
 
 #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 use super::{Actor, BatchActor, actor_task, batch_actor_task, create_mailbox};
@@ -37,6 +40,32 @@ pub enum SpawnError {
 impl From<crate::actor::supervision::SupervisorError> for SpawnError {
     fn from(err: crate::actor::supervision::SupervisorError) -> Self {
         SpawnError::Supervisor(err)
+    }
+}
+
+/// Helper to create a SupervisorMessage::ChildPanicked with boxed error and actor ID conversion.
+#[inline]
+fn create_supervisor_panic_message(
+    error: ActorError,
+    actor_id: &str,
+) -> crate::actor::SupervisorMessage<ActorString> {
+    #[cfg(any(feature = "std", feature = "alloc"))]
+    let actor_id_string: ActorString = ActorString::from(actor_id);
+    #[cfg(not(any(feature = "std", feature = "alloc")))]
+    let actor_id_string: ActorString = {
+        let mut s = ActorString::new();
+        let _ = s.push_str(actor_id);
+        s
+    };
+
+    #[cfg(any(feature = "std", feature = "alloc"))]
+    let boxed_error = Box::new(error);
+    #[cfg(not(any(feature = "std", feature = "alloc")))]
+    let boxed_error = error;
+
+    crate::actor::SupervisorMessage::ChildPanicked {
+        id: actor_id_string,
+        error: boxed_error,
     }
 }
 
@@ -1019,47 +1048,13 @@ pub async fn embassy_actor_loop_task<A: Actor>(
     loop {
         // Initialize/reset actor state for restart
         if let Err(init_error) = actor.on_restart() {
-            #[cfg(any(feature = "std", feature = "alloc"))]
-            let boxed_error = Box::new(init_error);
-            #[cfg(not(any(feature = "std", feature = "alloc")))]
-            let boxed_error = init_error;
-
-            #[cfg(any(feature = "std", feature = "alloc"))]
-            let actor_id_string = actor_id.into();
-            #[cfg(not(any(feature = "std", feature = "alloc")))]
-            let actor_id_string = {
-                let mut s = ActorString::new();
-                let _ = s.push_str(actor_id);
-                s
-            };
-
-            supervisor_signal.signal(crate::actor::SupervisorMessage::ChildPanicked {
-                id: actor_id_string,
-                error: boxed_error,
-            });
+            supervisor_signal.signal(create_supervisor_panic_message(init_error, actor_id));
             break; // Cannot restart - actor terminates
         }
 
         // Call actor startup hook
         if let Err(startup_error) = actor.on_start() {
-            #[cfg(any(feature = "std", feature = "alloc"))]
-            let boxed_error = Box::new(startup_error);
-            #[cfg(not(any(feature = "std", feature = "alloc")))]
-            let boxed_error = startup_error;
-
-            #[cfg(any(feature = "std", feature = "alloc"))]
-            let actor_id_string = actor_id.into();
-            #[cfg(not(any(feature = "std", feature = "alloc")))]
-            let actor_id_string = {
-                let mut s = ActorString::new();
-                let _ = s.push_str(actor_id);
-                s
-            };
-
-            supervisor_signal.signal(crate::actor::SupervisorMessage::ChildPanicked {
-                id: actor_id_string,
-                error: boxed_error,
-            });
+            supervisor_signal.signal(create_supervisor_panic_message(startup_error, actor_id));
             break; // Cannot start - actor terminates
         }
 
@@ -1069,25 +1064,8 @@ pub async fn embassy_actor_loop_task<A: Actor>(
             match actor.handle_safe(message).await {
                 Ok(()) => continue, // Normal processing
                 Err(actor_error) => {
-                    #[cfg(any(feature = "std", feature = "alloc"))]
-                    let boxed_error = Box::new(actor_error);
-                    #[cfg(not(any(feature = "std", feature = "alloc")))]
-                    let boxed_error = actor_error;
-
-                    #[cfg(any(feature = "std", feature = "alloc"))]
-                    let actor_id_string = actor_id.into();
-                    #[cfg(not(any(feature = "std", feature = "alloc")))]
-                    let actor_id_string = {
-                        let mut s = ActorString::new();
-                        let _ = s.push_str(actor_id);
-                        s
-                    };
-
-                    // Signal supervisor about error
-                    supervisor_signal.signal(crate::actor::SupervisorMessage::ChildPanicked {
-                        id: actor_id_string,
-                        error: boxed_error,
-                    });
+                    supervisor_signal
+                        .signal(create_supervisor_panic_message(actor_error, actor_id));
                     break; // Exit message loop to restart
                 }
             }
@@ -1147,24 +1125,7 @@ pub async fn embassy_external_respawn_task<A: Actor>(
 {
     // Call actor startup hook
     if let Err(startup_error) = actor.on_start() {
-        #[cfg(any(feature = "std", feature = "alloc"))]
-        let boxed_error = Box::new(startup_error);
-        #[cfg(not(any(feature = "std", feature = "alloc")))]
-        let boxed_error = startup_error;
-
-        #[cfg(any(feature = "std", feature = "alloc"))]
-        let actor_id_string = actor_id.into();
-        #[cfg(not(any(feature = "std", feature = "alloc")))]
-        let actor_id_string = {
-            let mut s = ActorString::new();
-            let _ = s.push_str(actor_id);
-            s
-        };
-
-        supervisor_signal.signal(crate::actor::SupervisorMessage::ChildPanicked {
-            id: actor_id_string,
-            error: boxed_error,
-        });
+        supervisor_signal.signal(create_supervisor_panic_message(startup_error, actor_id));
         return; // Task terminates - supervisor will respawn if configured
     }
 
@@ -1174,24 +1135,7 @@ pub async fn embassy_external_respawn_task<A: Actor>(
         match actor.handle_safe(message).await {
             Ok(()) => continue,
             Err(error) => {
-                #[cfg(any(feature = "std", feature = "alloc"))]
-                let boxed_error = Box::new(error);
-                #[cfg(not(any(feature = "std", feature = "alloc")))]
-                let boxed_error = error;
-
-                #[cfg(any(feature = "std", feature = "alloc"))]
-                let actor_id_string = actor_id.into();
-                #[cfg(not(any(feature = "std", feature = "alloc")))]
-                let actor_id_string = {
-                    let mut s = ActorString::new();
-                    let _ = s.push_str(actor_id);
-                    s
-                };
-
-                supervisor_signal.signal(crate::actor::SupervisorMessage::ChildPanicked {
-                    id: actor_id_string,
-                    error: boxed_error,
-                });
+                supervisor_signal.signal(create_supervisor_panic_message(error, actor_id));
                 break; // Task terminates - supervisor will respawn if configured
             }
         }

@@ -4,16 +4,51 @@
 //! Provides unified panic information extraction across Tokio and Embassy runtimes.
 
 use super::ActorError;
+use core::any::Any;
 
 // Platform-dual string support for panic information
 #[cfg(any(feature = "std", feature = "alloc"))]
 extern crate alloc;
 
 #[cfg(any(feature = "std", feature = "alloc"))]
+use alloc::string::String;
+
+#[cfg(any(feature = "std", feature = "alloc"))]
 use alloc::string::ToString;
 
 #[cfg(not(any(feature = "std", feature = "alloc")))]
 use heapless::String as HeaplessString;
+
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+use core::str::FromStr;
+
+/// Helper to extract a panic message from a panic payload (Box<dyn Any + Send> or &dyn Any).
+#[cfg(any(feature = "std", feature = "alloc"))]
+fn extract_panic_message_from_any(panic_payload: &dyn Any) -> String {
+    panic_payload
+        .downcast_ref::<&str>()
+        .map(|s| String::from(*s))
+        .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+        .or_else(|| {
+            panic_payload
+                .downcast_ref::<&'static str>()
+                .map(|s| String::from(*s))
+        })
+        .unwrap_or_else(|| "panic occurred (payload type unknown)".to_string())
+}
+
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+fn extract_panic_message_from_any(panic_payload: &dyn Any) -> Option<HeaplessString<128>> {
+    panic_payload
+        .downcast_ref::<&str>()
+        .and_then(|s| HeaplessString::<128>::from_str(s).ok())
+        .or_else(|| panic_payload.downcast_ref::<HeaplessString<128>>().cloned())
+        .or_else(|| {
+            panic_payload
+                .downcast_ref::<&'static str>()
+                .and_then(|s| HeaplessString::<128>::from_str(s).ok())
+        })
+}
 
 /// Tokio-specific panic capture utilities using JoinError introspection.
 ///
@@ -24,22 +59,10 @@ pub fn capture_panic_info(join_error: tokio::task::JoinError) -> ActorError {
     if join_error.is_panic() {
         // Extract panic payload and try to downcast to common string types
         let panic_any = join_error.into_panic();
-        let panic_message = panic_any
-            .downcast_ref::<&str>()
-            .map(|s| s.to_string())
-            .or_else(|| panic_any.downcast_ref::<String>().cloned())
-            .or_else(|| {
-                // Try other common panic types
-                if let Some(msg) = panic_any.downcast_ref::<&'static str>() {
-                    Some(msg.to_string())
-                } else {
-                    // Default message if we can't extract the panic payload
-                    Some("panic occurred (payload type unknown)".to_string())
-                }
-            });
+        let panic_message = extract_panic_message_from_any(panic_any.as_ref());
 
         ActorError::Panic {
-            message: panic_message,
+            message: Some(panic_message),
             actor_id: None, // Can be filled by caller
         }
     } else {
@@ -56,17 +79,7 @@ pub fn capture_panic_info(join_error: tokio::task::JoinError) -> ActorError {
 pub fn capture_panic_info_from_payload(
     panic_payload: &Box<dyn std::any::Any + Send>,
 ) -> ActorError {
-    // Try to downcast the panic payload to common string types
-    let panic_message = panic_payload
-        .downcast_ref::<&str>()
-        .map(|s| s.to_string())
-        .or_else(|| panic_payload.downcast_ref::<String>().cloned())
-        .or_else(|| {
-            panic_payload
-                .downcast_ref::<&'static str>()
-                .map(|s| s.to_string())
-        })
-        .unwrap_or_else(|| "panic occurred (payload type unknown)".to_string());
+    let panic_message = extract_panic_message_from_any(panic_payload.as_ref());
 
     ActorError::Panic {
         message: Some(panic_message),
@@ -130,8 +143,25 @@ pub fn simulate_panic_for_testing(message: &str) -> ActorError {
     #[cfg(not(any(feature = "std", feature = "alloc")))]
     let panic_message = {
         let mut s = HeaplessString::<128>::new();
-        // Best effort to fit the message, truncating if necessary
-        let _ = s.push_str(&message[..message.len().min(127)]);
+        // Truncate at a valid UTF-8 boundary so we don't panic
+        let mut end = 0;
+        for (idx, _) in message.char_indices() {
+            if idx <= 127 {
+                end = idx;
+            } else {
+                break;
+            }
+        }
+        if end == 0 && !message.is_empty() {
+            // The first char is >127 bytes in, so just take the first char
+            end = message.len().min(127);
+        } else {
+            // Include the last char if it fits
+            end = (end + message[end..].chars().next().map_or(0, |c| c.len_utf8()))
+                .min(message.len())
+                .min(128);
+        }
+        let _ = s.push_str(&message[..end]);
         s
     };
 
@@ -160,7 +190,22 @@ pub fn simulate_panic_with_id(message: &str, actor_id: impl AsRef<str>) -> Actor
         {
             let mut s = HeaplessString::<128>::new();
             let actor_str = actor_id.as_ref();
-            let _ = s.push_str(&actor_str[..actor_str.len().min(127)]);
+            let mut end = 0;
+            for (idx, _) in actor_str.char_indices() {
+                if idx <= 127 {
+                    end = idx;
+                } else {
+                    break;
+                }
+            }
+            if end == 0 && !actor_str.is_empty() {
+                end = actor_str.len().min(127);
+            } else {
+                end = (end + actor_str[end..].chars().next().map_or(0, |c| c.len_utf8()))
+                    .min(actor_str.len())
+                    .min(128);
+            }
+            let _ = s.push_str(&actor_str[..end]);
             *id = Some(s);
         }
     }
@@ -185,11 +230,41 @@ pub fn create_controlled_failure(message: &str, actor_id: Option<&str>) -> Actor
     #[cfg(not(any(feature = "std", feature = "alloc")))]
     {
         let mut panic_msg = HeaplessString::<128>::new();
-        let _ = panic_msg.push_str(&message[..message.len().min(127)]);
+        let mut end = 0;
+        for (idx, _) in message.char_indices() {
+            if idx <= 127 {
+                end = idx;
+            } else {
+                break;
+            }
+        }
+        if end == 0 && !message.is_empty() {
+            end = message.len().min(127);
+        } else {
+            end = (end + message[end..].chars().next().map_or(0, |c| c.len_utf8()))
+                .min(message.len())
+                .min(128);
+        }
+        let _ = panic_msg.push_str(&message[..end]);
 
         let actor_id_string = actor_id.map(|id| {
             let mut s = HeaplessString::<128>::new();
-            let _ = s.push_str(&id[..id.len().min(127)]);
+            let mut end = 0;
+            for (idx, _) in id.char_indices() {
+                if idx <= 127 {
+                    end = idx;
+                } else {
+                    break;
+                }
+            }
+            if end == 0 && !id.is_empty() {
+                end = id.len().min(127);
+            } else {
+                end = (end + id[end..].chars().next().map_or(0, |c| c.len_utf8()))
+                    .min(id.len())
+                    .min(128);
+            }
+            let _ = s.push_str(&id[..end]);
             s
         });
 

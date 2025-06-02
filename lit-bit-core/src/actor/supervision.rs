@@ -398,13 +398,38 @@ where
     pub fn handle_child_panic(
         &mut self,
         child_id: &ChildId,
-        _error: super::ActorError,
+        error: super::ActorError,
     ) -> Option<RestartStrategy> {
-        // Use the existing failure handling logic with additional panic-specific processing
+        #[cfg(feature = "debug-log")]
+        {
+            match &error {
+                super::ActorError::Panic { message, actor_id } => {
+                    let msg = message
+                        .as_ref()
+                        .map(|m| m.as_str())
+                        .unwrap_or("<no message>");
+                    let id = actor_id.as_ref().map(|id| id.as_str()).unwrap_or("<no id>");
+                    log::warn!("Child {child_id:?} panicked: message='{msg}', actor_id='{id}'");
+                }
+                super::ActorError::Custom(msg) => {
+                    log::warn!("Child {child_id:?} custom error: {msg}");
+                }
+                other => {
+                    log::warn!("Child {child_id:?} failed with error: {other:?}");
+                }
+            }
+        }
+        #[cfg(not(feature = "debug-log"))]
+        let _ = &error;
+
+        // In the future, this analysis could be used to select a different strategy
+        // For now, use the existing failure handling logic
         let strategy = self.handle_child_failure(child_id)?;
 
         #[cfg(feature = "debug-log")]
-        log::warn!("Child {child_id:?} panicked, applying restart strategy: {strategy:?}");
+        log::warn!("Applying restart strategy: {strategy:?} for child {child_id:?}");
+        #[cfg(not(feature = "debug-log"))]
+        let _ = &strategy;
 
         Some(strategy)
     }
@@ -809,15 +834,24 @@ where
                             Err(join_error) => {
                                 // JoinError indicates panic or cancellation
                                 if join_error.is_panic() {
+                                    // Use panic_handling utilities to extract message
+                                    let actor_error =
+                                        crate::actor::panic_handling::capture_panic_info(
+                                            join_error,
+                                        );
+                                    let message = match actor_error {
+                                        ActorError::Panic { message, .. } => message,
+                                        _ => Some("task panicked".into()),
+                                    };
                                     Err(ActorError::Panic {
-                                        message: Some("task panicked".into()),
-                                        actor_id: None,
+                                        message,
+                                        actor_id: Some(format!("{child_id:?}")),
                                     })
                                 } else {
                                     // Task was cancelled
                                     Err(ActorError::Panic {
                                         message: Some("task was cancelled".into()),
-                                        actor_id: None,
+                                        actor_id: Some(format!("{child_id:?}")),
                                     })
                                 }
                             }
@@ -926,28 +960,27 @@ where
                 }
             }
 
-            SupervisorMessage::ChildPanicked { id, error: _ } => {
+            SupervisorMessage::ChildPanicked { id, error } => {
                 #[cfg(feature = "debug-log")]
                 log::warn!("Child {id:?} panicked - determining restart strategy");
 
-                if let Some(strategy) = self.handle_child_failure(&id) {
-                    #[cfg(feature = "debug-log")]
-                    log::info!("Executing restart strategy: {strategy:?} for child {id:?}");
-
-                    // Execute the actual restart logic
-                    let _restarted_count = self.execute_restarts(&id, strategy);
-
-                    #[cfg(feature = "debug-log")]
-                    if _restarted_count > 0 {
-                        log::info!("Successfully restarted {_restarted_count} children");
-                    } else {
-                        log::warn!(
-                            "Failed to restart any children - they may have been removed from supervision"
-                        );
+                #[cfg(any(feature = "std", feature = "alloc"))]
+                {
+                    if let Some(strategy) = self.handle_child_panic(&id, *error) {
+                        #[cfg(feature = "debug-log")]
+                        log::info!("Executing restart strategy: {strategy:?} for child {id:?}");
+                        #[cfg(not(feature = "debug-log"))]
+                        let _ = &strategy;
                     }
-                } else {
-                    #[cfg(feature = "debug-log")]
-                    log::warn!("Child {id:?} exceeded restart limit or was not found");
+                }
+                #[cfg(not(any(feature = "std", feature = "alloc")))]
+                {
+                    if let Some(strategy) = self.handle_child_panic(&id, error) {
+                        #[cfg(feature = "debug-log")]
+                        log::info!("Executing restart strategy: {strategy:?} for child {id:?}");
+                        #[cfg(not(feature = "debug-log"))]
+                        let _ = &strategy;
+                    }
                 }
             }
 
