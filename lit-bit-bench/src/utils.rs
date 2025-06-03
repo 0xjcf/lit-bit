@@ -9,6 +9,7 @@ pub struct TrackingAllocator {
     inner: System,
     allocated: AtomicUsize,
     deallocated: AtomicUsize,
+    peak: AtomicUsize, // Track peak allocation
 }
 
 impl TrackingAllocator {
@@ -18,6 +19,7 @@ impl TrackingAllocator {
             inner: System,
             allocated: AtomicUsize::new(0),
             deallocated: AtomicUsize::new(0),
+            peak: AtomicUsize::new(0),
         }
     }
 
@@ -29,6 +31,10 @@ impl TrackingAllocator {
         self.deallocated.load(Ordering::Relaxed)
     }
 
+    pub fn peak_allocation(&self) -> usize {
+        self.peak.load(Ordering::Relaxed)
+    }
+
     #[allow(clippy::cast_possible_wrap)]
     pub fn net_allocated(&self) -> isize {
         self.allocated_bytes() as isize - self.deallocated_bytes() as isize
@@ -37,6 +43,7 @@ impl TrackingAllocator {
     pub fn reset(&self) {
         self.allocated.store(0, Ordering::Relaxed);
         self.deallocated.store(0, Ordering::Relaxed);
+        self.peak.store(0, Ordering::Relaxed);
     }
 }
 
@@ -48,17 +55,36 @@ impl Default for TrackingAllocator {
 
 unsafe impl GlobalAlloc for TrackingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: We're delegating to the system allocator
-        let ptr = unsafe { self.inner.alloc(layout) };
+        let ptr = unsafe {
+            // SAFETY: We're delegating to the system allocator
+            self.inner.alloc(layout)
+        };
         if !ptr.is_null() {
-            self.allocated.fetch_add(layout.size(), Ordering::Relaxed);
+            let current =
+                self.allocated.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
+
+            // Update peak if current allocation exceeds it
+            let mut peak = self.peak.load(Ordering::Relaxed);
+            while current > peak {
+                match self.peak.compare_exchange_weak(
+                    peak,
+                    current,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(p) => peak = p,
+                }
+            }
         }
         ptr
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: We're delegating to the system allocator with the same ptr and layout
-        unsafe { self.inner.dealloc(ptr, layout) };
+        unsafe {
+            // SAFETY: We're delegating to the system allocator with the same ptr and layout
+            self.inner.dealloc(ptr, layout)
+        };
         self.deallocated.fetch_add(layout.size(), Ordering::Relaxed);
     }
 }

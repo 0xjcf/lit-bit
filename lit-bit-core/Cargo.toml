@@ -166,3 +166,11 @@ required-features = ["panic-halt"]
 [[example]]
 name = "traffic_light_cortex_m"
 required-features = ["panic-halt"]
+
+[[example]]
+name = "mailbox_patterns"
+required-features = ["panic-halt"]
+
+[[example]]
+name = "coffee_shop"
+required-features = ["panic-halt"]

@@ -11,14 +11,16 @@ publish = false  # Never publish this crate
 [dependencies]
 lit-bit-core = { workspace = true, features = ["std", "async-tokio"] }
 lit-bit-macro = { workspace = true }
-
-# Benchmark dependencies
-criterion = { version = "0.5", features = ["html_reports"] }
-iai-callgrind = "0.11"
-
-# For async benchmarks
+futures-lite = "2.6"
+parking_lot = "0.12"
+num_cpus = "1.17"
 tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 futures = "0.3"
+tracing = { version = "0.1", optional = true }
+backtrace = { version = "0.3", optional = true }
+
+# Benchmark dependencies
+criterion = { version = "0.5", features = ["html_reports", "async"] }
 
 # Utilities
 anyhow = "1.0"
@@ -30,6 +32,13 @@ default = []
 iai = []
 async-tokio = []
 embassy = []
+runtime-embassy = ["embassy"]  # Alias for embassy feature
+profile-alloc = ["tracing", "backtrace"]  # New feature for allocation tracking
+
+[[bench]]
+name = "message_throughput"
+path = "benches/message_throughput.rs"
+harness = false
 
 [[bench]]
 name = "statechart_throughput"
@@ -41,4 +50,13 @@ harness = false
 
 [[bench]]
 name = "memory_usage"
-harness = false 
+harness = false
+
+[dev-dependencies]
+console-subscriber = "0.4.1"
+futures-lite = "2.6.0"
+jemalloc-ctl = "0.5.4"
+parking_lot = "0.12.4"
+criterion = { version = "0.5", features = ["html_reports", "async"] }
+tokio = { version = "1.42", features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+futures = "0.3"

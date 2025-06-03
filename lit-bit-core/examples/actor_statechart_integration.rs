@@ -16,6 +16,12 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 
+#[cfg(feature = "std")]
+use std::vec::Vec;
+
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
 // Dummy allocator for no_std builds
 #[cfg(not(feature = "std"))]
 #[global_allocator]
@@ -44,6 +50,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+#[allow(unused_imports)]
 use lit_bit_core::StateMachine;
 use lit_bit_macro::{statechart, statechart_event};
 

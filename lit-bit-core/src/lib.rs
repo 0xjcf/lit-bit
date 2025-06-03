@@ -73,9 +73,6 @@ pub use actor::BatchActor;
 #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 pub use actor::actor_task;
 
-#[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
-pub use actor::actor_task;
-
 #[cfg(feature = "async-embassy")]
 pub use actor::actor_task_embassy;
 
@@ -84,7 +81,7 @@ pub use actor::actor_task_embassy;
 pub use actor::{Inbox, Outbox, create_mailbox};
 
 #[cfg(all(not(feature = "async-tokio"), not(feature = "async-embassy")))]
-pub use actor::{Inbox, Outbox, create_mailbox_safe};
+pub use actor::{Inbox, Outbox, create_mailbox};
 
 // Note: static_mailbox macro is available directly from the crate root
 

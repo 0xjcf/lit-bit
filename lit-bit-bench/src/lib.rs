@@ -1,13 +1,26 @@
 //! Performance benchmarks for lit-bit
 //!
-//! This crate contains Criterion and Iai-Callgrind benchmarks for measuring
-//! the performance characteristics of lit-bit statecharts and actors.
+//! This crate contains Criterion.rs benchmarks for measuring performance across
+//! different runtimes and environments, with support for both host and embedded targets.
 
 pub mod fixtures;
-pub mod utils;
+pub mod metrics;
+pub mod runtime;
+
+// Re-export commonly used types
+pub use metrics::{
+    BenchmarkDashboard, BenchmarkResults, CPUMetrics, LatencyMeter, LatencyMetrics, MemoryMetrics,
+    ThroughputMetrics, TrackingAllocator,
+};
+pub use runtime::{BenchExecutor, RuntimeType, create_executor};
+
+use std::os::unix::process::ExitStatusExt;
+use std::process::{Command, ExitStatus}; // For Unix-like systems
 
 /// Common benchmark utilities and test data
 pub mod common {
+    use super::*;
+
     /// Common events for benchmark testing
     #[derive(Debug, Clone, PartialEq)]
     pub enum BenchEvent {
@@ -17,86 +30,157 @@ pub mod common {
     }
 
     /// Performance test configuration
+    #[derive(Debug, Clone)]
     pub struct BenchConfig {
-        pub num_states: usize,
-        pub num_events: usize,
-        pub batch_size: usize,
+        pub runtime: RuntimeType,
+        pub worker_threads: Option<usize>,
+        pub warmup_iterations: usize,
+        pub measurement_iterations: usize,
+        pub sample_size: usize,
     }
 
     impl Default for BenchConfig {
         fn default() -> Self {
             Self {
-                num_states: 100,
-                num_events: 1000,
-                batch_size: 10,
+                runtime: RuntimeType::TokioSingleThread,
+                worker_threads: None,
+                warmup_iterations: 10,
+                measurement_iterations: 100,
+                sample_size: 1000,
             }
         }
     }
 
-    /// Benchmark result analysis utilities
-    pub struct BenchmarkReport {
-        pub throughput_events_per_sec: f64,
-        pub latency_nanos: f64,
-        pub memory_bytes_per_operation: usize,
-        pub meets_kpi_targets: bool,
-    }
-
-    impl BenchmarkReport {
-        /// Check if performance meets the project KPI targets
-        pub fn validate_against_kpis(&self) -> ValidationReport {
-            let throughput_ok = self.throughput_events_per_sec >= 1_000_000.0; // 1M events/s target
-            let latency_ok = self.latency_nanos <= 100.0; // <100ns latency target  
-            let memory_ok = self.memory_bytes_per_operation <= 512; // ≤512B memory target
-
-            ValidationReport {
-                throughput_target_met: throughput_ok,
-                latency_target_met: latency_ok,
-                memory_target_met: memory_ok,
-                overall_pass: throughput_ok && latency_ok && memory_ok,
-            }
-        }
-    }
-
-    pub struct ValidationReport {
-        pub throughput_target_met: bool,
-        pub latency_target_met: bool,
-        pub memory_target_met: bool,
-        pub overall_pass: bool,
-    }
-
-    /// Generate performance summary for Sprint 3 validation
-    pub fn generate_performance_summary(reports: Vec<BenchmarkReport>) -> String {
-        let mut summary = String::new();
-        summary.push_str("🎯 Sprint 3 Performance Validation Summary\n");
-        summary.push_str("==========================================\n\n");
-
-        let mut all_pass = true;
-        for (i, report) in reports.iter().enumerate() {
-            let validation = report.validate_against_kpis();
-            summary.push_str(&format!(
-                "Benchmark {}: {}\n",
-                i + 1,
-                if validation.overall_pass {
-                    "✅ PASS"
-                } else {
-                    "❌ FAIL"
+    pub fn collect_perf_stats() -> CPUMetrics {
+        // Run perf stat to collect CPU metrics
+        let output = Command::new("perf")
+            .args([
+                "stat",
+                "-e",
+                "instructions,cycles,cache-misses,context-switches",
+                "-x",
+                ",", // CSV output
+                "sleep",
+                "1", // Measure for 1 second
+            ])
+            .output()
+            .unwrap_or_else(|_| {
+                println!("⚠️  perf stat not available - using dummy metrics");
+                std::process::Output {
+                    status: ExitStatus::from_raw(0),
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
                 }
-            ));
+            });
 
-            if !validation.overall_pass {
-                all_pass = false;
+        // Parse perf stat output
+        let stats = String::from_utf8_lossy(&output.stderr);
+        let mut instructions = 0.0;
+        let mut cycles = 0.0;
+        let mut cache_misses = 0.0;
+        let mut context_switches = 0;
+
+        for line in stats.lines() {
+            let fields: Vec<&str> = line.split(',').collect();
+            if fields.len() >= 3 {
+                match fields[2].trim() {
+                    "instructions" => instructions = fields[0].trim().parse().unwrap_or(0.0),
+                    "cycles" => cycles = fields[0].trim().parse().unwrap_or(0.0),
+                    "cache-misses" => cache_misses = fields[0].trim().parse().unwrap_or(0.0),
+                    "context-switches" => context_switches = fields[0].trim().parse().unwrap_or(0),
+                    _ => {}
+                }
             }
         }
 
-        summary.push_str(&format!(
-            "\n🏆 Overall Sprint 3 Status: {}\n",
-            if all_pass {
-                "✅ ALL KPIs MET"
+        CPUMetrics {
+            instructions_per_cycle: if cycles > 0.0 {
+                instructions / cycles
             } else {
-                "❌ NEEDS IMPROVEMENT"
-            }
-        ));
+                0.0
+            },
+            cache_miss_rate: if instructions > 0.0 {
+                cache_misses / instructions
+            } else {
+                0.0
+            },
+            context_switches: context_switches as u64,
+        }
+    }
 
-        summary
+    /// Run a benchmark with the given configuration
+    pub fn run_benchmark<F>(config: &BenchConfig, mut f: F) -> BenchmarkResults
+    where
+        F: FnMut(),
+    {
+        let executor = create_executor(config.runtime, config.worker_threads);
+        let mut latency_meter = LatencyMeter::new();
+        let allocator = TrackingAllocator::new();
+
+        // Warmup
+        for _ in 0..config.warmup_iterations {
+            executor.block_on(async {
+                f();
+            });
+        }
+
+        // Collect CPU metrics during measurement
+        let cpu_metrics = collect_perf_stats();
+
+        // Measurement
+        let start = std::time::Instant::now();
+        for _ in 0..config.measurement_iterations {
+            allocator.reset();
+            let iteration_start = std::time::Instant::now();
+            executor.block_on(async {
+                f();
+            });
+            latency_meter.record(iteration_start.elapsed());
+        }
+        let duration = start.elapsed();
+
+        BenchmarkResults {
+            name: "benchmark".to_string(),
+            throughput: ThroughputMetrics {
+                messages_per_second: (config.sample_size as u64
+                    * config.measurement_iterations as u64)
+                    / duration.as_secs(),
+                total_messages: config.sample_size as u64 * config.measurement_iterations as u64,
+                duration,
+            },
+            latency: latency_meter.to_metrics(),
+            memory: allocator.metrics(),
+            cpu: cpu_metrics,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_benchmark_config() {
+        let config = common::BenchConfig::default();
+        assert_eq!(config.runtime, RuntimeType::TokioSingleThread);
+        assert_eq!(config.warmup_iterations, 10);
+        assert_eq!(config.measurement_iterations, 100);
+    }
+
+    #[test]
+    fn test_run_benchmark() {
+        let config = common::BenchConfig {
+            sample_size: 10,
+            measurement_iterations: 5,
+            ..Default::default()
+        };
+
+        let results = common::run_benchmark(&config, || {
+            std::thread::sleep(Duration::from_millis(1));
+        });
+
+        assert_eq!(results.throughput.total_messages, 50); // 10 samples * 5 iterations
+        assert!(results.latency.p99 >= Duration::from_millis(1));
     }
 }
