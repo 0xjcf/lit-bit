@@ -99,15 +99,86 @@ lint-beta:
   cargo +beta clippy --all-targets --workspace -- -D warnings
   echo "✅ Beta clippy check complete."
 
-# CI-matching lint with all toolchains (stable, beta, nightly)
+# CI-matching lint with all toolchains (stable, beta, nightly) - matches CI exactly
 lint-ci:
   #!/usr/bin/env bash
-  set -e
-  echo "🚀 Running CI-matching lint checks with all toolchains..."
+  set -euo pipefail
+  echo "🚀 Running ALL CI checks with all toolchains..."
   
+  # Stable toolchain checks
   echo "📦 Testing with stable toolchain..."
-  ./scripts/lint.sh
   
+  echo "  ✓ Checking formatting..."
+  cargo fmt --check
+  
+  echo "  ✓ Running Clippy (workspace-wide)..."
+  cargo clippy --all-targets --workspace -- -D warnings
+  
+  echo "  ✓ Running cargo check (all targets)..."
+  cargo check --all-targets --workspace
+  
+  echo "🔍 Testing individual feature combinations..."
+  
+  # Test core library feature combinations
+  echo "📦 Testing lit-bit-core features..."
+  
+  # Default features
+  echo "  ✓ Default features"
+  cargo check -p lit-bit-core
+  
+  # No default features
+  echo "  ✓ No default features"
+  cargo check -p lit-bit-core --no-default-features
+  
+  # Individual async runtime features
+  echo "  ✓ async-tokio feature"
+  cargo check -p lit-bit-core --no-default-features --features async-tokio
+  
+  echo "  ✓ async-embassy feature"
+  cargo check -p lit-bit-core --no-default-features --features async-embassy
+  
+  # Other individual features
+  echo "  ✓ alloc feature"
+  cargo check -p lit-bit-core --no-default-features --features alloc
+  
+  echo "  ✓ std feature"
+  cargo check -p lit-bit-core --no-default-features --features std
+  
+  echo "  ✓ diagram feature"
+  cargo check -p lit-bit-core --no-default-features --features diagram
+  
+  # Compatible feature combinations
+  echo "  ✓ alloc + async-tokio"
+  cargo check -p lit-bit-core --no-default-features --features alloc,async-tokio
+  
+  echo "  ✓ alloc + async-embassy"
+  cargo check -p lit-bit-core --no-default-features --features alloc,async-embassy
+  
+  echo "  ✓ std + diagram"
+  cargo check -p lit-bit-core --no-default-features --features std,diagram
+  
+  # Test mutually exclusive combinations
+  echo "🚫 Verifying mutually exclusive feature protection..."
+  if cargo check -p lit-bit-core --no-default-features --features async-tokio,async-embassy 2>/dev/null; then
+    echo "❌ ERROR: Mutually exclusive features should fail compilation!"
+    exit 1
+  else
+    echo "  ✓ async-tokio + async-embassy correctly fails"
+  fi
+  
+  # Test workspace members
+  echo "📦 Testing workspace members..."
+  
+  echo "  ✓ lit-bit-tests (with async-tokio)"
+  cargo check -p lit-bit-tests --features async-tokio
+  
+  echo "  ✓ lit-bit-bench"
+  cargo check -p lit-bit-bench
+  
+  echo "  ✓ lit-bit-cli"
+  cargo check -p lit-bit-cli
+  
+  # Beta toolchain checks
   if rustup toolchain list | grep -q "beta"; then
     echo "📦 Testing with beta toolchain..."
     cargo +beta clippy --all-targets --workspace -- -D warnings
@@ -115,6 +186,7 @@ lint-ci:
     echo "⚠️  Beta toolchain not available, install with: rustup toolchain install beta"
   fi
   
+  # Nightly toolchain checks
   if rustup toolchain list | grep -q "nightly"; then
     echo "📦 Testing with nightly toolchain..."
     cargo +nightly clippy --all-targets --workspace -- -D warnings
@@ -122,7 +194,7 @@ lint-ci:
     echo "⚠️  Nightly toolchain not available, install with: rustup toolchain install nightly"
   fi
   
-  echo "✅ All CI-matching lint checks complete!"
+  echo "✅ All CI checks complete!"
 
 # Format check and fix
 fmt:

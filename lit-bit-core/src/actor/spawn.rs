@@ -3,6 +3,12 @@
 use super::ActorError;
 use super::ActorString;
 
+// Conditional Box import for any code that uses alloc
+#[cfg(any(feature = "std", feature = "alloc"))]
+extern crate alloc;
+#[cfg(any(feature = "std", feature = "alloc"))]
+use alloc::boxed::Box;
+
 #[cfg(feature = "async-embassy")]
 use super::{Actor, BatchActor};
 
@@ -21,12 +27,6 @@ use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 
 #[cfg(feature = "async-embassy")]
 use embassy_sync::channel::Receiver;
-
-// Conditional Box import for panic error handling (Embassy specific)
-#[cfg(all(any(feature = "std", feature = "alloc"), feature = "async-embassy"))]
-extern crate alloc;
-#[cfg(all(any(feature = "std", feature = "alloc"), feature = "async-embassy"))]
-use alloc::boxed::Box;
 
 /// Error types for spawn operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
