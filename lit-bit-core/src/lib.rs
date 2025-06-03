@@ -63,6 +63,12 @@ pub use actor::backpressure::SendError;
 // Re-export actor types that are always available
 pub use actor::{Actor, ActorError, RestartStrategy};
 
+// Re-export supervision types for convenience (Task 5.1 & 5.4)
+pub use actor::{Supervisor, SupervisorActor, SupervisorError, SupervisorMessage};
+
+// Re-export batch processing types (Task 5.2)
+pub use actor::BatchActor;
+
 // Re-export actor_task based on feature flags
 #[cfg(all(feature = "async-tokio", not(feature = "async-embassy")))]
 pub use actor::actor_task;
@@ -155,3 +161,7 @@ pub mod timer;
 // Test utilities module - only available with test or test-probes feature
 #[cfg(any(test, feature = "test-probes"))]
 pub mod test_utils;
+
+// Re-export test utilities for convenient access (Task 5.3)
+#[cfg(any(test, feature = "test-probes"))]
+pub use test_utils::{ActorProbe, InstrumentedActor, ProbeEvent, TestError, TestKit};

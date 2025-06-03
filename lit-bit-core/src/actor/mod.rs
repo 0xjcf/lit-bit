@@ -6,44 +6,294 @@ use core::panic::PanicInfo;
 #[cfg(not(feature = "async-tokio"))]
 use static_cell::StaticCell;
 
+// Platform-dual string support for panic information
+#[cfg(any(feature = "std", feature = "alloc"))]
+type ActorString = alloc::string::String;
+
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+type ActorString = heapless::String<128>; // Fixed-size string for no_std
+
+// Import alloc when available for ActorString
+#[cfg(any(feature = "std", feature = "alloc"))]
+extern crate alloc;
+
+// Box import for supervision messages
+#[cfg(any(feature = "std", feature = "alloc"))]
+use alloc::boxed::Box;
+
+// Type alias for platform-dual error boxing
+#[cfg(any(feature = "std", feature = "alloc"))]
+type BoxedActorError = Box<ActorError>;
+
+#[cfg(not(any(feature = "std", feature = "alloc")))]
+type BoxedActorError = ActorError;
+
 /// Error type for actor lifecycle and supervision hooks.
+///
+/// Enhanced with panic-specific details for Task 5.4 implementation.
+/// Based on research from Actix, Ractor, and Bastion panic handling patterns.
+// Supervision needs full context — allow large error for comprehensive panic information
+#[allow(clippy::result_large_err)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActorError {
+    /// Actor failed to start properly
     StartupFailure,
+    /// Actor failed to shutdown cleanly
     ShutdownFailure,
-    Panic,
+    /// Actor panicked during message processing
+    ///
+    /// Contains optional panic details for debugging and supervision decisions.
+    /// Platform-specific panic capture utilities populate these fields.
+    Panic {
+        /// Panic message extracted from the panic payload, if available
+        message: Option<ActorString>,
+        /// Actor identifier for supervision context, if available
+        actor_id: Option<ActorString>,
+    },
+    /// Actor mailbox was closed unexpectedly
+    MailboxClosed,
+    /// Actor operation timed out
+    Timeout,
+    /// Supervision system failure
+    SupervisionFailure(ActorString),
+    /// Custom error with static message for no_std compatibility
     Custom(&'static str),
 }
 
 /// Restart strategy for actor supervision (OTP-inspired).
+///
+/// Enhanced with OTP-style restart policies and deterministic backoff strategies
+/// for comprehensive panic-aware supervision integration (Task 5.4 Phase 2).
+///
+/// ## OTP-Style Policies
+/// - **Permanent**: Always restart on any termination (normal or abnormal)
+/// - **Transient**: Restart only on abnormal termination (panic/error), not on normal exit
+/// - **Temporary**: Never restart, let the actor die permanently
+///
+/// ## Restart Patterns
+/// - **OneForOne**: Restart only the failed child (classic isolation)
+/// - **OneForAll**: Restart all sibling actors (shared state recovery)
+/// - **RestForOne**: Restart failed child and all children started after it (dependency chain)
+///
+/// ## Advanced Policies
+/// - **Escalate**: Don't restart, escalate failure to parent supervisor
+/// - **Never**: Explicit no-restart policy (clearer than Temporary)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestartStrategy {
-    /// Restart only this actor (default)
+    // Classic restart patterns
+    /// Restart only this actor (default, classic isolation pattern)
     OneForOne,
-    /// Restart all sibling actors
+    /// Restart all sibling actors (shared state recovery pattern)
     OneForAll,
-    /// Restart this and all actors started after it
+    /// Restart this and all actors started after it (dependency chain pattern)
     RestForOne,
+
+    // OTP-style restart policies
+    /// Always restart on any termination (normal or abnormal)
+    /// Use for critical actors that must always be running
+    Permanent,
+    /// Restart only on abnormal termination (panic/error), not on normal exit
+    /// Use for workers that may exit normally but should recover from crashes
+    Transient,
+    /// Never restart, let the actor die permanently
+    /// Use for one-shot tasks or actors that shouldn't be automatically restarted
+    Temporary,
+
+    // Advanced supervision policies
+    /// Don't restart, escalate failure to parent supervisor
+    /// Use when failure indicates a larger system issue requiring higher-level intervention
+    Escalate,
+    /// Explicit no-restart policy (clearer than Temporary)
+    /// Use when you want to explicitly document that restart is not desired
+    Never,
+}
+
+/// Restart intensity configuration for supervision with deterministic backoff.
+///
+/// Controls restart rate limiting and backoff behavior to prevent crash loops
+/// while maintaining deterministic timing for embedded environments.
+#[derive(Debug, Clone)]
+pub struct RestartIntensity {
+    /// Maximum number of restarts within the time window before escalating
+    pub max_restarts: u32,
+    /// Time window for restart counting (in milliseconds)
+    pub restart_window_ms: u64,
+    /// Backoff strategy to apply between restart attempts
+    pub backoff_strategy: BackoffStrategy,
+}
+
+impl Default for RestartIntensity {
+    fn default() -> Self {
+        Self {
+            max_restarts: 5,
+            restart_window_ms: 60_000, // 60 seconds
+            backoff_strategy: BackoffStrategy::Exponential {
+                base_delay_ms: 100,
+                max_delay_ms: 30_000, // 30 seconds max
+            },
+        }
+    }
+}
+
+/// Deterministic backoff strategy for restart attempts.
+///
+/// All strategies provide deterministic delays based on failure count,
+/// ensuring predictable behavior in embedded and real-time systems.
+#[derive(Debug, Clone)]
+pub enum BackoffStrategy {
+    /// No delay between restart attempts
+    Immediate,
+    /// Linear backoff: delay = base_delay_ms * failure_count
+    Linear {
+        /// Base delay in milliseconds
+        base_delay_ms: u64,
+    },
+    /// Exponential backoff: delay = base_delay_ms * 2^failure_count (capped at max)
+    Exponential {
+        /// Base delay in milliseconds
+        base_delay_ms: u64,
+        /// Maximum delay in milliseconds (prevents infinite growth)
+        max_delay_ms: u64,
+    },
+    /// Fixed delay regardless of failure count
+    Fixed {
+        /// Fixed delay in milliseconds
+        delay_ms: u64,
+    },
+}
+
+/// Trait for analyzing panics and determining supervision actions.
+///
+/// Provides extensible panic analysis for custom supervision policies.
+/// Users can implement this trait to customize restart decisions based on
+/// panic details, actor context, or system state.
+pub trait PanicAnalyzer {
+    /// Analyze panic and determine if actor should be restarted
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the failed child (for context-aware decisions)
+    /// * `error` - The actor error that caused the failure
+    ///
+    /// # Returns
+    /// `true` if the actor should be restarted, `false` otherwise
+    fn should_restart(&self, child_id: &dyn core::fmt::Debug, error: &ActorError) -> bool;
+
+    /// Calculate backoff delay for restart (deterministic)
+    ///
+    /// # Arguments
+    /// * `failure_count` - Number of consecutive failures (starting from 1)
+    /// * `strategy` - Backoff strategy to apply
+    ///
+    /// # Returns
+    /// Delay in milliseconds before attempting restart
+    fn calculate_backoff_delay(&self, failure_count: u32, strategy: &BackoffStrategy) -> u64;
+
+    /// Determine if supervisor should escalate failure
+    ///
+    /// # Arguments
+    /// * `child_id` - Identifier of the failed child
+    /// * `failure_count` - Number of consecutive failures
+    /// * `intensity` - Restart intensity configuration
+    ///
+    /// # Returns
+    /// `true` if failure should be escalated to parent supervisor
+    fn should_escalate(
+        &self,
+        child_id: &dyn core::fmt::Debug,
+        failure_count: u32,
+        intensity: &RestartIntensity,
+    ) -> bool;
+}
+
+/// Default implementation of PanicAnalyzer following OTP patterns.
+///
+/// Provides sensible defaults for most supervision scenarios:
+/// - Restarts on panics and custom errors
+/// - Does not restart on clean shutdown failures
+/// - Uses deterministic backoff calculations
+/// - Escalates when restart intensity is exceeded
+#[derive(Debug, Default)]
+pub struct DefaultPanicAnalyzer;
+
+impl PanicAnalyzer for DefaultPanicAnalyzer {
+    fn should_restart(&self, _child_id: &dyn core::fmt::Debug, error: &ActorError) -> bool {
+        match error {
+            ActorError::Panic { .. } => true,
+            ActorError::Custom(_) => true,
+            ActorError::StartupFailure => true,
+            ActorError::MailboxClosed => true,
+            ActorError::Timeout => true,
+            ActorError::SupervisionFailure(_) => false,
+            ActorError::ShutdownFailure => false, // Don't restart on clean shutdown failure
+        }
+    }
+
+    fn calculate_backoff_delay(&self, failure_count: u32, strategy: &BackoffStrategy) -> u64 {
+        match strategy {
+            BackoffStrategy::Immediate => 0,
+            BackoffStrategy::Linear { base_delay_ms } => {
+                base_delay_ms.saturating_mul(failure_count as u64)
+            }
+            BackoffStrategy::Exponential {
+                base_delay_ms,
+                max_delay_ms,
+            } => {
+                let delay = base_delay_ms
+                    .saturating_mul(2_u64.saturating_pow(failure_count.saturating_sub(1)));
+                delay.min(*max_delay_ms)
+            }
+            BackoffStrategy::Fixed { delay_ms } => *delay_ms,
+        }
+    }
+
+    fn should_escalate(
+        &self,
+        _child_id: &dyn core::fmt::Debug,
+        failure_count: u32,
+        intensity: &RestartIntensity,
+    ) -> bool {
+        failure_count >= intensity.max_restarts
+    }
 }
 
 /// Supervisor message for communication between supervisor and child actors.
 ///
 /// This message type enables the OTP-style supervision patterns described in the research.
 /// Supervisors can receive notifications about child lifecycle events and react accordingly.
+/// Enhanced with detailed error reporting for Task 5.4 panic handling and hierarchical escalation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)] // Error information is important for supervision decisions
 pub enum SupervisorMessage<ChildId = u32> {
     /// Child actor has started successfully
     ChildStarted { id: ChildId },
     /// Child actor has stopped gracefully
     ChildStopped { id: ChildId },
     /// Child actor has panicked or failed
-    ChildPanicked { id: ChildId },
+    ///
+    /// Enhanced with detailed error information including panic details.
+    /// This enables supervisors to make informed restart decisions based on failure type.
+    /// Error is boxed to reduce enum size.
+    ChildPanicked { id: ChildId, error: BoxedActorError },
     /// Request to start a new child actor
     StartChild { id: ChildId },
     /// Request to stop a child actor
     StopChild { id: ChildId },
     /// Request to restart a child actor
     RestartChild { id: ChildId },
+
+    // Enhanced hierarchical supervision messages
+    /// Child supervisor has escalated a failure (hierarchical supervision)
+    ///
+    /// Sent when a child supervisor cannot handle a failure and escalates it upward.
+    /// Enables multi-level supervision trees with controlled fault propagation.
+    ChildEscalated {
+        /// ID of the supervisor that escalated
+        supervisor_id: ChildId,
+        /// ID of the original failed child within that supervisor
+        failed_child_id: ChildId,
+        /// The original error that triggered the escalation
+        error: BoxedActorError,
+    },
 }
 
 /// Supervisor trait for managing child actors with restart strategies.
@@ -252,6 +502,7 @@ pub trait BatchActor: Send {
     ///
     /// # Errors
     /// Returns `Err(ActorError)` if actor startup fails.
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
     fn on_start(&mut self) -> Result<(), ActorError> {
         Ok(())
     }
@@ -260,6 +511,7 @@ pub trait BatchActor: Send {
     ///
     /// # Errors
     /// Returns `Err(ActorError)` if actor shutdown fails.
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
     fn on_stop(self) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -270,6 +522,20 @@ pub trait BatchActor: Send {
     /// Called if the actor panics. Default: `RestartStrategy::OneForOne`
     fn on_panic(&self, _info: &PanicInfo) -> RestartStrategy {
         RestartStrategy::OneForOne
+    }
+
+    /// Called before restart to reset state.
+    ///
+    /// This hook allows actors to clean up state or perform initialization
+    /// when restarted by a supervisor. Called after actor creation but before
+    /// the first message is processed.
+    ///
+    /// # Returns
+    /// `Ok(())` if restart preparation succeeds, `Err(ActorError)` if it fails
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
+    fn on_restart(&mut self) -> Result<(), ActorError> {
+        // Default: no special restart logic
+        Ok(())
     }
 }
 
@@ -369,6 +635,7 @@ pub trait Actor: Send {
     ///
     /// # Errors
     /// Returns `Err(ActorError)` if actor startup fails.
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
     fn on_start(&mut self) -> Result<(), ActorError> {
         Ok(())
     }
@@ -377,6 +644,7 @@ pub trait Actor: Send {
     ///
     /// # Errors
     /// Returns `Err(ActorError)` if actor shutdown fails.
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
     fn on_stop(self) -> Result<(), ActorError>
     where
         Self: Sized,
@@ -387,6 +655,114 @@ pub trait Actor: Send {
     /// Called if the actor panics. Default: `RestartStrategy::OneForOne`
     fn on_panic(&self, _info: &PanicInfo) -> RestartStrategy {
         RestartStrategy::OneForOne
+    }
+
+    /// Called before restart to reset state.
+    ///
+    /// This hook allows actors to clean up state or perform initialization
+    /// when restarted by a supervisor. Called after actor creation but before
+    /// the first message is processed.
+    ///
+    /// # Returns
+    /// `Ok(())` if restart preparation succeeds, `Err(ActorError)` if it fails
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
+    fn on_restart(&mut self) -> Result<(), ActorError> {
+        // Default: no special restart logic
+        Ok(())
+    }
+
+    /// Embassy-compatible error-returning message handler.
+    ///
+    /// This method provides an alternative to `handle()` that returns `Result<(), ActorError>`
+    /// instead of just `()`. This enables Embassy actors to signal failures cooperatively
+    /// without relying on panic unwinding, which is not available in no_std environments.
+    ///
+    /// ## Default Implementation
+    ///
+    /// The default implementation wraps the regular `handle()` method for backward compatibility.
+    /// Embassy actors should override this method to provide explicit error handling.
+    ///
+    /// ## Usage Patterns
+    ///
+    /// - **Tokio actors**: Can continue using `handle()` with panic recovery
+    /// - **Embassy actors**: Should override `handle_safe()` to return errors explicitly
+    /// - **Dual-platform actors**: Can override both for optimal platform behavior
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use lit_bit_core::actor::{Actor, ActorError};
+    /// # struct MyActor;
+    /// impl Actor for MyActor {
+    ///     type Message = String;
+    ///     type Future<'a> = core::future::Ready<()> where Self: 'a;
+    ///
+    ///     fn handle(&mut self, _msg: String) -> Self::Future<'_> {
+    ///         core::future::ready(())
+    ///     }
+    ///
+    ///     // Embassy-specific error handling
+    ///     async fn handle_safe(&mut self, msg: String) -> Result<(), ActorError> {
+    ///         if msg == "error" {
+    ///             return Err(ActorError::Custom("Deliberate failure"));
+    ///         }
+    ///         self.handle(msg).await;
+    ///         Ok(())
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Note: Embassy async trait design choice - suppressing lint for cooperative error handling patterns
+    #[allow(async_fn_in_trait)]
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
+    async fn handle_safe(&mut self, msg: Self::Message) -> Result<(), ActorError> {
+        // Default implementation wraps regular handle() for backward compatibility
+        self.handle(msg).await;
+        Ok(())
+    }
+
+    /// Embassy cleanup hook called before restart.
+    ///
+    /// This method allows actors to perform cleanup operations before being restarted
+    /// by a supervisor. Unlike `on_stop()`, this method doesn't consume `self` and
+    /// can be called multiple times during an actor's lifetime.
+    ///
+    /// ## Usage
+    ///
+    /// - Called by Embassy loop-based restart patterns before state reset
+    /// - Allows releasing resources without destroying the actor instance
+    /// - Enables graceful resource cleanup in restart scenarios
+    ///
+    /// ## Default Implementation
+    ///
+    /// The default implementation does nothing, making this method optional for
+    /// actors that don't need special cleanup logic.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use lit_bit_core::actor::{Actor, ActorError};
+    /// # struct MyActor { connection: Option<()> }
+    /// impl Actor for MyActor {
+    ///     type Message = String;
+    ///     type Future<'a> = core::future::Ready<()> where Self: 'a;
+    ///
+    ///     fn handle(&mut self, _msg: String) -> Self::Future<'_> {
+    ///         core::future::ready(())
+    ///     }
+    ///
+    ///     fn on_cleanup(&mut self) -> Result<(), ActorError> {
+    ///         // Close connection before restart
+    ///         if let Some(_conn) = self.connection.take() {
+    ///             // Clean up connection
+    ///         }
+    ///         Ok(())
+    ///     }
+    /// }
+    #[allow(clippy::result_large_err)] // ActorError provides detailed failure information
+    fn on_cleanup(&mut self) -> Result<(), ActorError> {
+        // Default: no cleanup needed
+        Ok(())
     }
 }
 
@@ -467,6 +843,19 @@ pub trait AsyncActor: Send {
     fn on_panic(&self, _info: &PanicInfo) -> RestartStrategy {
         RestartStrategy::OneForOne
     }
+
+    /// Called before restart to reset state.
+    ///
+    /// This hook allows actors to clean up state or perform initialization
+    /// when restarted by a supervisor. Called after actor creation but before
+    /// the first message is processed.
+    ///
+    /// # Returns
+    /// `Ok(())` if restart preparation succeeds, `Err(ActorError)` if it fails
+    fn on_restart(&mut self) -> Result<(), ActorError> {
+        // Default: no special restart logic
+        Ok(())
+    }
 }
 
 /// Blanket implementation of Actor for any `AsyncActor` when heap allocation is available.
@@ -501,6 +890,10 @@ where
 
     fn on_panic(&self, info: &PanicInfo) -> RestartStrategy {
         AsyncActor::on_panic(self, info)
+    }
+
+    fn on_restart(&mut self) -> Result<(), ActorError> {
+        AsyncActor::on_restart(self)
     }
 }
 
@@ -1099,8 +1492,9 @@ pub async fn batch_actor_task<A: BatchActor, const N: usize>(
 pub mod address;
 pub mod backpressure;
 pub mod integration;
+pub mod panic_handling;
 pub mod spawn;
-pub mod supervision; // Task 5.1: Supervision with Async
+pub mod supervision; // Task 5.1: Supervision with Async // Task 5.4: Advanced Error Handling
 
 // Re-export spawn functions for convenience
 #[cfg(feature = "async-embassy")]
@@ -1110,6 +1504,45 @@ pub use spawn::{
     spawn_actor_tokio, spawn_batch_actor_tokio, spawn_supervised_actor_tokio,
     spawn_supervised_batch_actor_tokio,
 };
+
+// Re-export supervision types for convenience (Task 5.1 & 5.4)
+pub use supervision::{SupervisorActor, SupervisorError, SupervisorTimer};
+
+// Re-export panic handling utilities for convenience (Task 5.4)
+pub use panic_handling::create_controlled_failure;
+
+#[cfg(feature = "async-tokio")]
+pub use panic_handling::{
+    capture_panic_info, capture_panic_info_from_payload, capture_panic_info_from_payload_with_id,
+    capture_panic_info_with_id,
+};
+
+#[cfg(feature = "async-embassy")]
+pub use panic_handling::{simulate_panic_for_testing, simulate_panic_with_id};
+
+/// Escalation policy for hierarchical supervision.
+///
+/// Defines how a supervisor should handle failures that exceed restart intensity limits.
+/// This enables multi-level supervision trees where failures can be escalated upward
+/// for higher-level intervention.
+#[derive(Debug, Clone)]
+pub enum EscalationPolicy {
+    /// Supervisor terminates itself on escalation (simple meltdown)
+    /// Use when the supervisor should fail-fast and let its parent handle recovery
+    TerminateSelf,
+    /// Send escalation message to parent supervisor (controlled escalation)
+    /// Use when you want explicit parent notification with custom handling
+    NotifyParent,
+    /// Apply custom escalation logic via trait method
+    /// Use when you need application-specific escalation behavior
+    Custom,
+}
+
+impl Default for EscalationPolicy {
+    fn default() -> Self {
+        Self::TerminateSelf
+    }
+}
 
 #[cfg(test)]
 mod tests {

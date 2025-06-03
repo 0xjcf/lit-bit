@@ -58,19 +58,6 @@ addr.send(TrafficEvent::Timer).await?;
 
 ## 🚀 Quick Start
 
-### Installation
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-lit-bit-core = "0.1"
-lit-bit-macro = "0.1"
-
-# For async/Tokio support
-tokio = { version = "1.0", features = ["full"] }
-```
-
 ### Your First Statechart
 
 ```rust
