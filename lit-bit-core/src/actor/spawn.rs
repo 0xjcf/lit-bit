@@ -889,7 +889,7 @@ pub async fn panic_safe_actor_task<A: Actor>(
     }
 
     // Call actor shutdown hook on normal termination
-    // Note: on_stop consumes self, so we can't call it after a panic
+    // Note: on_stop takes &mut self, so the actor still exists after this call
     // This is only reached on normal mailbox closure
     let _ = actor.on_stop();
     Ok(())
