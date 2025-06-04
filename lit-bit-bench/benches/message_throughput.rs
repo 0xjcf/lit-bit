@@ -52,10 +52,9 @@ fn bench_message_throughput(c: &mut Criterion) {
             group.bench_with_input(
                 BenchmarkId::new(
                     match runtime_type {
-                        RuntimeType::TokioSingleThread => "tokio_single",
                         RuntimeType::TokioMultiThread => "tokio_multi",
+                        RuntimeType::TokioSingleThread => "tokio_single",
                         RuntimeType::FuturesLite => "futures_lite",
-                        #[cfg(feature = "runtime-embassy")]
                         RuntimeType::Embassy => "embassy",
                     },
                     messages_per_batch,

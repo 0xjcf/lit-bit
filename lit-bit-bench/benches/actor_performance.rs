@@ -38,26 +38,40 @@ pub fn bench_actor_performance(c: &mut Criterion) {
     let rt = TokioBuilder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap();
+        .expect("Failed to create Tokio runtime for benchmarks");
 
-    // Measure actor creation time
-    group.bench_function("actor_creation", |b| {
+    // Measure actor creation and cleanup time
+    group.bench_function("actor_creation_and_cleanup", |b| {
         b.iter(|| {
+            // Create and spawn actor
             let actor = TestActor::new();
-            let _addr = lit_bit_core::actor::spawn_actor_tokio(actor, 16);
+            let addr = lit_bit_core::actor::spawn_actor_tokio(actor, 16);
+
+            // Ensure cleanup by explicitly dropping the address
+            drop(addr);
         });
     });
 
-    // Measure message sending time
+    // Measure message sending time with fresh actor per iteration
     group.bench_function("message_send", |b| {
-        let actor = TestActor::new();
-        let addr = lit_bit_core::actor::spawn_actor_tokio(actor, 16);
+        b.iter_with_setup(
+            // Setup: Create fresh actor for each iteration
+            || {
+                let actor = TestActor::new();
+                lit_bit_core::actor::spawn_actor_tokio(actor, 16)
+            },
+            // Benchmark: Send message and ensure actor processes it
+            |addr| {
+                rt.block_on(async {
+                    addr.send(TestMessage(1))
+                        .await
+                        .expect("Failed to send message to actor");
+                });
 
-        b.iter(|| {
-            rt.block_on(async {
-                addr.send(TestMessage(0)).await.unwrap();
-            });
-        });
+                // Cleanup after each iteration
+                drop(addr);
+            },
+        );
     });
 
     group.finish();

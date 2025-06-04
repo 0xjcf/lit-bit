@@ -2232,12 +2232,22 @@ pub(crate) mod code_generator {
                 }
 
                 /// Timer handle for cancellation support
-                #[derive(Debug)]
                 pub enum TimerHandle {
                     #[cfg(feature = "async-tokio")]
                     Tokio(tokio::task::JoinHandle<()>),
                     #[cfg(feature = "embassy")]
                     Embassy(Pin<Box<dyn Future<Output = ()> + Send>>),
+                }
+
+                impl std::fmt::Debug for TimerHandle {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        match self {
+                            #[cfg(feature = "async-tokio")]
+                            TimerHandle::Tokio(_) => f.debug_tuple("Tokio").field(&"<JoinHandle>").finish(),
+                            #[cfg(feature = "embassy")]
+                            TimerHandle::Embassy(_) => f.debug_tuple("Embassy").field(&"<Future>").finish(),
+                        }
+                    }
                 }
 
                 impl TimerHandle {

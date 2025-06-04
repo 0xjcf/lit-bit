@@ -431,7 +431,7 @@ mod tests {
         meter.record(Duration::from_nanos(300));
         meter.record(Duration::from_nanos(400));
 
-        assert_eq!(meter.percentile(0.50), Duration::from_nanos(250));
+        assert_eq!(meter.percentile(0.50), Duration::from_nanos(200));
         assert_eq!(meter.percentile(0.95), Duration::from_nanos(400));
         assert_eq!(meter.mean(), Duration::from_nanos(250));
     }

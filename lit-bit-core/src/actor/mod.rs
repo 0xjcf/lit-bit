@@ -987,14 +987,12 @@ pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 #[macro_export]
 macro_rules! static_mailbox {
     ($(#[$attr:meta])* $name:ident: $msg_type:ty, $capacity:expr) => {{
-        use static_cell::StaticCell;
-
         $(#[$attr])*
-        static $name: StaticCell<heapless::spsc::Queue<$msg_type, $capacity>> = StaticCell::new();
+        static $name: ::static_cell::StaticCell<::heapless::spsc::Queue<$msg_type, $capacity>> = ::static_cell::StaticCell::new();
 
         // Initialize the queue and get a 'static reference
-        let queue: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
-            $name.init(heapless::spsc::Queue::new());
+        let queue: &'static mut ::heapless::spsc::Queue<$msg_type, $capacity> =
+            $name.init(::heapless::spsc::Queue::new());
 
         // Split the queue into producer and consumer
         queue.split()
@@ -1002,13 +1000,11 @@ macro_rules! static_mailbox {
 
     // Variant without attributes
     ($name:ident: $msg_type:ty, $capacity:expr) => {{
-        use static_cell::StaticCell;
-
-        static $name: StaticCell<heapless::spsc::Queue<$msg_type, $capacity>> = StaticCell::new();
+        static $name: ::static_cell::StaticCell<::heapless::spsc::Queue<$msg_type, $capacity>> = ::static_cell::StaticCell::new();
 
         // Initialize the queue and get a 'static reference
-        let queue: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
-            $name.init(heapless::spsc::Queue::new());
+        let queue: &'static mut ::heapless::spsc::Queue<$msg_type, $capacity> =
+            $name.init(::heapless::spsc::Queue::new());
 
         // Split the queue into producer and consumer
         queue.split()
@@ -1107,10 +1103,8 @@ pub fn create_mailbox<T>(capacity: usize) -> (Outbox<T>, Inbox<T>) {
 #[macro_export]
 macro_rules! define_static_mailbox {
     ($name:ident, $type:ty, $size:expr) => {
-        use heapless::spsc::Queue;
-        use static_cell::StaticCell;
-
-        static $name: StaticCell<Queue<$type, $size>> = StaticCell::new();
+        static $name: ::static_cell::StaticCell<::heapless::spsc::Queue<$type, $size>> =
+            ::static_cell::StaticCell::new();
     };
 }
 

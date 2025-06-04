@@ -50,7 +50,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-#[allow(unused_imports)]
+#[cfg(feature = "std")]
 use lit_bit_core::StateMachine;
 use lit_bit_macro::{statechart, statechart_event};
 

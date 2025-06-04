@@ -113,8 +113,8 @@
 //! # Run in std mode (with visual output)
 //! cargo run --example coffee_shop
 //!
-//! # Run in no_std mode (embedded systems)
-//! cargo run --example coffee_shop --no-default-features --features panic-halt
+//! # Run with tokio features explicitly
+//! cargo run --example coffee_shop --features async-tokio
 //! ```
 //!
 //! ## 📚 Further Reading
@@ -123,18 +123,7 @@
 //! - [Message Passing](https://en.wikipedia.org/wiki/Message_passing)
 //! - [Concurrent Computing](https://en.wikipedia.org/wiki/Concurrent_computing)
 
-#![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(not(feature = "std"), no_main)]
-
-use heapless::spsc::Queue;
 use lit_bit_core::{Actor, create_mailbox, static_mailbox};
-use static_cell::StaticCell;
-
-#[cfg(not(feature = "std"))]
-use lit_bit_core::SendError;
-
-#[cfg(not(feature = "std"))]
-extern crate panic_halt;
 
 /// Represents different types of drinks a barista can make.
 ///
@@ -149,8 +138,6 @@ enum DrinkType {
     Latte,
     /// Espresso with steamed milk and foam
     Cappuccino,
-    /// Espresso with hot water
-    Americano,
 }
 
 /// Messages that can be sent to the barista actor.
@@ -173,8 +160,6 @@ enum BaristaMessage {
     },
     /// Signal the barista to take a break
     TakeBreak,
-    /// Request to restock supplies
-    RestockSupplies,
 }
 
 /// Messages that can be sent to the cashier actor.
@@ -186,13 +171,6 @@ enum CashierMessage {
     /// Process payment for a new order
     NewOrder {
         /// Amount to charge
-        amount: f32,
-        /// Order identifier
-        order_number: u32,
-    },
-    /// Process a refund
-    Refund {
-        /// Amount to refund
         amount: f32,
         /// Order identifier
         order_number: u32,
@@ -274,13 +252,6 @@ impl Barista {
                     140
                 }
             }
-            DrinkType::Americano => {
-                if extra_shot {
-                    90
-                } else {
-                    75
-                }
-            }
         }
     }
 }
@@ -318,40 +289,28 @@ impl Actor for Barista {
             } => {
                 // Check actor state before processing
                 if self.is_on_break {
-                    #[cfg(feature = "std")]
                     println!(
-                        "🚫 Sorry, barista is on break! Order #{} will have to wait.",
-                        order_number
+                        "🚫 Sorry, barista is on break! Order #{order_number} will have to wait."
                     );
                     return core::future::ready(());
                 }
 
                 if self.needs_restock {
-                    #[cfg(feature = "std")]
                     println!("⚠️ Need to restock supplies before making more drinks!");
                     return core::future::ready(());
                 }
 
                 // Process the drink order
-                let prep_time = self.make_drink(&drink, extra_shot);
-                #[cfg(feature = "std")]
+                let _prep_time = self.make_drink(&drink, extra_shot);
                 println!(
-                    "☕ Order #{}: Making {:?}{} (takes {} seconds)",
-                    order_number,
-                    drink,
+                    "☕ Order #{order_number}: Making {drink:?}{} (takes {} seconds)",
                     if extra_shot { " with extra shot" } else { "" },
-                    prep_time / 60
+                    _prep_time / 60
                 );
             }
             BaristaMessage::TakeBreak => {
                 self.is_on_break = true;
-                #[cfg(feature = "std")]
                 println!("🌟 Barista is taking a well-deserved break!");
-            }
-            BaristaMessage::RestockSupplies => {
-                self.needs_restock = false;
-                #[cfg(feature = "std")]
-                println!("📦 Restocking supplies...");
             }
         }
         core::future::ready(())
@@ -401,56 +360,21 @@ impl Actor for Cashier {
                 order_number,
             } => {
                 if !self.register_open {
-                    #[cfg(feature = "std")]
-                    println!(
-                        "🚫 Register is closed! Can't process order #{}",
-                        order_number
-                    );
+                    println!("🚫 Register is closed! Can't process order #{order_number}");
                     return core::future::ready(());
                 }
 
                 self.total_sales += amount;
-                #[cfg(feature = "std")]
-                println!(
-                    "💰 Order #{}: Processed payment of ${:.2}",
-                    order_number, amount
-                );
-            }
-            CashierMessage::Refund {
-                amount,
-                order_number,
-            } => {
-                if !self.register_open {
-                    #[cfg(feature = "std")]
-                    println!(
-                        "🚫 Register is closed! Can't process refund for order #{}",
-                        order_number
-                    );
-                    return core::future::ready(());
-                }
-
-                self.total_sales -= amount;
-                #[cfg(feature = "std")]
-                println!("💸 Order #{}: Refunded ${:.2}", order_number, amount);
+                println!("💰 Order #{order_number}: Processed payment of ${amount:.2}");
             }
             CashierMessage::CloseRegister => {
                 self.register_open = false;
-                #[cfg(feature = "std")]
                 println!("🔐 Register closed. Total sales: ${:.2}", self.total_sales);
             }
         }
         core::future::ready(())
     }
 }
-
-/// Static storage for the cashier's payment queue.
-///
-/// This demonstrates:
-/// - Static allocation for no_std environments
-/// - Memory section placement for embedded systems
-/// - Fixed-size queue capacity (like a physical receipt spike)
-#[cfg_attr(not(feature = "std"), unsafe(link_section = ".fast_memory"))]
-static REGISTER_QUEUE: StaticCell<Queue<CashierMessage, 32>> = StaticCell::new();
 
 /// Example demonstrating the actor system in action.
 ///
@@ -459,7 +383,6 @@ static REGISTER_QUEUE: StaticCell<Queue<CashierMessage, 32>> = StaticCell::new()
 /// - Taking and processing orders (message passing)
 /// - Managing breaks and restocking (state changes)
 /// - Closing procedures (shutdown)
-#[cfg(feature = "std")]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("☕ Welcome to the Lit-Bit Coffee Shop! ☕");
@@ -472,7 +395,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut barista = Barista::new();
 
     // Create our cashier's queue using create_mailbox
-    let (mut payment_sender, mut payment_receiver) = create_mailbox(&REGISTER_QUEUE);
+    let (payment_sender, mut payment_receiver) = create_mailbox(32);
     let mut cashier = Cashier::new();
 
     // Simulate a busy morning at the coffee shop!
@@ -481,10 +404,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Customer 1: Orders a latte
     let order_num = 1;
     payment_sender
-        .enqueue(CashierMessage::NewOrder {
+        .send(CashierMessage::NewOrder {
             amount: 4.50,
             order_number: order_num,
         })
+        .await
         .unwrap();
     order_sender
         .enqueue(BaristaMessage::MakeDrink {
@@ -497,10 +421,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Customer 2: Orders an espresso with extra shot
     let order_num = 2;
     payment_sender
-        .enqueue(CashierMessage::NewOrder {
+        .send(CashierMessage::NewOrder {
             amount: 3.00,
             order_number: order_num,
         })
+        .await
         .unwrap();
     order_sender
         .enqueue(BaristaMessage::MakeDrink {
@@ -518,7 +443,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Process all pending payments
     println!("\n🏦 Cashier processing payments...");
-    while let Some(transaction) = payment_receiver.dequeue() {
+    while let Ok(transaction) = payment_receiver.try_recv() {
         cashier.handle(transaction).await;
     }
 
@@ -529,10 +454,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Customer 3: Tries to order during break
     let order_num = 3;
     payment_sender
-        .enqueue(CashierMessage::NewOrder {
+        .send(CashierMessage::NewOrder {
             amount: 4.00,
             order_number: order_num,
         })
+        .await
         .unwrap();
     order_sender
         .enqueue(BaristaMessage::MakeDrink {
@@ -547,45 +473,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(order) = order_receiver.dequeue() {
         barista.handle(order).await;
     }
-    while let Some(transaction) = payment_receiver.dequeue() {
+    while let Ok(transaction) = payment_receiver.try_recv() {
         cashier.handle(transaction).await;
     }
 
     // Close up shop
     println!("\n🌙 Closing time...");
     payment_sender
-        .enqueue(CashierMessage::CloseRegister)
+        .send(CashierMessage::CloseRegister)
+        .await
         .unwrap();
-    if let Some(transaction) = payment_receiver.dequeue() {
+    if let Ok(transaction) = payment_receiver.try_recv() {
         cashier.handle(transaction).await;
     }
 
     println!("\n✨ Coffee shop example completed!");
     Ok(())
-}
-
-/// No-std version of the coffee shop example
-#[cfg(not(feature = "std"))]
-#[unsafe(no_mangle)]
-fn main() -> ! {
-    // Create actors and mailboxes
-    let (order_sender, mut order_receiver) =
-        static_mailbox!(BARISTA_ORDER_SPIKE: BaristaMessage, 16);
-    let mut barista = Barista::new();
-
-    let (payment_sender, mut payment_receiver) = create_mailbox(&REGISTER_QUEUE);
-    let mut cashier = Cashier::new();
-
-    // Main control loop
-    loop {
-        // Process barista messages
-        if let Some(order) = order_receiver.dequeue() {
-            let _ = barista.handle(order);
-        }
-
-        // Process cashier messages
-        if let Some(transaction) = payment_receiver.dequeue() {
-            let _ = cashier.handle(transaction);
-        }
-    }
 }
