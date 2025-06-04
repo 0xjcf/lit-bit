@@ -1172,7 +1172,7 @@ async fn yield_control() {
     YieldOnce { yielded: false }.await;
 }
 
-// Message processing loop implementation (Task 3.1)
+/// Message processing loop implementation (Task 3.1)
 /// Runs an actor's message processing loop.
 ///
 /// # Errors
@@ -1318,6 +1318,14 @@ where
         future.await;
     }
 
+    // Cleanup hook - call on_stop when the channel is closed
+    let stop_result = actor.on_stop();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = stop_result {
+        log::error!("Actor shutdown failed: {e:?}");
+    }
+    stop_result?;
+
     Ok(())
 }
 
@@ -1455,24 +1463,35 @@ where
 
     // Process messages in batches
     let mut batch = Vec::with_capacity(actor.max_batch_size());
-    loop {
-        // Try to fill the batch
+
+    // Main batch processing loop - exit when channel closes
+    while let Some(first_msg) = inbox.recv().await {
+        // Start with the first message
+        batch.clear();
+        batch.push(first_msg);
+
+        // Try to drain additional messages without blocking
         while batch.len() < actor.max_batch_size() {
             match inbox.try_recv() {
                 Ok(msg) => batch.push(msg),
-                Err(_) => break,
+                Err(_) => break, // No more messages available right now
             }
         }
 
-        // Process the batch if we have any messages
-        if !batch.is_empty() {
-            let future = actor.handle_batch(&batch);
-            future.await;
-            batch.clear();
-        } else {
-            tokio::task::yield_now().await;
-        }
+        // Process the batch
+        let future = actor.handle_batch(&batch);
+        future.await;
     }
+
+    // Cleanup hook - call on_stop when the channel is closed
+    let stop_result = actor.on_stop();
+    #[cfg(feature = "debug-log")]
+    if let Err(ref e) = stop_result {
+        log::error!("Batch actor shutdown failed: {e:?}");
+    }
+    stop_result?;
+
+    Ok(())
 }
 
 /// Runs a batch-aware actor's message processing loop (no_std version).
