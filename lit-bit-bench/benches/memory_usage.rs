@@ -1,13 +1,39 @@
 //! Memory usage benchmarks for statechart and actor systems
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use lit_bit_bench::utils::TrackingAllocator;
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use lit_bit_bench::metrics::TrackingAllocator;
 use lit_bit_core::actor::{Actor, create_mailbox};
 use lit_bit_macro::statechart;
+use std::alloc::{GlobalAlloc, Layout};
+use tokio::runtime::Builder as TokioBuilder;
+
+// Wrapper around TrackingAllocator that implements GlobalAlloc
+struct GlobalTrackingAllocator(TrackingAllocator);
+
+impl GlobalTrackingAllocator {
+    const fn new() -> Self {
+        Self(TrackingAllocator::new())
+    }
+}
 
 // Install TrackingAllocator as the global allocator to track all heap allocations
 #[global_allocator]
-static GLOBAL_ALLOCATOR: TrackingAllocator = TrackingAllocator::new();
+static GLOBAL_ALLOCATOR: GlobalTrackingAllocator = GlobalTrackingAllocator::new();
+
+unsafe impl GlobalAlloc for GlobalTrackingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { std::alloc::System.alloc(layout) };
+        if !ptr.is_null() {
+            self.0.record_allocation(layout.size());
+        }
+        ptr
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { std::alloc::System.dealloc(ptr, layout) };
+        self.0.record_deallocation(layout.size());
+    }
+}
 
 // Note: For more advanced zero-allocation testing, a custom global allocator
 // could be implemented here to track allocation counts globally
@@ -20,6 +46,7 @@ struct BenchActor {
     data: Vec<u8>,
 }
 
+#[allow(dead_code)] // Used in benchmarks
 impl BenchActor {
     fn new(size: usize) -> Self {
         Self {
@@ -104,7 +131,7 @@ fn bench_statechart_memory_footprint(c: &mut Criterion) {
             |b, &num_states| {
                 b.iter(|| {
                     // Measure actual memory usage using tracking allocator
-                    GLOBAL_ALLOCATOR.reset();
+                    GLOBAL_ALLOCATOR.0.reset();
 
                     // Create multiple statecharts to simulate memory usage
                     let statecharts: Vec<_> = (0..num_states)
@@ -117,7 +144,7 @@ fn bench_statechart_memory_footprint(c: &mut Criterion) {
                         })
                         .collect();
 
-                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.0.allocated_bytes();
                     black_box((statecharts, memory_used));
                 });
             },
@@ -137,7 +164,7 @@ fn bench_mailbox_memory_usage(c: &mut Criterion) {
             |b, &capacity| {
                 b.iter(|| {
                     // Measure actual mailbox memory usage
-                    GLOBAL_ALLOCATOR.reset();
+                    GLOBAL_ALLOCATOR.0.reset();
 
                     // Create real mailbox instances with the given capacity
                     let (outbox, inbox) = create_mailbox::<u32>(capacity);
@@ -147,7 +174,7 @@ fn bench_mailbox_memory_usage(c: &mut Criterion) {
                         let _ = outbox.try_send(u32::try_from(i).unwrap_or(u32::MAX));
                     }
 
-                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.0.allocated_bytes();
                     black_box((outbox, inbox, memory_used));
                 });
             },
@@ -167,7 +194,7 @@ fn bench_actor_system_scaling(c: &mut Criterion) {
             |b, &num_actors| {
                 b.iter(|| {
                     // Measure memory usage with real actor instances
-                    GLOBAL_ALLOCATOR.reset();
+                    GLOBAL_ALLOCATOR.0.reset();
 
                     // Create real actors with typical state and behavior
                     let actors: Vec<BenchActor> = (0..num_actors)
@@ -178,7 +205,7 @@ fn bench_actor_system_scaling(c: &mut Criterion) {
                     let mailboxes: Vec<_> =
                         (0..num_actors).map(|_| create_mailbox::<u32>(16)).collect();
 
-                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.0.allocated_bytes();
                     black_box((actors, mailboxes, memory_used));
                 });
             },
@@ -194,7 +221,7 @@ fn bench_zero_allocation_paths(c: &mut Criterion) {
     group.bench_function("no_std_transition", |b| {
         b.iter(|| {
             // Verify zero-allocation state transitions
-            GLOBAL_ALLOCATOR.reset();
+            GLOBAL_ALLOCATOR.0.reset();
 
             // Create and exercise a statechart that should not allocate
             let mut machine = MemoryBenchMachine::new(
@@ -203,14 +230,14 @@ fn bench_zero_allocation_paths(c: &mut Criterion) {
             )
             .expect("Failed to create machine");
 
-            let initial_count = GLOBAL_ALLOCATOR.allocated_bytes();
+            let initial_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
 
             // Perform transitions that should not allocate
             let result1 = machine.send(&MemoryBenchEvent::Increment);
             let result2 = machine.send(&MemoryBenchEvent::Toggle);
             let result3 = machine.send(&MemoryBenchEvent::Reset);
 
-            let final_count = GLOBAL_ALLOCATOR.allocated_bytes();
+            let final_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
             let allocations = final_count.saturating_sub(initial_count);
 
             // Assert zero allocations occurred during transitions
@@ -222,28 +249,44 @@ fn bench_zero_allocation_paths(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("static_mailbox_operation", |b| {
+    // Test mailbox operations in no_std mode - should not allocate
+    #[cfg(not(feature = "async-tokio"))]
+    group.bench_function("no_std_mailbox_zero_allocation", |b| {
         // Pre-create mailbox outside the benchmark to avoid allocation during test
         let (outbox, mut inbox) = create_mailbox::<u32>(16);
 
         b.iter(|| {
-            // Verify static mailbox operations don't allocate
-            GLOBAL_ALLOCATOR.reset();
-            let initial_count = GLOBAL_ALLOCATOR.allocated_bytes();
+            // Verify mailbox operations don't allocate in no_std mode
+            GLOBAL_ALLOCATOR.0.reset();
+            let initial_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
 
             // Perform mailbox operations that should not allocate
             let send_result = outbox.try_send(42);
             let recv_result = inbox.try_recv();
 
-            let final_count = GLOBAL_ALLOCATOR.allocated_bytes();
+            let final_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
             let allocations = final_count.saturating_sub(initial_count);
 
             // Assert zero allocations occurred
             assert_eq!(
                 allocations, 0,
-                "Mailbox operations should not allocate memory"
+                "Mailbox operations should not allocate memory in no_std mode"
             );
-            let _ = black_box((send_result, recv_result, allocations));
+            black_box((send_result, recv_result, allocations));
+        });
+    });
+
+    // Test mailbox operations in async-tokio mode - may allocate
+    #[cfg(feature = "async-tokio")]
+    group.bench_function("async_tokio_mailbox_operation", |b| {
+        // Pre-create mailbox outside the benchmark to avoid allocation during test
+        let (outbox, mut inbox) = create_mailbox::<u32>(16);
+
+        b.iter(|| {
+            // In async mode, we accept some allocations and focus on functionality
+            let _ = outbox.try_send(42);
+            let _ = inbox.try_recv();
+            black_box(());
         });
     });
 
@@ -256,9 +299,10 @@ fn bench_kpi_validation(c: &mut Criterion) {
     // Validate the 512B RAM overhead target for single actor with N=8 queue
     group.bench_function("single_actor_512b_target", |b| {
         let mut final_memory_used = 0;
+        let mut peak_memory_used = 0;
 
         b.iter(|| {
-            GLOBAL_ALLOCATOR.reset();
+            GLOBAL_ALLOCATOR.0.reset();
 
             // Create a single actor with 8-capacity mailbox
             let actor = BenchActor::new(64); // Reasonable state size
@@ -269,18 +313,39 @@ fn bench_kpi_validation(c: &mut Criterion) {
                 let _ = outbox.try_send(i);
             }
 
-            let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
-            final_memory_used = memory_used; // Capture for reporting later
+            let memory_used = GLOBAL_ALLOCATOR.0.allocated_bytes();
+            let peak_used = GLOBAL_ALLOCATOR.0.peak_allocation();
+            final_memory_used = memory_used; // Capture for reporting
+            peak_memory_used = peak_used;
 
-            // In real embedded systems, this should be ≤ 512B
-            // Here we just measure and report
             black_box((actor, outbox, inbox, memory_used));
         });
 
-        // Report memory usage once after benchmark completes
+        // Enhanced memory reporting
+        println!("\n🎯 Memory Usage KPI Validation");
+        println!("==============================");
+        println!("Current memory: {final_memory_used} bytes");
+        println!("Peak memory:    {peak_memory_used} bytes");
+        println!("KPI target:     512 bytes");
         println!(
-            "Single actor + N=8 mailbox memory usage: {final_memory_used} bytes (target: ≤512B)"
+            "Status:         {}",
+            if final_memory_used <= 512 {
+                "✅ PASS"
+            } else {
+                "❌ FAIL"
+            }
         );
+
+        if final_memory_used > 512 {
+            println!(
+                "\n⚠️  Memory usage exceeds KPI target by {excess_bytes} bytes",
+                excess_bytes = final_memory_used - 512
+            );
+            println!("    Consider investigating:");
+            println!("    - Mailbox implementation overhead");
+            println!("    - Actor state size optimization");
+            println!("    - Allocation patterns during message processing");
+        }
     });
 
     group.finish();
@@ -354,12 +419,12 @@ fn bench_memory_scaling_characteristics(c: &mut Criterion) {
             mailbox_size,
             |b, &size| {
                 b.iter(|| {
-                    GLOBAL_ALLOCATOR.reset();
+                    GLOBAL_ALLOCATOR.0.reset();
 
                     let actor = BenchActor::new(32);
                     let (outbox, _inbox) = create_mailbox::<u32>(size);
 
-                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.0.allocated_bytes();
                     let memory_per_slot = if size > 0 { memory_used / size } else { 0 };
 
                     black_box((actor, outbox, memory_used, memory_per_slot));
@@ -375,7 +440,7 @@ fn bench_memory_scaling_characteristics(c: &mut Criterion) {
             num_states,
             |b, &num_states| {
                 b.iter(|| {
-                    GLOBAL_ALLOCATOR.reset();
+                    GLOBAL_ALLOCATOR.0.reset();
 
                     let statecharts: Vec<_> = (0..num_states)
                         .map(|_| {
@@ -387,7 +452,7 @@ fn bench_memory_scaling_characteristics(c: &mut Criterion) {
                         })
                         .collect();
 
-                    let memory_used = GLOBAL_ALLOCATOR.allocated_bytes();
+                    let memory_used = GLOBAL_ALLOCATOR.0.allocated_bytes();
                     let memory_per_statechart = if num_states > 0 {
                         memory_used / num_states
                     } else {
@@ -403,8 +468,77 @@ fn bench_memory_scaling_characteristics(c: &mut Criterion) {
     group.finish();
 }
 
+// Test message type
+#[derive(Debug, Clone)]
+struct TestMessage(u32);
+
+// Test actor
+struct TestActor {
+    count: u32,
+}
+
+impl TestActor {
+    fn new() -> Self {
+        Self { count: 0 }
+    }
+}
+
+impl Actor for TestActor {
+    type Message = TestMessage;
+    type Future<'a>
+        = std::future::Ready<()>
+    where
+        Self: 'a;
+
+    fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+        self.count += msg.0;
+        std::future::ready(())
+    }
+}
+
+pub fn bench_actor_performance(c: &mut Criterion) {
+    let mut group = c.benchmark_group("actor_performance");
+    group.throughput(Throughput::Elements(1));
+
+    // Create a Tokio runtime for async operations
+    let rt = TokioBuilder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    // Measure actor creation time
+    group.bench_function("actor_creation", |b| {
+        b.iter(|| {
+            rt.block_on(async {
+                let actor = TestActor::new();
+                let _addr = lit_bit_core::actor::spawn_actor_tokio(actor, 16);
+            })
+        });
+    });
+
+    // Measure message sending time
+    group.bench_function("message_send", |b| {
+        b.iter_with_setup(
+            || {
+                // Setup: Create fresh actor and address for each iteration
+                rt.block_on(async {
+                    let actor = TestActor::new();
+                    lit_bit_core::actor::spawn_actor_tokio(actor, 16)
+                })
+            },
+            |addr| {
+                // Benchmark: Only measure the message sending time
+                rt.block_on(async { addr.send(TestMessage(0)).await.unwrap() })
+            },
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
+    bench_actor_performance,
     bench_statechart_memory_footprint,
     bench_mailbox_memory_usage,
     bench_actor_system_scaling,

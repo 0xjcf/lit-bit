@@ -38,9 +38,9 @@ log = { version = "0.4", optional = true }
 panic-halt = { version = "1.0.0", optional = true }
 
 # Embassy dependencies for no_std async
-embassy-futures = { version = "0.1", optional = true }
-embassy-sync = { version = "0.6", optional = true }
-embassy-time = { version = "0.3", optional = true }
+embassy-futures = { version = "0.1.1", optional = true }
+embassy-sync = { version = "0.7.0", optional = true }
+embassy-time = { version = "0.4.0", features = ["tick-hz-32_768"], optional = true }
 critical-section = { version = "1.1", optional = true }
 
 # Dependencies for Cortex-M targets (like thumbv7m-none-eabi)
@@ -59,12 +59,12 @@ semihosting = { version = "0.1.20", features = ["stdio"] }
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"
 # Embassy executor with ARM Cortex-M specific features
-embassy-executor = { version = "0.6", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "integrated-timers"], optional = true }
+embassy-executor = { version = "0.7", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread"], optional = true }
 
 # Target-specific dependencies for host builds (x86_64, etc.)
 [target.'cfg(not(target_arch = "arm"))'.dependencies]
 # Embassy executor without ARM-specific features for host builds
-embassy-executor = { version = "0.6", features = ["task-arena-size-32768", "executor-thread", "integrated-timers"], optional = true }
+embassy-executor = { version = "0.7", features = ["task-arena-size-32768", "executor-thread"], optional = true }
 
 # panic-halt is a dev-dependency, examples will pick it up if cfg-ed for arm
 # cortex-m-semihosting could be added here if needed for Cortex-M examples
@@ -166,3 +166,11 @@ required-features = ["panic-halt"]
 [[example]]
 name = "traffic_light_cortex_m"
 required-features = ["panic-halt"]
+
+[[example]]
+name = "mailbox_patterns"
+required-features = ["panic-halt"]
+
+[[example]]
+name = "coffee_shop"
+required-features = ["async-tokio"]

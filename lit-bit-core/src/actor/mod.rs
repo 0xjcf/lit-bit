@@ -916,6 +916,15 @@ pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 /// the producer and consumer endpoints. It handles initialization safely without any
 /// unsafe code and ensures the queue can only be split once.
 ///
+/// # When to Use
+///
+/// Use this macro when you need:
+/// - A simple, zero-allocation mailbox for actor communication
+/// - Static allocation with automatic initialization
+/// - No manual management of static cells
+///
+/// This is the recommended approach for most actor implementations.
+///
 /// # Arguments
 ///
 /// * `$name` - Identifier for the static queue (for debugging/placement control)
@@ -924,34 +933,66 @@ pub type Outbox<T> = tokio::sync::mpsc::Sender<T>;
 ///
 /// # Examples
 ///
+/// ## Basic Actor Communication
 /// ```rust,no_run
-/// use lit_bit_core::static_mailbox;
+/// use lit_bit_core::{static_mailbox, Actor};
 ///
-/// // Create a mailbox for u32 messages with capacity 16
-/// let (producer, consumer) = static_mailbox!(MY_QUEUE: u32, 16);
+/// // Define message type
+/// enum SensorMessage {
+///     ReadTemperature,
+///     SetThreshold(f32),
+/// }
 ///
-/// // With memory placement attribute
+/// // Create actor with static mailbox
+/// struct SensorActor;
+/// impl Actor for SensorActor {
+///     type Message = SensorMessage;
+///     type Future<'a> = core::future::Ready<()> where Self: 'a;
+///
+///     fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
+///         core::future::ready(())
+///     }
+/// }
+///
+/// // Create a mailbox with capacity 16
+/// let (producer, consumer) = static_mailbox!(SENSOR_MAILBOX: SensorMessage, 16);
+///
+/// // Send messages
+/// producer.enqueue(SensorMessage::ReadTemperature).unwrap();
+/// ```
+///
+/// ## Memory Section Placement
+/// ```rust,no_run
+/// // Place mailbox in specific memory section (e.g., fast SRAM)
 /// let (tx, rx) = static_mailbox!(
 ///     #[link_section = ".sram2"]
-///     FAST_QUEUE: MyMessage, 32
+///     FAST_MAILBOX: MyMessage, 32
 /// );
+/// ```
+///
+/// ## Multiple Independent Mailboxes
+/// ```rust,no_run
+/// // Create separate mailboxes for different message types
+/// let (cmd_tx, cmd_rx) = static_mailbox!(COMMAND_MAILBOX: CommandMsg, 8);
+/// let (evt_tx, evt_rx) = static_mailbox!(EVENT_MAILBOX: EventMsg, 32);
+///
+/// // Each mailbox operates independently
+/// cmd_tx.enqueue(CommandMsg::Start).unwrap();
+/// evt_tx.enqueue(EventMsg::Started).unwrap();
 /// ```
 ///
 /// # Panics
 ///
 /// Panics if called more than once for the same static queue (prevents double-split).
-#[cfg(not(feature = "async-tokio"))]
 #[macro_export]
 macro_rules! static_mailbox {
     ($(#[$attr:meta])* $name:ident: $msg_type:ty, $capacity:expr) => {{
-        use static_cell::StaticCell;
-
         $(#[$attr])*
-        static $name: StaticCell<heapless::spsc::Queue<$msg_type, $capacity>> = StaticCell::new();
+        static $name: ::static_cell::StaticCell<::heapless::spsc::Queue<$msg_type, $capacity>> = ::static_cell::StaticCell::new();
 
         // Initialize the queue and get a 'static reference
-        let queue: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
-            $name.init(heapless::spsc::Queue::new());
+        let queue: &'static mut ::heapless::spsc::Queue<$msg_type, $capacity> =
+            $name.init(::heapless::spsc::Queue::new());
 
         // Split the queue into producer and consumer
         queue.split()
@@ -959,26 +1000,32 @@ macro_rules! static_mailbox {
 
     // Variant without attributes
     ($name:ident: $msg_type:ty, $capacity:expr) => {{
-        use static_cell::StaticCell;
-
-        static $name: StaticCell<heapless::spsc::Queue<$msg_type, $capacity>> = StaticCell::new();
+        static $name: ::static_cell::StaticCell<::heapless::spsc::Queue<$msg_type, $capacity>> = ::static_cell::StaticCell::new();
 
         // Initialize the queue and get a 'static reference
-        let queue: &'static mut heapless::spsc::Queue<$msg_type, $capacity> =
-            $name.init(heapless::spsc::Queue::new());
+        let queue: &'static mut ::heapless::spsc::Queue<$msg_type, $capacity> =
+            $name.init(::heapless::spsc::Queue::new());
 
         // Split the queue into producer and consumer
         queue.split()
     }};
 }
 
-/// Creates a mailbox from a statically allocated queue using `StaticCell` (safe alternative).
+/// Creates a mailbox from a statically allocated queue using `StaticCell`.
 ///
-/// This function provides a safe way to create mailboxes from static memory without
-/// requiring unsafe code. It uses `StaticCell` to ensure safe one-time initialization.
+/// This function provides a lower-level API for creating mailboxes from static memory,
+/// giving you more control over the static allocation and initialization. It uses
+/// `StaticCell` to ensure safe one-time initialization without any unsafe code.
 ///
-/// For most use cases, prefer the `static_mailbox!` macro which handles the `StaticCell`
-/// creation automatically.
+/// # When to Use
+///
+/// Use this function when you need:
+/// - Manual control over static cell creation and lifetime
+/// - Custom initialization logic for the queue
+/// - Integration with existing static storage patterns
+/// - Sharing a single static cell between multiple components
+///
+/// For simpler cases, prefer the `static_mailbox!` macro.
 ///
 /// # Arguments
 ///
@@ -986,18 +1033,61 @@ macro_rules! static_mailbox {
 ///
 /// # Examples
 ///
+/// ## Basic Usage
 /// ```rust,no_run
 /// use heapless::spsc::Queue;
 /// use static_cell::StaticCell;
-/// use lit_bit_core::actor::create_mailbox_safe;
+/// use lit_bit_core::actor::create_mailbox;
 ///
+/// // Define static storage
 /// static QUEUE_CELL: StaticCell<Queue<u32, 16>> = StaticCell::new();
 ///
-/// let (outbox, inbox) = create_mailbox_safe(&QUEUE_CELL);
+/// // Create mailbox when needed
+/// let (outbox, inbox) = create_mailbox(&QUEUE_CELL);
 /// ```
+///
+/// ## Shared Static Cell
+/// ```rust,no_run
+/// use heapless::spsc::Queue;
+/// use static_cell::StaticCell;
+/// use lit_bit_core::actor::create_mailbox;
+///
+/// // Module-level static cell
+/// pub(crate) static SHARED_QUEUE: StaticCell<Queue<Event, 32>> = StaticCell::new();
+///
+/// // Function to initialize subsystem
+/// fn init_subsystem() {
+///     // Initialize the queue once
+///     let (tx, rx) = create_mailbox(&SHARED_QUEUE);
+///     // Use tx/rx...
+/// }
+/// ```
+///
+/// ## Custom Placement with Attributes
+/// ```rust,no_run
+/// use heapless::spsc::Queue;
+/// use static_cell::StaticCell;
+/// use lit_bit_core::actor::create_mailbox;
+///
+/// // Place queue in specific memory section
+/// #[link_section = ".dma_memory"]
+/// static DMA_QUEUE: StaticCell<Queue<u8, 64>> = StaticCell::new();
+///
+/// fn setup_dma() {
+///     let (producer, consumer) = create_mailbox(&DMA_QUEUE);
+///     // Configure DMA with producer/consumer...
+/// }
+/// ```
+///
+/// # Platform-Specific Behavior
+///
+/// - In `no_std` environments, uses `heapless::Queue` for zero-allocation storage
+/// - In `std` with `async-tokio` feature, uses `tokio::sync::mpsc::channel`
+/// - Memory overhead is determined by message type size and capacity
+/// - Queue capacity must be known at compile time in `no_std` mode
 #[cfg(not(feature = "async-tokio"))]
 #[must_use]
-pub fn create_mailbox_safe<T, const N: usize>(
+pub fn create_mailbox<T, const N: usize>(
     cell: &'static StaticCell<heapless::spsc::Queue<T, N>>,
 ) -> (Outbox<T, N>, Inbox<T, N>) {
     let queue = cell.init(heapless::spsc::Queue::new());
@@ -1005,9 +1095,17 @@ pub fn create_mailbox_safe<T, const N: usize>(
 }
 
 #[cfg(feature = "async-tokio")]
-#[must_use]
 pub fn create_mailbox<T>(capacity: usize) -> (Outbox<T>, Inbox<T>) {
     tokio::sync::mpsc::channel(capacity)
+}
+
+#[cfg(not(feature = "async-tokio"))]
+#[macro_export]
+macro_rules! define_static_mailbox {
+    ($name:ident, $type:ty, $size:expr) => {
+        static $name: ::static_cell::StaticCell<::heapless::spsc::Queue<$type, $size>> =
+            ::static_cell::StaticCell::new();
+    };
 }
 
 /// Yield mechanism for `no_std` environments without Embassy.
@@ -1074,7 +1172,7 @@ async fn yield_control() {
     YieldOnce { yielded: false }.await;
 }
 
-// Message processing loop implementation (Task 3.1)
+/// Message processing loop implementation (Task 3.1)
 /// Runs an actor's message processing loop.
 ///
 /// # Errors
@@ -1206,33 +1304,28 @@ where
 /// # Errors
 /// Returns `ActorError` if actor startup, shutdown, or message processing fails.
 #[cfg(feature = "async-tokio")]
-pub async fn actor_task<A: Actor>(
-    mut actor: A,
-    mut inbox: Inbox<A::Message>,
-) -> Result<(), ActorError> {
-    // Startup hook
-    let startup_result = actor.on_start();
-    #[cfg(feature = "debug-log")]
-    if let Err(ref e) = startup_result {
-        log::error!("Actor startup failed: {e:?}");
-    }
-    startup_result?;
+pub async fn actor_task<A>(mut actor: A, mut inbox: Inbox<A::Message>) -> Result<(), ActorError>
+where
+    A: Actor + Send + 'static,
+    A::Message: Send + 'static,
+{
+    // Start the actor
+    actor.on_start()?;
 
-    // Main processing loop (std version)
-    loop {
-        let Some(msg) = inbox.recv().await else {
-            break; // Channel closed
-        };
-        actor.handle(msg).await;
+    // Process messages until the channel is closed
+    while let Some(msg) = inbox.recv().await {
+        let future = actor.handle(msg);
+        future.await;
     }
 
-    // Cleanup hook
+    // Cleanup hook - call on_stop when the channel is closed
     let stop_result = actor.on_stop();
     #[cfg(feature = "debug-log")]
     if let Err(ref e) = stop_result {
         log::error!("Actor shutdown failed: {e:?}");
     }
     stop_result?;
+
     Ok(())
 }
 
@@ -1357,54 +1450,47 @@ where
 /// # Errors
 /// Returns `ActorError` if actor startup or shutdown fails.
 #[cfg(feature = "async-tokio")]
-pub async fn batch_actor_task<A: BatchActor>(
+pub async fn batch_actor_task<A>(
     mut actor: A,
     mut inbox: Inbox<A::Message>,
-) -> Result<(), ActorError> {
-    // Startup hook
-    let startup_result = actor.on_start();
-    #[cfg(feature = "debug-log")]
-    if let Err(ref e) = startup_result {
-        log::error!("Batch actor startup failed: {e:?}");
-    }
-    startup_result?;
+) -> Result<(), ActorError>
+where
+    A: BatchActor + Send + 'static,
+    A::Message: Send + 'static,
+{
+    // Start the actor
+    actor.on_start()?;
 
-    // Main batch processing loop
-    let mut batch_buffer = Vec::new();
+    // Process messages in batches
+    let mut batch = Vec::with_capacity(actor.max_batch_size());
 
-    loop {
-        // Wait for at least one message
-        let first_message = match inbox.recv().await {
-            Some(msg) => msg,
-            None => break, // Channel closed
-        };
+    // Main batch processing loop - exit when channel closes
+    while let Some(first_msg) = inbox.recv().await {
+        // Start with the first message
+        batch.clear();
+        batch.push(first_msg);
 
-        batch_buffer.clear();
-        batch_buffer.push(first_message);
-
-        // Drain additional messages up to batch limit
-        let max_batch = actor.max_batch_size();
-        while batch_buffer.len() < max_batch {
+        // Try to drain additional messages without blocking
+        while batch.len() < actor.max_batch_size() {
             match inbox.try_recv() {
-                Ok(msg) => batch_buffer.push(msg),
-                Err(_) => break, // No more messages available
+                Ok(msg) => batch.push(msg),
+                Err(_) => break, // No more messages available right now
             }
         }
 
         // Process the batch
-        actor.handle_batch(&batch_buffer).await;
-
-        // Tokio's cooperative scheduling will automatically yield if needed
-        // due to the async/await points above
+        let future = actor.handle_batch(&batch);
+        future.await;
     }
 
-    // Cleanup hook
+    // Cleanup hook - call on_stop when the channel is closed
     let stop_result = actor.on_stop();
     #[cfg(feature = "debug-log")]
     if let Err(ref e) = stop_result {
         log::error!("Batch actor shutdown failed: {e:?}");
     }
     stop_result?;
+
     Ok(())
 }
 
@@ -1621,5 +1707,57 @@ mod tests {
         // Verify they're independent
         assert_eq!(consumer1.dequeue(), None);
         assert_eq!(consumer2.dequeue(), None);
+    }
+
+    #[test]
+    fn static_mailbox_zero_allocation() {
+        // Create a static mailbox with capacity 16
+        let (mut producer, mut consumer) = static_mailbox!(ZERO_ALLOC_TEST: u32, 16);
+
+        // Send and receive messages without any heap allocation
+        assert!(producer.enqueue(42).is_ok());
+        assert!(producer.enqueue(43).is_ok());
+
+        assert_eq!(consumer.dequeue(), Some(42));
+        assert_eq!(consumer.dequeue(), Some(43));
+        assert_eq!(consumer.dequeue(), None);
+
+        // Verify we can reuse the queue
+        assert!(producer.enqueue(44).is_ok());
+        assert_eq!(consumer.dequeue(), Some(44));
+    }
+
+    #[test]
+    fn static_mailbox_capacity_limits() {
+        // Create a small mailbox to test capacity limits
+        // Note: A queue with size parameter 2 can only hold 1 element
+        let (mut producer, mut consumer) = static_mailbox!(CAPACITY_TEST: u32, 2);
+
+        // Fill the queue (can only hold 1 element)
+        assert!(producer.enqueue(1).is_ok());
+        // Queue is now full (N-1 capacity)
+        assert!(producer.enqueue(2).is_err());
+
+        // After dequeuing, we can enqueue again
+        assert_eq!(consumer.dequeue(), Some(1));
+        assert!(producer.enqueue(2).is_ok());
+    }
+
+    #[test]
+    fn static_mailbox_multiple_independent() {
+        // Create two independent mailboxes
+        let (mut p1, mut c1) = static_mailbox!(MULTI_TEST_1: u32, 4);
+        let (mut p2, mut c2) = static_mailbox!(MULTI_TEST_2: u32, 4);
+
+        // Verify they operate independently
+        assert!(p1.enqueue(1).is_ok());
+        assert!(p2.enqueue(100).is_ok());
+
+        assert_eq!(c1.dequeue(), Some(1));
+        assert_eq!(c2.dequeue(), Some(100));
+
+        // Each queue maintains its own state
+        assert_eq!(c1.dequeue(), None);
+        assert_eq!(c2.dequeue(), None);
     }
 }
