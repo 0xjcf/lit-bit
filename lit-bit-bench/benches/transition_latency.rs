@@ -1,20 +1,10 @@
 use criterion::{Criterion, Throughput, criterion_group};
 use lit_bit_core::statechart;
 use lit_bit_macro::statechart_event;
-use tokio::runtime::Builder as TokioBuilder;
 
 // Simple state machine for benchmarking
 #[derive(Debug, Clone, Default)]
-pub struct BenchContext {
-    #[allow(dead_code)] // Used by statechart macro
-    counter: u32,
-}
-
-impl BenchContext {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
+pub struct BenchContext {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[statechart_event]
@@ -43,21 +33,16 @@ pub fn bench_state_transitions(c: &mut Criterion) {
 
     // Sync baseline
     group.bench_function("sync_transition", |b| {
-        let mut machine = BenchStateMachine::new(BenchContext::new(), &BenchEvent::Toggle)
+        let mut machine = BenchStateMachine::new(BenchContext::default(), &BenchEvent::Toggle)
             .expect("Failed to create state machine");
         b.iter(|| machine.send(&BenchEvent::Toggle));
     });
 
-    // Async comparison with Tokio
-    let rt = TokioBuilder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-
-    group.bench_function("async_transition", |b| {
-        let mut machine = BenchStateMachine::new(BenchContext::new(), &BenchEvent::Toggle)
+    // Alternative benchmark setup
+    group.bench_function("transition_baseline", |b| {
+        let mut machine = BenchStateMachine::new(BenchContext::default(), &BenchEvent::Toggle)
             .expect("Failed to create state machine");
-        b.iter(|| rt.block_on(async { machine.send(&BenchEvent::Toggle) }));
+        b.iter(|| machine.send(&BenchEvent::Toggle));
     });
 
     group.finish();

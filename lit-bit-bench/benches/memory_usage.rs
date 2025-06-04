@@ -5,7 +5,6 @@ use lit_bit_bench::metrics::TrackingAllocator;
 use lit_bit_core::actor::{Actor, create_mailbox};
 use lit_bit_macro::statechart;
 use std::alloc::{GlobalAlloc, Layout};
-use std::cell::RefCell;
 use tokio::runtime::Builder as TokioBuilder;
 
 // Wrapper around TrackingAllocator that implements GlobalAlloc
@@ -15,10 +14,6 @@ impl GlobalTrackingAllocator {
     const fn new() -> Self {
         Self(TrackingAllocator::new())
     }
-}
-
-thread_local! {
-    static ALLOCATOR: RefCell<TrackingAllocator> = const { RefCell::new(TrackingAllocator::new()) };
 }
 
 // Install TrackingAllocator as the global allocator to track all heap allocations
@@ -254,39 +249,44 @@ fn bench_zero_allocation_paths(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("static_mailbox_operation", |b| {
+    // Test mailbox operations in no_std mode - should not allocate
+    #[cfg(not(feature = "async-tokio"))]
+    group.bench_function("no_std_mailbox_zero_allocation", |b| {
         // Pre-create mailbox outside the benchmark to avoid allocation during test
         let (outbox, mut inbox) = create_mailbox::<u32>(16);
 
         b.iter(|| {
             // Verify mailbox operations don't allocate in no_std mode
-            #[cfg(not(feature = "async-tokio"))]
-            {
-                GLOBAL_ALLOCATOR.0.reset();
-                let initial_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
+            GLOBAL_ALLOCATOR.0.reset();
+            let initial_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
 
-                // Perform mailbox operations that should not allocate
-                let send_result = outbox.try_send(42);
-                let recv_result = inbox.try_recv();
+            // Perform mailbox operations that should not allocate
+            let send_result = outbox.try_send(42);
+            let recv_result = inbox.try_recv();
 
-                let final_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
-                let allocations = final_count.saturating_sub(initial_count);
+            let final_count = GLOBAL_ALLOCATOR.0.allocated_bytes();
+            let allocations = final_count.saturating_sub(initial_count);
 
-                // Assert zero allocations occurred
-                assert_eq!(
-                    allocations, 0,
-                    "Mailbox operations should not allocate memory"
-                );
-                let _ = black_box((send_result, recv_result, allocations));
-            }
+            // Assert zero allocations occurred
+            assert_eq!(
+                allocations, 0,
+                "Mailbox operations should not allocate memory in no_std mode"
+            );
+            black_box((send_result, recv_result, allocations));
+        });
+    });
 
-            // In async mode, we accept some allocations
-            #[cfg(feature = "async-tokio")]
-            {
-                let send_result = outbox.try_send(42);
-                let recv_result = inbox.try_recv();
-                let _ = black_box((send_result, recv_result));
-            }
+    // Test mailbox operations in async-tokio mode - may allocate
+    #[cfg(feature = "async-tokio")]
+    group.bench_function("async_tokio_mailbox_operation", |b| {
+        // Pre-create mailbox outside the benchmark to avoid allocation during test
+        let (outbox, mut inbox) = create_mailbox::<u32>(16);
+
+        b.iter(|| {
+            // In async mode, we accept some allocations and focus on functionality
+            let _ = outbox.try_send(42);
+            let _ = inbox.try_recv();
+            black_box(());
         });
     });
 

@@ -55,9 +55,11 @@ impl Actor for AsyncTestActor {
 
     fn handle(&mut self, msg: Self::Message) -> Self::Future<'_> {
         let delay = self.delay_ms;
-        let count = self.count;
 
-        // Box the async block to return a proper future
+        // Update state immediately instead of inside the async block
+        self.count += msg.0;
+
+        // Box the async block without moving self
         Box::pin(async move {
             // Simulate some async work with a delay
             tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
@@ -65,8 +67,7 @@ impl Actor for AsyncTestActor {
             // Do some additional async processing
             let _result = tokio::task::yield_now().await;
 
-            // Update state after async work
-            self.count = count + msg.0;
+            // State was already updated before the async work
         })
     }
 }

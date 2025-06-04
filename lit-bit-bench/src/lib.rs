@@ -14,7 +14,9 @@ pub use metrics::{
 };
 pub use runtime::{BenchExecutor, RuntimeType, create_executor};
 
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+#[cfg(unix)]
 use std::process::{Command, ExitStatus}; // For Unix-like systems
 
 /// Common benchmark utilities and test data
