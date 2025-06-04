@@ -124,6 +124,10 @@ jobs:
   heap-safety-scan:
     name: Heap/Unsafe Scan (Strict for lit-bit-core only, Cortex-M)
     runs-on: ubuntu-latest
+    env:
+      # Fix for cargo-geiger panic: force single-threaded scanning to avoid race condition
+      # See: https://github.com/rust-secure-code/cargo-geiger/issues/XXX
+      RAYON_NUM_THREADS: 1
     steps:
     - uses: actions/checkout@v4
     - name: Install Rust (stable) + Targets
@@ -137,8 +141,21 @@ jobs:
     - name: Install cargo-geiger
       run: cargo install cargo-geiger --locked
 
+    - name: Pre-fetch dependencies for target
+      run: |
+        echo "🔄 Pre-fetching dependencies to avoid download races during geiger scan..."
+        cd lit-bit-core
+        # Fetch all dependencies for the target (including dev-dependencies)
+        cargo fetch --target thumbv7m-none-eabi
+        # Run a check to ensure everything is properly cached
+        cargo check --target thumbv7m-none-eabi --no-default-features
+        cd ..
+
     - name: Heap/Unsafe Scan (Strict for lit-bit-core only, Cortex-M)
       run: |
+        echo "🔍 Running cargo-geiger with single-thread workaround for panic fix..."
+        echo "Environment: RAYON_NUM_THREADS=$RAYON_NUM_THREADS"
+        
         # Run cargo-geiger from the lit-bit-core directory to avoid workspace issues
         cd lit-bit-core
         
@@ -164,11 +181,19 @@ jobs:
             echo "Last few lines of warnings:"
             tail -10 geiger_warnings.log
           fi
+          # Additional debugging for the specific panic we're trying to fix
+          if grep -q "assertion failed: self.pending_ids.insert(id)" geiger_warnings.log; then
+            echo "🐛 DETECTED: Known cargo-geiger panic with pending_ids.insert(id)"
+            echo "This indicates the single-thread workaround may not be working."
+            echo "Consider upgrading cargo-geiger or using alternative unsafe detection."
+          fi
           exit 1
         fi
 
-        echo "Generated geiger report:"
+        echo "✅ Generated geiger report successfully:"
         cat geiger_report.json
+        
+        echo "🔍 Running heap-safety-check analysis..."
         cargo run --bin heap-safety-check --package lit-bit-cli
 
   test:

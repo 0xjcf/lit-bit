@@ -517,11 +517,20 @@ pub fn bench_actor_performance(c: &mut Criterion) {
     });
 
     // Measure message sending time
-    let actor = TestActor::new();
-    let addr = rt.block_on(async { lit_bit_core::actor::spawn_actor_tokio(actor, 16) });
-
     group.bench_function("message_send", |b| {
-        b.iter(|| rt.block_on(async { addr.send(TestMessage(0)).await.unwrap() }));
+        b.iter_with_setup(
+            || {
+                // Setup: Create fresh actor and address for each iteration
+                rt.block_on(async {
+                    let actor = TestActor::new();
+                    lit_bit_core::actor::spawn_actor_tokio(actor, 16)
+                })
+            },
+            |addr| {
+                // Benchmark: Only measure the message sending time
+                rt.block_on(async { addr.send(TestMessage(0)).await.unwrap() })
+            },
+        );
     });
 
     group.finish();

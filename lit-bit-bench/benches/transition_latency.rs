@@ -1,4 +1,4 @@
-use criterion::{Criterion, Throughput, criterion_group};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use lit_bit_core::statechart;
 use lit_bit_macro::statechart_event;
 
@@ -31,18 +31,20 @@ pub fn bench_state_transitions(c: &mut Criterion) {
     let mut group = c.benchmark_group("state_transitions");
     group.throughput(Throughput::Elements(1));
 
-    // Sync baseline
-    group.bench_function("sync_transition", |b| {
+    // Pure transition overhead - machine created once outside the loop
+    group.bench_function("pure_transition", |b| {
         let mut machine = BenchStateMachine::new(BenchContext::default(), &BenchEvent::Toggle)
             .expect("Failed to create state machine");
         b.iter(|| machine.send(&BenchEvent::Toggle));
     });
 
-    // Alternative benchmark setup
-    group.bench_function("transition_baseline", |b| {
-        let mut machine = BenchStateMachine::new(BenchContext::default(), &BenchEvent::Toggle)
-            .expect("Failed to create state machine");
-        b.iter(|| machine.send(&BenchEvent::Toggle));
+    // Transition with initialization overhead - machine created inside the loop
+    group.bench_function("transition_with_init", |b| {
+        b.iter(|| {
+            let mut machine = BenchStateMachine::new(BenchContext::default(), &BenchEvent::Toggle)
+                .expect("Failed to create state machine");
+            machine.send(&BenchEvent::Toggle)
+        });
     });
 
     group.finish();
@@ -53,3 +55,5 @@ criterion_group!(
     config = Criterion::default();
     targets = bench_state_transitions
 );
+
+criterion_main!(benches);
